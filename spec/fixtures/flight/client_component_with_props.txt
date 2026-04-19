@@ -1,0 +1,2 @@
+1:I["/CounterButton.jsx","CounterButton",["/CounterButton.jsx"]]
+0:["$","$L1",null,{"initialCount":0,"label":"Click me","disabled":false}]

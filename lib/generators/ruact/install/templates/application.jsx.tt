@@ -1,0 +1,51 @@
+import { createRoot } from 'react-dom/client';
+import { useState, useEffect } from 'react';
+import { createFromFlightPayload } from './flight-client.js';
+import { setupRouter, teardownRouter } from './rsc-router.js';
+
+// MODULE_REGISTRY maps react-client-manifest "id" values to component exports.
+// Add each "use client" component here as you create it.
+// Keys must match the "id" field in public/react-client-manifest.json.
+//
+// Example:
+//   import { MyButton } from './components/MyButton.jsx';
+//   const MODULE_REGISTRY = { '/MyButton.jsx': { MyButton } };
+const MODULE_REGISTRY = {};
+
+// ---------------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------------
+const flightData = globalThis.__FLIGHT_DATA;
+
+if (!flightData || flightData.length === 0) {
+  // Non-RSC page or Rails server not running — skip hydration.
+  const root = document.getElementById('root');
+  if (root && root.childNodes.length === 0) {
+    root.textContent = '[ruact] No Flight data found — is the Rails server running?';
+  }
+} else {
+  const payload = flightData.join('');
+
+  let initialTree;
+  try {
+    initialTree = createFromFlightPayload(payload, MODULE_REGISTRY);
+  } catch (err) {
+    console.error('[ruact] Failed to parse Flight payload:', err);
+    const root = document.getElementById('root');
+    if (root) root.textContent = '[ruact] Error: ' + err.message;
+    throw err;
+  }
+
+  function App() {
+    const [tree, setTree] = useState(() => initialTree);
+
+    useEffect(() => {
+      setupRouter({ onNavigate: setTree, moduleRegistry: MODULE_REGISTRY });
+      return () => teardownRouter();
+    }, []);
+
+    return tree;
+  }
+
+  createRoot(document.getElementById('root')).render(<App />);
+}

@@ -1,0 +1,2 @@
+1:I["/PostCard.jsx","PostCard",["/PostCard.jsx"]]
+0:["$","$L1",null,{"post":{"id":1,"title":"Hello"}}]

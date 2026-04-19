@@ -1,0 +1,166 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rspec:
+    # Required status check — all 8 matrix combinations must pass to merge.
+    name: RSpec (Ruby ${{ matrix.ruby }} / Rails ${{ matrix.rails }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ["3.2", "3.3"]
+        rails: ["7.0", "7.1", "7.2", "8.0"]
+    env:
+      RAILS_VERSION: ${{ matrix.rails }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+          working-directory: gem
+      - name: Run RSpec
+        working-directory: gem
+        run: bundle exec rspec --format progress
+
+  rubocop:
+    # Required status check.
+    name: RuboCop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: gem
+      - name: Run RuboCop
+        working-directory: gem
+        run: bundle exec rubocop --format github
+
+  yard:
+    # Required status check — fails if any public method is missing YARD docs.
+    name: YARD Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: gem
+      - name: Validate YARD docs
+        working-directory: gem
+        run: bundle exec yard --fail-on-warning
+
+  benchmark:
+    # Required status check — fails if memory allocations exceed 120% of baseline.json.
+    name: Memory Benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: gem
+      - name: Run memory benchmark
+        working-directory: gem
+        run: bundle exec rake benchmark:memory
+
+  e2e:
+    # Required status check — both react@19.0.0 (pinned) and react@19.x (latest) must pass.
+    name: E2E (React ${{ matrix.react }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        react: ["19.0.0", "19.x"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: e2e
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install npm packages
+        working-directory: e2e
+        run: npm install
+      - name: Pin React version
+        working-directory: e2e
+        run: npm install react@${{ matrix.react }} react-dom@${{ matrix.react }}
+      - name: Build Vite assets
+        working-directory: e2e
+        run: npx vite build
+      - name: Run system tests
+        working-directory: e2e
+        env:
+          RAILS_ENV: test
+        run: bundle exec rails test:system
+      - name: Upload screenshots on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-screenshots-react-${{ matrix.react }}
+          path: e2e/tmp/screenshots
+          if-no-files-found: ignore
+
+  e2e-next:
+    # Non-blocking — failures open a GitHub issue with label react-next-compat.
+    # This job is NOT a required status check for branch protection.
+    name: E2E (React next — non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: e2e
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install npm packages
+        working-directory: e2e
+        run: npm install
+      - name: Pin React@next
+        working-directory: e2e
+        run: npm install react@next react-dom@next
+      - name: Build Vite assets
+        working-directory: e2e
+        run: npx vite build
+      - name: Run system tests
+        id: system-tests
+        working-directory: e2e
+        env:
+          RAILS_ENV: test
+        run: bundle exec rails test:system
+      - name: Upload screenshots on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-screenshots-react-next
+          path: e2e/tmp/screenshots
+          if-no-files-found: ignore
+      - name: Open compatibility issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `react@next compatibility failure (run #${context.runNumber})`,
+              labels: ['react-next-compat'],
+              body: `CI run [#${context.runNumber}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) failed against react@next on commit \`${context.sha}\`.\n\nTriaged within 2 weeks per NFR7. Does not block release.`
+            });

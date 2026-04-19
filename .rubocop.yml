@@ -1,0 +1,89 @@
+require:
+  - rubocop/cop/ruact
+
+plugins:
+  - rubocop-rspec
+  - rubocop-performance
+
+AllCops:
+  TargetRubyVersion: 3.2
+  NewCops: enable
+  Exclude:
+    - "vendor/**/*"
+    - "sig/**/*"
+
+# --- Layout ---
+Layout/LineLength:
+  Max: 120
+
+# --- Metrics ---
+Metrics/MethodLength:
+  Max: 30
+  CountAsOne: ["array", "hash", "heredoc"]
+  # Note: case/when chain in serializer.rb and converter is intentional by architecture decision
+
+Metrics/BlockLength:
+  Exclude:
+    - "spec/**/*"
+    - "Gemfile"
+    - "lib/tasks/**/*.rake"
+
+Naming/VariableNumber:
+  Exclude:
+    - "lib/tasks/**/*.rake"
+
+Metrics/ClassLength:
+  Max: 150
+
+Metrics/ModuleLength:
+  Max: 150
+  Exclude:
+    - "spec/**/*"
+
+Metrics/AbcSize:
+  Max: 50
+  # Note: PoC methods (rsc_render, each, convert_element) will be refactored
+  # in later stories. Current values reflect tech debt, not design intent.
+
+Metrics/CyclomaticComplexity:
+  Max: 20
+
+Metrics/PerceivedComplexity:
+  Max: 20
+
+# --- Style ---
+Style/Documentation:
+  Enabled: false
+
+Style/FrozenStringLiteralComment:
+  Enabled: true
+  EnforcedStyle: always
+
+Style/StringLiterals:
+  EnforcedStyle: double_quotes
+
+# --- RSpec ---
+RSpec/MultipleExpectations:
+  Max: 5
+
+RSpec/ExampleLength:
+  Max: 25
+
+RSpec/MultipleMemoizedHelpers:
+  Max: 7
+
+RSpec/NestedGroups:
+  Max: 4
+
+RSpec/DescribeClass:
+  Enabled: false
+
+# --- Custom Ruact Cops ---
+Ruact/NoIoInFlight:
+  Enabled: true
+
+Ruact/NoSharedState:
+  Enabled: true
+
+Ruact/NoExtendSelf:
+  Enabled: true

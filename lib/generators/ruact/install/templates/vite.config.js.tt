@@ -1,0 +1,26 @@
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+// Bundled Vite plugin — path resolved from the installed ruact gem.
+// Re-run `rails generate ruact:install` after gem upgrades to refresh this path.
+import ruact from '<%= Ruact.vite_plugin_path %>';
+
+export default defineConfig({
+  plugins: [
+    react(),
+    ruact(), // scans app/javascript/components/ for "use client", emits react-client-manifest.json
+  ],
+
+  build: {
+    outDir: 'public/assets',
+    manifest: true,
+    rollupOptions: {
+      input: 'app/javascript/application.jsx',
+    },
+  },
+
+  server: {
+    port: 5173,
+    strictPort: true,
+    origin: 'http://localhost:5173',
+  },
+});
