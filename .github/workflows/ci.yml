@@ -7,6 +7,29 @@ on:
     branches: [main]
 
 jobs:
+  name-propagation:
+    # Required status check — fails if legacy `rails_rsc` / `RailsRsc` references
+    # appear in user-facing files (Story 5.1 AC6).
+    name: No legacy rails_rsc name references
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Grep for legacy name references
+        working-directory: gem
+        run: |
+          if git grep -nE 'rails[_-]rsc|RailsRsc' -- \
+               ':!CHANGELOG.md' \
+               ':!doc/' \
+               ':!*.gem' \
+               ':!lib/ruact/doctor.rb' \
+               ':!spec/ruact/doctor_spec.rb' \
+               ':!.github/workflows/ci.yml'; then
+            echo "::error::Legacy 'rails_rsc' / 'RailsRsc' reference found in user-facing file."
+            echo "::error::Rename to 'ruact' / 'Ruact'. See Story 5.1 in _bmad-output/implementation-artifacts/."
+            exit 1
+          fi
+          echo "::notice::No legacy name references found."
+
   rspec:
     # Required status check — all 8 matrix combinations must pass to merge.
     name: RSpec (Ruby ${{ matrix.ruby }} / Rails ${{ matrix.rails }})

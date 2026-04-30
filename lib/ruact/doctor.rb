@@ -7,7 +7,9 @@ module Ruact
   # Runs a suite of installation health checks and prints ✓/✗ per check.
   # Extracted from the rsc:doctor Rake task for direct testability (FR27).
   class Doctor
-    CHECKS = %i[manifest vite controller layout streaming].freeze
+    CHECKS = %i[manifest vite controller layout streaming legacy_constant].freeze
+    LEGACY_CONSTANT_RE = /(?<![A-Za-z_])(RailsRsc|rails_rsc)(?![A-Za-z_])/
+    LEGACY_SCAN_GLOBS = ["config/initializers/**/*.rb", "app/**/*.rb"].freeze
 
     # Runs all checks, prints results, returns true if all pass.
     def self.run
@@ -62,6 +64,26 @@ module Ruact
       mode  = Ruact.streaming_mode || :buffered
       label = mode == :enabled ? "enabled" : "buffered"
       [:pass, "streaming: #{label} (#{streaming_server_hint})"]
+    end
+
+    # Detects host-app references to the legacy `RailsRsc` constant or
+    # `rails_rsc` require path left over from the rename to `ruact`.
+    def check_legacy_constant
+      offenses = LEGACY_SCAN_GLOBS.flat_map do |glob|
+        Dir[Rails.root.join(glob)].flat_map do |file|
+          File.foreach(file).with_index(1).filter_map do |line, lineno|
+            next unless LEGACY_CONSTANT_RE.match?(line)
+
+            "#{file}:#{lineno}"
+          end
+        end
+      end
+      return [:pass, "No legacy `RailsRsc` / `rails_rsc` references found"] if offenses.empty?
+
+      [:fail,
+       "Legacy `RailsRsc` / `rails_rsc` references found in #{offenses.length} location(s) " \
+       "(first: #{offenses.first}). Replace `RailsRsc` with `Ruact` and " \
+       "`require \"rails_rsc\"` with `require \"ruact\"` (gem renamed in v0.0.x)"]
     end
 
     def streaming_server_hint

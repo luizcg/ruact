@@ -198,6 +198,74 @@ RSpec.describe Ruact::Doctor do
     end
   end
 
+  # --- check_legacy_constant ---
+
+  describe "#check_legacy_constant (Story 5.1)" do
+    subject(:doctor) { described_class.new }
+
+    def make_initializer(content, filename: "ruact.rb")
+      dir = tmpdir.join("config", "initializers")
+      FileUtils.mkdir_p(dir)
+      File.write(dir.join(filename), content)
+    end
+
+    def make_app_file(content, path:)
+      dir = tmpdir.join("app", File.dirname(path))
+      FileUtils.mkdir_p(dir)
+      File.write(tmpdir.join("app", path), content)
+    end
+
+    context "when no legacy references exist" do
+      it "returns :pass" do
+        status, = doctor.send(:check_legacy_constant)
+        expect(status).to eq(:pass)
+      end
+    end
+
+    context "when an initializer references the RailsRsc constant" do
+      before { make_initializer("RailsRsc.configure do |c|\n  c.foo = 1\nend\n") }
+
+      it "returns :fail" do
+        status, = doctor.send(:check_legacy_constant)
+        expect(status).to eq(:fail)
+      end
+
+      it "message names the file:line and instructs the rename" do
+        _, msg = doctor.send(:check_legacy_constant)
+        expect(msg).to include("ruact.rb:1")
+        expect(msg).to include("Replace `RailsRsc` with `Ruact`")
+      end
+    end
+
+    context "when an app file uses `require \"rails_rsc\"`" do
+      before { make_app_file("require \"rails_rsc\"\n", path: "models/foo.rb") }
+
+      it "returns :fail" do
+        status, = doctor.send(:check_legacy_constant)
+        expect(status).to eq(:fail)
+      end
+    end
+
+    context "when only the modern Ruact constant is referenced" do
+      before { make_initializer("Ruact.configure { |c| c.foo = 1 }\n") }
+
+      it "returns :pass" do
+        status, = doctor.send(:check_legacy_constant)
+        expect(status).to eq(:pass)
+      end
+    end
+
+    context "when a word coincidentally contains the legacy substring" do
+      # e.g. "TrailsRsce" should not trigger the regex (boundary check).
+      before { make_initializer("# documenting TrailsRsce_engine here\n") }
+
+      it "returns :pass" do
+        status, = doctor.send(:check_legacy_constant)
+        expect(status).to eq(:pass)
+      end
+    end
+  end
+
   # --- run / .run ---
 
   describe ".run / #run (AC#1, #7)" do

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Renamed
+
+- The gem and its top-level constant were renamed from `rails_rsc` / `RailsRsc` to `ruact` / `Ruact` between v0.0.2 and v0.0.3. Host apps must update their `Gemfile` (`gem "rails_rsc"` → `gem "ruact"`) and any code referencing `RailsRsc::*` (replace with `Ruact::*`). The `rails rsc:doctor` task now detects and reports legacy constant usage in `config/initializers/` and `app/`.
+
+### Internal
+
+- Rake task descriptions and internal `require` statements migrated from `rails_rsc` to `ruact`. Public API is unchanged; this is a documentation and tooling rename only.
+
 ## [0.1.0] - 2026-03-24
 
 ### Added

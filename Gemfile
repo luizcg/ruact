@@ -2,7 +2,7 @@
 
 source "https://rubygems.org"
 
-# Specify your gem's dependencies in rails_rsc.gemspec
+# Specify your gem's dependencies in ruact.gemspec
 gemspec
 
 gem "irb"

@@ -7,16 +7,16 @@ namespace :benchmark do
   desc "Run speed benchmark with benchmark-ips (development reporting)"
   task :speed do
     require "benchmark/ips"
-    require "rails_rsc"
+    require "ruact"
 
-    manifest = RailsRsc::ClientManifest.from_hash(
+    manifest = Ruact::ClientManifest.from_hash(
       (1..20).to_h do |i|
         ["Component#{i}", { "id" => "/assets/Component#{i}.js",
                             "name" => "Component#{i}",
                             "chunks" => ["/assets/Component#{i}.js"] }]
       end
     )
-    pipeline = RailsRsc::RenderPipeline.new(manifest)
+    pipeline = Ruact::RenderPipeline.new(manifest)
     erb_typical = "<div>\n#{(1..20).map { |i| "<Component#{i} index={#{i}} />" }.join("\n")}\n</div>"
 
     ctx = Object.new
@@ -32,16 +32,16 @@ namespace :benchmark do
   desc "Run memory allocation benchmark; exits 1 if allocations exceed baseline × 1.20"
   task :memory do
     require "memory_profiler"
-    require "rails_rsc"
+    require "ruact"
 
-    manifest = RailsRsc::ClientManifest.from_hash(
+    manifest = Ruact::ClientManifest.from_hash(
       (1..20).to_h do |i|
         ["Component#{i}", { "id" => "/assets/Component#{i}.js",
                             "name" => "Component#{i}",
                             "chunks" => ["/assets/Component#{i}.js"] }]
       end
     )
-    pipeline = RailsRsc::RenderPipeline.new(manifest)
+    pipeline = Ruact::RenderPipeline.new(manifest)
     erb_typical = "<div>\n#{(1..20).map { |i| "<Component#{i} index={#{i}} />" }.join("\n")}\n</div>"
     ctx = Object.new
     binding_ctx = ctx.instance_eval { binding }
@@ -56,15 +56,15 @@ namespace :benchmark do
       puts "Memory allocations: #{current} (baseline: #{baseline['typical_allocations']}, limit: #{limit})"
 
       if current > limit
-        warn "[rails_rsc] FAIL: allocations #{current} exceed baseline limit #{limit}"
+        warn "[ruact] FAIL: allocations #{current} exceed baseline limit #{limit}"
         exit 1
       else
-        puts "[rails_rsc] PASS: allocations within 120% of baseline"
+        puts "[ruact] PASS: allocations within 120% of baseline"
       end
     else
       baseline_data = { "typical_allocations" => current, "heavy_allocations" => nil }
       File.write(baseline_path, JSON.generate(baseline_data))
-      puts "[rails_rsc] Baseline established: #{current} allocations. Re-run to compare."
+      puts "[ruact] Baseline established: #{current} allocations. Re-run to compare."
     end
   end
 end
