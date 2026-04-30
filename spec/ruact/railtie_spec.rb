@@ -107,9 +107,8 @@ RSpec.describe Ruact::Railtie do
     end
 
     context "with missing manifest in production (AC#6)" do
-      before do
-        Rails.env = ActiveSupport::StringInquirer.new("production")
-      end
+      before { Rails.env = ActiveSupport::StringInquirer.new("production") }
+      after  { Rails.env = ActiveSupport::StringInquirer.new("development") }
 
       it "raises ManifestError" do
         expect { described_class.check_manifest!(missing_path) }

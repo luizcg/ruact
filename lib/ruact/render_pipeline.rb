@@ -31,15 +31,13 @@ module Ruact
 
     # Convert pre-rendered HTML (from ActionView) to Flight wire rows.
     #
-    # IMPORTANT — Eager registry capture: ComponentRegistry.components is read
+    # IMPORTANT — Eager registry capture: render_context.components is read
     # immediately when this method is called, before the Enumerator is returned.
-    # This allows the caller to call ComponentRegistry.reset right after from_html
-    # returns (inside an ensure block) without affecting the captured registry.
-    #
-    # The returned Enumerator does NOT reference ComponentRegistry at all —
-    # only the eagerly-captured +registry+ local variable.
-    def from_html(html, streaming: false)
-      registry = ComponentRegistry.components.map do |entry|
+    # This allows the caller to discard the render_context right after from_html
+    # returns without affecting the captured registry — the returned Enumerator
+    # does NOT reference render_context at all, only the eagerly-captured local.
+    def from_html(html, render_context:, streaming: false)
+      registry = render_context.components.map do |entry|
         ref = @manifest.reference_for(entry[:name], controller_path: @controller_path)
         { token: entry[:token], name: entry[:name], ref: ref, props: entry[:props] }
       end
@@ -59,26 +57,22 @@ module Ruact
 
     def _stream(erb_source, binding_context, streaming: false)
       Enumerator.new do |y|
-        ComponentRegistry.start
-        begin
-          transformed = ErbPreprocessor.transform(erb_source)
-          inject_helper!(binding_context)
-          html = ERB.new(transformed).result(binding_context)
+        render_context = RenderContext.new
+        transformed = ErbPreprocessor.transform(erb_source)
+        inject_helper!(binding_context, render_context)
+        html = ERB.new(transformed).result(binding_context)
 
-          registry = ComponentRegistry.components.map do |entry|
-            ref = @manifest.reference_for(entry[:name], controller_path: @controller_path)
-            { token: entry[:token], name: entry[:name], ref: ref, props: entry[:props] }
-          end
-
-          root_element = HtmlConverter.convert(html, registry)
-
-          Flight::Renderer.each(root_element, @manifest,
-                                strict_serialization: Ruact.config.strict_serialization,
-                                on_as_json_warning: as_json_warning_callback,
-                                streaming: streaming) { |row| y << row }
-        ensure
-          ComponentRegistry.reset
+        registry = render_context.components.map do |entry|
+          ref = @manifest.reference_for(entry[:name], controller_path: @controller_path)
+          { token: entry[:token], name: entry[:name], ref: ref, props: entry[:props] }
         end
+
+        root_element = HtmlConverter.convert(html, registry)
+
+        Flight::Renderer.each(root_element, @manifest,
+                              strict_serialization: Ruact.config.strict_serialization,
+                              on_as_json_warning: as_json_warning_callback,
+                              streaming: streaming) { |row| y << row }
       end
     end
 
@@ -94,14 +88,15 @@ module Ruact
       end
     end
 
-    # Define __rsc_component__ in the ERB binding so it can be called.
-    def inject_helper!(binding_context)
-      binding_context.eval(<<~RUBY)
-        def __rsc_component__(name, props = {})
-          token = ::Ruact::ComponentRegistry.register(name, props)
-          "<!-- \#{token} -->"
-        end
-      RUBY
+    # Define __rsc_component__ as a singleton method on the binding's receiver,
+    # closing over render_context so registration writes to this render's
+    # context only — no Thread.current, no shared state.
+    def inject_helper!(binding_context, render_context)
+      receiver = binding_context.eval("self")
+      receiver.define_singleton_method(:__rsc_component__) do |name, props = {}|
+        token = render_context.register(name, props)
+        "<!-- #{token} -->"
+      end
     end
   end
 end

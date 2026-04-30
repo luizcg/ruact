@@ -145,26 +145,26 @@ module Ruact
 
       it "converts pre-rendered HTML with component placeholders to Flight rows" do
         pipeline = described_class.new(navbar_manifest)
-        ComponentRegistry.start
-        token = ComponentRegistry.register("NavBar", { "currentUser" => 42 })
+        ctx = RenderContext.new
+        token = ctx.register("NavBar", { "currentUser" => 42 })
         html  = "<div><!-- #{token} --></div>"
 
-        output = pipeline.from_html(html).to_a.join
-        ComponentRegistry.reset
+        output = pipeline.from_html(html, render_context: ctx).to_a.join
 
         expect(output).to include("NavBar")
         expect(output).to include('"currentUser":42')
       end
 
-      it "eagerly captures registry so ComponentRegistry can be reset before Enumerator is consumed" do
+      it "eagerly captures registry so further mutation does not affect the Enumerator" do
         pipeline = described_class.new(navbar_manifest)
-        ComponentRegistry.start
-        ComponentRegistry.register("NavBar", { "currentUser" => 1 })
-        token = ComponentRegistry.components.first[:token]
+        ctx = RenderContext.new
+        ctx.register("NavBar", { "currentUser" => 1 })
+        token = ctx.components.first[:token]
         html  = "<div><!-- #{token} --></div>"
 
-        enumerator = pipeline.from_html(html)
-        ComponentRegistry.reset # Reset BEFORE consuming the enumerator
+        enumerator = pipeline.from_html(html, render_context: ctx)
+        # Mutating the context after from_html should not affect the captured registry.
+        ctx.components.clear
 
         expect { enumerator.to_a }.not_to raise_error
         expect(enumerator.to_a.join).to include("NavBar")
@@ -178,12 +178,11 @@ module Ruact
 
         pipeline_erb.call("<NavBar currentUser={1} />", binding)
 
-        ComponentRegistry.start
-        ComponentRegistry.register("NavBar", { "currentUser" => 1 })
-        token = ComponentRegistry.components.first[:token]
+        ctx = RenderContext.new
+        ctx.register("NavBar", { "currentUser" => 1 })
+        token = ctx.components.first[:token]
         html  = "<!-- #{token} -->"
-        html_output = pipeline_html.from_html(html).to_a.join
-        ComponentRegistry.reset
+        html_output = pipeline_html.from_html(html, render_context: ctx).to_a.join
 
         # Both should contain the NavBar import row and a root model row
         expect(html_output).to include("NavBar")
@@ -192,11 +191,9 @@ module Ruact
 
       it "returns an Enumerator (lazy)" do
         pipeline = described_class.new(manifest)
-        ComponentRegistry.start
         html = "<div><p>Hello</p></div>"
 
-        result = pipeline.from_html(html)
-        ComponentRegistry.reset
+        result = pipeline.from_html(html, render_context: RenderContext.new)
 
         expect(result).to be_a(Enumerator)
       end

@@ -5,22 +5,21 @@ require "active_support/core_ext/string/output_safety"
 
 module Ruact
   RSpec.describe ViewHelper do
+    let(:render_context) { RenderContext.new }
     let(:helper_obj) do
       obj = Object.new
       obj.extend(described_class)
+      obj.instance_variable_set(:@__ruact_render_context__, render_context)
       obj
     end
 
-    before { ComponentRegistry.start }
-    after  { ComponentRegistry.reset }
-
     describe "#__rsc_component__" do
-      it "registers the component in ComponentRegistry and returns an HTML comment" do
+      it "registers the component in the render context and returns an HTML comment" do
         result = helper_obj.__rsc_component__("NavBar", { "currentUser" => 1 })
         expect(result).to match(/<!-- __RSC_\d+__ -->/)
-        expect(ComponentRegistry.components.length).to eq(1)
-        expect(ComponentRegistry.components.first[:name]).to eq("NavBar")
-        expect(ComponentRegistry.components.first[:props]).to eq({ "currentUser" => 1 })
+        expect(render_context.components.length).to eq(1)
+        expect(render_context.components.first[:name]).to eq("NavBar")
+        expect(render_context.components.first[:props]).to eq({ "currentUser" => 1 })
       end
 
       it "returns an html_safe string so ActionView does not escape the comment" do
@@ -37,9 +36,16 @@ module Ruact
 
       it "passes props through to the registry entry" do
         helper_obj.__rsc_component__("LikeButton", { "postId" => 42, "label" => "Like" })
-        entry = ComponentRegistry.components.first
+        entry = render_context.components.first
         expect(entry[:props]["postId"]).to eq(42)
         expect(entry[:props]["label"]).to eq("Like")
+      end
+
+      it "raises a clear error when called outside an rsc_render flow" do
+        bare = Object.new
+        bare.extend(described_class)
+        expect { bare.__rsc_component__("NavBar", {}) }
+          .to raise_error(Ruact::Error, /__rsc_component__ called outside an rsc_render flow/)
       end
     end
   end

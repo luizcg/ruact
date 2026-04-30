@@ -50,17 +50,16 @@ module Ruact
       pipeline  = RenderPipeline.new(rsc_manifest, controller_path: controller_path, logger: logger)
       streaming = rsc_request? && self.class.ancestors.include?(ActionController::Live)
 
-      # ComponentRegistry is started before ActionView renders the template.
-      # ViewHelper's __rsc_component__ registers components during rendering.
-      # from_html eagerly captures the registry before the ensure block resets it.
-      ComponentRegistry.start
-      enumerator = begin
-        opts = template ? { template: template } : { action: action_name }
-        html = render_to_string(opts.merge(layout: false, locals: locals))
-        pipeline.from_html(html, streaming: streaming)
-      ensure
-        ComponentRegistry.reset
-      end
+      # Allocate a per-render context; expose it to the view via an instance
+      # variable. ViewHelper#__rsc_component__ reads it during ERB evaluation.
+      # ActionView allocates a fresh view_context per controller action, so this
+      # is per-request safe under multi-threaded servers (NFR8).
+      render_context = RenderContext.new
+      view_context.instance_variable_set(:@__ruact_render_context__, render_context)
+
+      opts = template ? { template: template } : { action: action_name }
+      html = render_to_string(opts.merge(layout: false, locals: locals))
+      enumerator = pipeline.from_html(html, render_context: render_context, streaming: streaming)
 
       if rsc_request?
         if streaming
