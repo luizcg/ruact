@@ -51,6 +51,19 @@ jobs:
       - name: Run RSpec
         working-directory: gem
         run: bundle exec rspec --format progress
+      - name: Upload coverage to Codecov
+        # Upload from one canonical matrix cell only (Ruby 3.3 × Rails 7.2)
+        # to avoid quota burn and Codecov-side flag merge conflicts. Other
+        # cells run RSpec but skip the upload. `success()` ensures we never
+        # upload partial/aborted runs. `fail_ci_if_error: false` keeps a
+        # Codecov outage from reddening a build whose tests passed.
+        if: matrix.ruby == '3.3' && matrix.rails == '7.2' && success()
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: gem/coverage/lcov.info
+          flags: gem
+          fail_ci_if_error: false
 
   rubocop:
     # Required status check.

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Tooling
+
+- **Code coverage instrumentation** (Story 6.7). Added `simplecov` and `simplecov-lcov` as development dependencies; gem CI uploads coverage from the canonical matrix cell (Ruby 3.3 × Rails 7.2) to Codecov on every push and PR with the `gem` flag. **Baseline at merge: 87.89% line, 72.2% branch (238 specs).** Coverage is informativo (not a CI gate); see Codecov PR comments for diff coverage on individual changes. Diff coverage target per project DoD: ≥ 90% line / ≥ 80% branch on new code.
+- **Spec `rails_stub.rb` fix.** The previous `$LOADED_FEATURES.any? { |f| f.end_with?("/rails.rb") }` heuristic for skipping the `LOADED_FEATURES` insertion was unreliable — unrelated gems ship files at `*/rails.rb` (e.g. SimpleCov's `simplecov/profiles/rails.rb`). Replaced with an unconditional insertion guarded only by the existing `return if defined?(Rails)` early-exit, which is the correct invariant.
+
 ### Renamed
 
 - The gem and its top-level constant were renamed from `rails_rsc` / `RailsRsc` to `ruact` / `Ruact` between v0.0.2 and v0.0.3. Host apps must update their `Gemfile` (`gem "rails_rsc"` → `gem "ruact"`) and any code referencing `RailsRsc::*` (replace with `Ruact::*`). The `rails rsc:doctor` task now detects and reports legacy constant usage in `config/initializers/` and `app/`.

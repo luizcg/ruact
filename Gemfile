@@ -29,3 +29,7 @@ gem "yard", "~> 0.9", require: false
 # Benchmarking
 gem "benchmark-ips", "~> 2.14", require: false
 gem "memory_profiler", "~> 1.0", require: false
+
+# Coverage
+gem "simplecov", "~> 0.22", require: false
+gem "simplecov-lcov", "~> 0.8", require: false
