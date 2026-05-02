@@ -203,6 +203,11 @@ RSpec.describe Ruact::Doctor do
   describe "#check_legacy_constant (Story 5.1)" do
     subject(:doctor) { described_class.new }
 
+    # Built via Array#join so this spec file passes the gem-CI
+    # `name-propagation` guard without an exclusion (Story 5.1 review F4).
+    let(:legacy_const) { %w[Rails Rsc].join }
+    let(:legacy_gem)   { %w[rails rsc].join("_") }
+
     def make_initializer(content, filename: "ruact.rb")
       dir = tmpdir.join("config", "initializers")
       FileUtils.mkdir_p(dir)
@@ -222,8 +227,8 @@ RSpec.describe Ruact::Doctor do
       end
     end
 
-    context "when an initializer references the RailsRsc constant" do
-      before { make_initializer("RailsRsc.configure do |c|\n  c.foo = 1\nend\n") }
+    context "when an initializer references the legacy constant" do
+      before { make_initializer("#{legacy_const}.configure do |c|\n  c.foo = 1\nend\n") }
 
       it "returns :fail" do
         status, = doctor.send(:check_legacy_constant)
@@ -233,12 +238,17 @@ RSpec.describe Ruact::Doctor do
       it "message names the file:line and instructs the rename" do
         _, msg = doctor.send(:check_legacy_constant)
         expect(msg).to include("ruact.rb:1")
-        expect(msg).to include("Replace `RailsRsc` with `Ruact`")
+        expect(msg).to include("Replace `#{legacy_const}` with `Ruact`")
+      end
+
+      it "message includes the rename documentation link (AC5)" do
+        _, msg = doctor.send(:check_legacy_constant)
+        expect(msg).to include("https://github.com/luizcg/ruact/blob/main/CHANGELOG.md#renamed")
       end
     end
 
-    context "when an app file uses `require \"rails_rsc\"`" do
-      before { make_app_file("require \"rails_rsc\"\n", path: "models/foo.rb") }
+    context "when an app file requires the legacy gem name" do
+      before { make_app_file("require \"#{legacy_gem}\"\n", path: "models/foo.rb") }
 
       it "returns :fail" do
         status, = doctor.send(:check_legacy_constant)

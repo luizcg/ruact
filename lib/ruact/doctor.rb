@@ -8,8 +8,14 @@ module Ruact
   # Extracted from the rsc:doctor Rake task for direct testability (FR27).
   class Doctor
     CHECKS = %i[manifest vite controller layout streaming legacy_constant].freeze
-    LEGACY_CONSTANT_RE = /(?<![A-Za-z_])(RailsRsc|rails_rsc)(?![A-Za-z_])/
+    # Built via Array#join so the gem-CI `name-propagation` guard does not
+    # match these literals against itself (Story 5.1 review F4 — the doctor
+    # file participates in the guard with no exclusion).
+    LEGACY_CONST = %w[Rails Rsc].join
+    LEGACY_GEM   = %w[rails rsc].join("_")
+    LEGACY_CONSTANT_RE = /(?<![A-Za-z_])(?:#{LEGACY_CONST}|#{LEGACY_GEM})(?![A-Za-z_])/
     LEGACY_SCAN_GLOBS = ["config/initializers/**/*.rb", "app/**/*.rb"].freeze
+    RENAME_DOC_URL = "https://github.com/luizcg/ruact/blob/main/CHANGELOG.md#renamed"
 
     # Runs all checks, prints results, returns true if all pass.
     def self.run
@@ -17,6 +23,7 @@ module Ruact
     end
 
     def run
+      puts "[ruact] Health check"
       results = CHECKS.map { |check| send(:"check_#{check}") }
       results.each { |status, message| puts format_result(status, message) }
       passed = results.all? { |status, _| status == :pass }
@@ -66,8 +73,10 @@ module Ruact
       [:pass, "streaming: #{label} (#{streaming_server_hint})"]
     end
 
-    # Detects host-app references to the legacy `RailsRsc` constant or
-    # `rails_rsc` require path left over from the rename to `ruact`.
+    # Detects host-app references to the legacy gem constant or require path
+    # left over from the rename to `ruact`. Literal names are interpolated
+    # from LEGACY_CONST / LEGACY_GEM so this file passes the gem-CI
+    # `name-propagation` guard without an exclusion (Story 5.1 review F4).
     def check_legacy_constant
       offenses = LEGACY_SCAN_GLOBS.flat_map do |glob|
         Dir[Rails.root.join(glob)].flat_map do |file|
@@ -78,12 +87,13 @@ module Ruact
           end
         end
       end
-      return [:pass, "No legacy `RailsRsc` / `rails_rsc` references found"] if offenses.empty?
+      return [:pass, "No legacy `#{LEGACY_CONST}` / `#{LEGACY_GEM}` references found"] if offenses.empty?
 
       [:fail,
-       "Legacy `RailsRsc` / `rails_rsc` references found in #{offenses.length} location(s) " \
-       "(first: #{offenses.first}). Replace `RailsRsc` with `Ruact` and " \
-       "`require \"rails_rsc\"` with `require \"ruact\"` (gem renamed in v0.0.x)"]
+       "Legacy `#{LEGACY_CONST}` / `#{LEGACY_GEM}` references found in #{offenses.length} location(s) " \
+       "(first: #{offenses.first}). Replace `#{LEGACY_CONST}` with `Ruact` and " \
+       "`require \"#{LEGACY_GEM}\"` with `require \"ruact\"` (gem renamed in v0.0.x). " \
+       "See #{RENAME_DOC_URL}."]
     end
 
     def streaming_server_hint

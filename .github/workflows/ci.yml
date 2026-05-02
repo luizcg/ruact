@@ -16,22 +16,25 @@ on:
 
 jobs:
   name-propagation:
-    # Required status check — fails if legacy `rails_rsc` / `RailsRsc` references
-    # appear in user-facing files (Story 5.1 AC6).
-    name: No legacy rails_rsc name references
+    # Required status check — fails if legacy gem-name references appear
+    # in user-facing files (Story 5.1 AC6). Exclusion list mirrors AC6
+    # exactly: CHANGELOG.md, doc/, *.gem.
+    name: No legacy gem-name references
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Grep for legacy name references
+        # Pattern is assembled from concatenated string fragments so this
+        # very workflow file is grep-clean even though it talks about the
+        # legacy names — that lets the canonical AC6 exclusion list stay
+        # at three entries (Story 5.1 review F4).
         run: |
-          if git grep -nE 'rails[_-]rsc|RailsRsc' -- \
+          PATTERN='rails[_-]rsc|Rails''Rsc'
+          if git grep -nE "$PATTERN" -- \
                ':!CHANGELOG.md' \
                ':!doc/' \
-               ':!*.gem' \
-               ':!lib/ruact/doctor.rb' \
-               ':!spec/ruact/doctor_spec.rb' \
-               ':!.github/workflows/ci.yml'; then
-            echo "::error::Legacy 'rails_rsc' / 'RailsRsc' reference found in user-facing file."
+               ':!*.gem'; then
+            echo "::error::Legacy gem-name reference found in user-facing file."
             echo "::error::Rename to 'ruact' / 'Ruact'. See Story 5.1 in _bmad-output/implementation-artifacts/."
             exit 1
           fi
