@@ -34,6 +34,12 @@ module Ruact
       "spellcheck" => "spellCheck"
     }.freeze
 
+    # Tags whose `value` attribute maps to React's `defaultValue` (uncontrolled).
+    DEFAULT_VALUE_TAGS = %w[textarea select].freeze
+
+    # <input type=...> values for which `value` keeps its name in React (button-like inputs).
+    INPUT_BUTTON_TYPES = %w[submit reset button image].freeze
+
     # Convert an HTML string into a ReactElement tree.
     # component_registry is an array of { token:, name:, ref: ClientReference, props: Hash }
     def self.convert(html, component_registry = [])
@@ -89,48 +95,55 @@ module Ruact
 
     def convert_element(node)
       tag = node.name.downcase
+      return convert_suspense_element(node) if tag == "rsc-suspense"
 
-      # Special element: <rsc-suspense> → SuspenseElement (Suspense boundary)
-      if tag == "rsc-suspense"
-        fallback_text = node["data-rsc-fallback"] || ""
-        fallback = if fallback_text.empty?
-                     nil
-                   else
-                     Flight::ReactElement.new(type: "p", key: nil, props: { "children" => fallback_text })
-                   end
+      props = build_props(node, tag)
+      children = convert_children(node)
+      props["children"] = children.length == 1 ? children.first : children unless children.empty?
 
-        child_nodes = node.children.reject { |n| ignorable?(n) }.filter_map { |n| convert_node(n) }
-        children = child_nodes.length == 1 ? child_nodes.first : child_nodes
+      Flight::ReactElement.new(type: tag, key: node["data-react-key"], props: props)
+    end
 
-        return Flight::SuspenseElement.new(fallback: fallback, children: children)
-      end
+    def convert_suspense_element(node)
+      fallback_text = node["data-rsc-fallback"] || ""
+      fallback = if fallback_text.empty?
+                   nil
+                 else
+                   Flight::ReactElement.new(type: "p", key: nil, props: { "children" => fallback_text })
+                 end
 
-      key = node["data-react-key"]
+      child_nodes = convert_children(node)
+      children = child_nodes.length == 1 ? child_nodes.first : child_nodes
+
+      Flight::SuspenseElement.new(fallback: fallback, children: children)
+    end
+
+    def convert_children(node)
+      node.children.reject { |n| ignorable?(n) }.filter_map { |n| convert_node(n) }
+    end
+
+    def build_props(node, tag)
       props = {}
-
       node.attributes.each do |attr_name, attr_node|
         next if attr_name == "data-react-key"
 
-        react_name = if attr_name == "value" && %w[textarea select].include?(tag)
-                       "defaultValue"
-                     elsif attr_name == "value" && tag == "input"
-                       input_type = node["type"]&.downcase
-                       %w[submit reset button image].include?(input_type) ? "value" : "defaultValue"
-                     elsif attr_name == "checked" && tag == "input"
-                       "defaultChecked"
-                     else
-                       HTML_TO_REACT[attr_name] || camel_case_data(attr_name)
-                     end
+        react_name = react_attr_name(attr_name, tag, node)
         props[react_name] = attr_name == "style" ? parse_style(attr_node.value) : attr_node.value
       end
+      props
+    end
 
-      children = node.children.reject { |n| ignorable?(n) }.filter_map { |n| convert_node(n) }
+    def react_attr_name(attr_name, tag, node)
+      return "defaultValue" if attr_name == "value" && DEFAULT_VALUE_TAGS.include?(tag)
+      return input_value_name(node) if attr_name == "value" && tag == "input"
+      return "defaultChecked" if attr_name == "checked" && tag == "input"
 
-      unless children.empty?
-        props["children"] = children.length == 1 ? children.first : children
-      end
+      HTML_TO_REACT[attr_name] || camel_case_data(attr_name)
+    end
 
-      Flight::ReactElement.new(type: tag, key: key, props: props)
+    def input_value_name(node)
+      input_type = node["type"]&.downcase
+      INPUT_BUTTON_TYPES.include?(input_type) ? "value" : "defaultValue"
     end
 
     # Converts a CSS inline style string into a React-compatible hash with camelCase keys.
