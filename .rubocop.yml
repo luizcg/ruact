@@ -1,3 +1,10 @@
+# Pre-existing tech debt in lib/ruact/html_converter.rb#convert_element
+# (Metrics/* + Performance/CollectionLiteralInLoop) is tracked in
+# .rubocop_todo.yml. To be addressed by Story 7.4 (HtmlConverter.convert
+# validates inputs at the boundary). After 7.4 merges, run
+# `bundle exec rubocop --regenerate-todo` to drop the entries.
+inherit_from: .rubocop_todo.yml
+
 require:
   - rubocop/cop/ruact
 

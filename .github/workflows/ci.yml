@@ -48,6 +48,13 @@ jobs:
         rails: ["7.0", "7.1", "7.2", "8.0"]
     env:
       RAILS_VERSION: ${{ matrix.rails }}
+      # The Gemfile injects `gem "rails", "~> #{ENV['RAILS_VERSION']}"` for
+      # matrix testing, but Gemfile.lock cannot pin all four Rails versions
+      # at once. `bundler-cache: true` defaults to deployment/frozen mode
+      # which rejects any Gemfile change vs lockfile, so disable that here
+      # while keeping the gem cache for everything else.
+      BUNDLE_DEPLOYMENT: "false"
+      BUNDLE_FROZEN: "false"
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
