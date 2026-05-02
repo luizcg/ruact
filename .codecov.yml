@@ -23,6 +23,9 @@ comment:
 
 flags:
   gem:
+    # Paths are relative to the gem repo root (where this CI runs and uploads
+    # from). lcov.info emits source paths like `./lib/ruact.rb`; Codecov
+    # normalizes the leading `./` so a `lib/` prefix matches.
     paths:
-      - gem/lib/
+      - lib/
     carryforward: false
