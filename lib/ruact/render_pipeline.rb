@@ -59,8 +59,15 @@ module Ruact
       Enumerator.new do |y|
         render_context = RenderContext.new
         transformed = ErbPreprocessor.transform(erb_source)
+        receiver = binding_context.eval("self")
+        prev_ctx = receiver.instance_variable_get(:@__ruact_render_context__)
         inject_helper!(binding_context, render_context)
-        html = ERB.new(transformed).result(binding_context)
+        html =
+          begin
+            ERB.new(transformed).result(binding_context)
+          ensure
+            receiver.instance_variable_set(:@__ruact_render_context__, prev_ctx)
+          end
 
         registry = render_context.components.map do |entry|
           ref = @manifest.reference_for(entry[:name], controller_path: @controller_path)
@@ -88,13 +95,24 @@ module Ruact
       end
     end
 
-    # Define __rsc_component__ as a singleton method on the binding's receiver,
-    # closing over render_context so registration writes to this render's
-    # context only — no Thread.current, no shared state.
+    # Install __rsc_component__ on the binding's receiver and stash the active
+    # render context on the receiver as @__ruact_render_context__. The singleton
+    # method reads the ivar dynamically, so nested renders sharing the same
+    # receiver (e.g., inner pipeline.call from inside ERB) see whatever context
+    # is current at invocation time — _stream wraps ERB evaluation in a
+    # save/restore block so the outer render's context is restored afterward.
+    # Defining the singleton method is idempotent — re-defining on a nested
+    # call would not change behaviour, but skipping it avoids needless work.
     def inject_helper!(binding_context, render_context)
       receiver = binding_context.eval("self")
+      receiver.instance_variable_set(:@__ruact_render_context__, render_context)
+      return if receiver.respond_to?(:__rsc_component__)
+
       receiver.define_singleton_method(:__rsc_component__) do |name, props = {}|
-        token = render_context.register(name, props)
+        ctx = instance_variable_get(:@__ruact_render_context__)
+        raise Ruact::Error, "ruact: __rsc_component__ called outside an active render context" if ctx.nil?
+
+        token = ctx.register(name, props)
         "<!-- #{token} -->"
       end
     end

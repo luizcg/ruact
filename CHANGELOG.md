@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Internal
 
 - Rake task descriptions and internal `require` statements migrated from `rails_rsc` to `ruact`. Public API is unchanged; this is a documentation and tooling rename only.
-- **Render context now passed explicitly** (Story 7.1). `Ruact::ComponentRegistry` (which used `Thread.current`) has been removed; the per-render component list is now an instance of `Ruact::RenderContext` passed explicitly through `Controller#rsc_render → RenderPipeline → HtmlConverter`. The `Ruact/NoSharedState` cop now passes with no exceptions in `lib/`. **No public API change.** Note: `Ruact::Flight::*`, `Ruact::Internal::*`, and `Ruact::RenderContext` are not part of the public API and may change between minors. Hosts upgrading need no application code changes.
+- **Render context now passed explicitly** ([Story 7.1](../_bmad-output/implementation-artifacts/7-1-refactor-componentregistry-from-thread-current-to-explicit-render-context.md), PR [#TBD](https://github.com/luizcg/ruact/pulls)). `Ruact::ComponentRegistry` (which used `Thread.current`) has been removed; the per-render component list is now an instance of `Ruact::RenderContext` passed explicitly through `Controller#rsc_render → RenderPipeline → HtmlConverter`. The `Ruact/NoSharedState` cop now passes with no exceptions in `lib/ruact/`. **No public API change.** Note: `Ruact::Flight::*`, `Ruact::Internal::*`, and `Ruact::RenderContext` are not part of the public API and may change between minors. Hosts upgrading need no application code changes. See [decision note](../_bmad-output/decisions/2026-04-30-render-context-refactor.md) for rationale and contributor guidance.
 
 ## [0.1.0] - 2026-03-24
 

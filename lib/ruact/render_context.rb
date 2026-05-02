@@ -5,8 +5,9 @@ module Ruact
   # evaluation. One instance is allocated by the controller per render, passed
   # explicitly through the pipeline, and discarded when the response is sent.
   #
-  # No shared state, no Thread.current — the instance lives only as long as the
-  # render call (NFR8).
+  # No shared state, no thread-local lookup — the instance lives only as long
+  # as the render call. Satisfies NFR8 and the `Ruact/NoSharedState` cop with
+  # zero exceptions in `lib/`.
   #
   # Internal API: not part of the public compatibility contract.
   class RenderContext

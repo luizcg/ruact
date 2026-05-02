@@ -467,5 +467,35 @@ module Ruact
         expect(output).to match(/"disabled":false/)
       end
     end
+
+    describe "nested pipeline.call sharing a binding receiver" do
+      let(:nesting_pipeline) { described_class.new(manifest) }
+
+      it "restores the outer render context after an inner render completes (Story 7.1 review F1)" do
+        # Reproduces the original review concern: an outer pipeline.call whose
+        # ERB triggers an inner pipeline.call on the same binding receiver
+        # would, under the old closure-based inject_helper, overwrite the
+        # singleton method's bound context. After the inner render returned,
+        # the outer ERB's __rsc_component__ calls would register into the
+        # inner's discarded RenderContext — leaking the outer component out.
+        #
+        # The fix stores the active context on the receiver as an ivar and
+        # save/restores it around ERB evaluation.
+        inner = nesting_pipeline
+        receiver = Object.new
+        receiver.define_singleton_method(:run_inner) do
+          inner.call("<LikeButton postId={999} />", binding)
+          ""
+        end
+
+        outer = nesting_pipeline.call(
+          "<div><%= run_inner %><LikeButton postId={1} /></div>",
+          receiver.instance_eval { binding }
+        )
+
+        expect(outer).to match(/"postId":1/),
+                         "outer LikeButton (postId=1) must register into the OUTER context, not the discarded inner one"
+      end
+    end
   end
 end
