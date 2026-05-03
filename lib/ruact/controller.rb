@@ -59,23 +59,24 @@ module Ruact
 
       opts = template ? { template: template } : { action: action_name }
       html = render_to_string(opts.merge(layout: false, locals: locals))
-      enumerator = pipeline.from_html(html, render_context: render_context, streaming: streaming)
 
-      if rsc_request?
-        if streaming
-          response.headers["Content-Type"]      = "text/x-component; charset=utf-8"
-          response.headers["Cache-Control"]     = "no-cache"
-          response.headers["X-Accel-Buffering"] = "no"
-          begin
-            enumerator.each { |row| response.stream.write(row) }
-          ensure
-            response.stream.close
-          end
-        else
-          render plain: enumerator.to_a.join, content_type: "text/x-component"
+      if rsc_request? && streaming
+        response.headers["Content-Type"]      = "text/x-component; charset=utf-8"
+        response.headers["Cache-Control"]     = "no-cache"
+        response.headers["X-Accel-Buffering"] = "no"
+        enumerator = pipeline.render({ html: html, render_context: render_context }, mode: :stream)
+        begin
+          enumerator.each { |row| response.stream.write(row) }
+        ensure
+          response.stream.close
         end
       else
-        render html: rsc_html_shell(enumerator.to_a.join).html_safe, layout: false
+        payload = pipeline.render({ html: html, render_context: render_context }, mode: :string)
+        if rsc_request?
+          render plain: payload, content_type: "text/x-component"
+        else
+          render html: rsc_html_shell(payload).html_safe, layout: false
+        end
       end
     end
 

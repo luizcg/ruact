@@ -38,7 +38,10 @@ module Ruact
           binding_ctx = ctx.instance_eval { binding }
           ready_latch << :ready
           release.pop
-          output = pipeline.call("<ThreadComponent#{tid} thread_id={@tid} />", binding_ctx)
+          output = pipeline.render(
+            { erb: "<ThreadComponent#{tid} thread_id={@tid} />", binding: binding_ctx },
+            mode: :string
+          )
           results_mu.synchronize { results[tid] = output }
         end
       end

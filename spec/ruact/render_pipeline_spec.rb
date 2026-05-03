@@ -31,15 +31,15 @@ module Ruact
 
     let(:pipeline) { described_class.new(manifest) }
 
-    def render(erb_source, **locals)
+    def render_erb(erb_source, **locals)
       ctx = Object.new
       locals.each { |k, v| ctx.instance_variable_set("@#{k}", v) }
-      pipeline.call(erb_source, ctx.instance_eval { binding })
+      pipeline.render({ erb: erb_source, binding: ctx.instance_eval { binding } }, mode: :string)
     end
 
     describe "plain HTML" do
       it "serializes a plain HTML element" do
-        output = render('<div class="hello"><p>World</p></div>')
+        output = render_erb('<div class="hello"><p>World</p></div>')
         expect(output).to match(/0:\["\$","div"/)
         expect(output).to match(/"className":"hello"/)
       end
@@ -47,7 +47,7 @@ module Ruact
 
     describe "unknown component" do
       it "raises an error when component is not in manifest" do
-        expect { render("<Button />") }.to raise_error(an_object_satisfying { |e|
+        expect { render_erb("<Button />") }.to raise_error(an_object_satisfying { |e|
           e.message.include?("not found in manifest")
         })
       end
@@ -55,8 +55,8 @@ module Ruact
 
     describe "client component with props" do
       it "emits I row, serializes props, and puts root at ID 0" do
-        output = render("<div><LikeButton postId={@post_id} initialCount={5} /></div>",
-                        post_id: 42)
+        output = render_erb("<div><LikeButton postId={@post_id} initialCount={5} /></div>",
+                            post_id: 42)
 
         expect(output).to match(/I\[/)
         expect(output).to match(/LikeButton/)
@@ -68,7 +68,7 @@ module Ruact
 
     describe "import row ordering" do
       it "emits the I row before the root model row" do
-        output = render("<LikeButton postId={1} />")
+        output = render_erb("<LikeButton postId={1} />")
         lines  = output.lines.map(&:strip).reject(&:empty?)
 
         import_idx = lines.index { |l| l.include?(":I[") }
@@ -80,7 +80,7 @@ module Ruact
 
     describe "ERB instance variables" do
       it "evaluates ERB and passes instance variables into the output" do
-        output = render("<p><%= @title %></p>", title: "Hello RSC")
+        output = render_erb("<p><%= @title %></p>", title: "Hello RSC")
         expect(output).to match(/"Hello RSC"/)
       end
     end
@@ -95,9 +95,9 @@ module Ruact
           Thread.new do
             ctx = Object.new
             ctx.instance_variable_set(:@index, i)
-            output = pipeline.call(
-              "<LikeButton postId={@index} />",
-              ctx.instance_eval { binding }
+            output = pipeline.render(
+              { erb: "<LikeButton postId={@index} />", binding: ctx.instance_eval { binding } },
+              mode: :string
             )
             mutex.synchronize { results[i] = output }
           rescue StandardError => e
@@ -118,21 +118,21 @@ module Ruact
 
     describe "determinism (NFR16)" do
       it "produces identical byte output on repeated renders of the same view" do
-        first  = render("<div><LikeButton postId={1} /></div>")
-        second = render("<div><LikeButton postId={1} /></div>")
+        first  = render_erb("<div><LikeButton postId={1} /></div>")
+        second = render_erb("<div><LikeButton postId={1} /></div>")
         expect(first).to eq(second)
       end
 
       it "produces different output for different input data" do
-        output_a = render("<LikeButton postId={1} />")
-        output_b = render("<LikeButton postId={2} />")
+        output_a = render_erb("<LikeButton postId={1} />")
+        output_b = render_erb("<LikeButton postId={2} />")
         expect(output_a).not_to eq(output_b)
       end
     end
 
-    # --- from_html — ActionView integration path (Story 1.6) ---
+    # --- #render with html input — ActionView integration path (Story 1.6, consolidated in 7.2) ---
 
-    describe "#from_html" do
+    describe "#render with html input" do
       let(:navbar_manifest) do
         ClientManifest.from_hash({
                                    "NavBar" => {
@@ -149,7 +149,7 @@ module Ruact
         token = ctx.register("NavBar", { "currentUser" => 42 })
         html  = "<div><!-- #{token} --></div>"
 
-        output = pipeline.from_html(html, render_context: ctx).to_a.join
+        output = pipeline.render({ html: html, render_context: ctx }, mode: :string)
 
         expect(output).to include("NavBar")
         expect(output).to include('"currentUser":42')
@@ -162,38 +162,38 @@ module Ruact
         token = ctx.components.first[:token]
         html  = "<div><!-- #{token} --></div>"
 
-        enumerator = pipeline.from_html(html, render_context: ctx)
-        # Mutating the context after from_html should not affect the captured registry.
+        enumerator = pipeline.render({ html: html, render_context: ctx }, mode: :stream)
+        # Mutating the context after #render should not affect the captured registry.
         ctx.components.clear
 
         expect { enumerator.to_a }.not_to raise_error
         expect(enumerator.to_a.join).to include("NavBar")
       end
 
-      it "produces the same Flight output as call() for equivalent input" do
-        # Build the same HTML that RenderPipeline#call would produce for <NavBar />
-        # and verify from_html produces the same Flight output.
+      it "produces the same Flight output as the erb-input path for equivalent input" do
+        # Build the same HTML that #render with erb input would produce for <NavBar />
+        # and verify the html-input path produces the same Flight output.
         pipeline_erb  = described_class.new(navbar_manifest)
         pipeline_html = described_class.new(navbar_manifest)
 
-        pipeline_erb.call("<NavBar currentUser={1} />", binding)
+        pipeline_erb.render({ erb: "<NavBar currentUser={1} />", binding: binding }, mode: :string)
 
         ctx = RenderContext.new
         ctx.register("NavBar", { "currentUser" => 1 })
         token = ctx.components.first[:token]
         html  = "<!-- #{token} -->"
-        html_output = pipeline_html.from_html(html, render_context: ctx).to_a.join
+        html_output = pipeline_html.render({ html: html, render_context: ctx }, mode: :string)
 
         # Both should contain the NavBar import row and a root model row
         expect(html_output).to include("NavBar")
         expect(html_output).to match(/0:\[/)
       end
 
-      it "returns an Enumerator (lazy)" do
+      it "returns an Enumerator (lazy) when mode is :stream" do
         pipeline = described_class.new(manifest)
         html = "<div><p>Hello</p></div>"
 
-        result = pipeline.from_html(html, render_context: RenderContext.new)
+        result = pipeline.render({ html: html, render_context: RenderContext.new }, mode: :stream)
 
         expect(result).to be_a(Enumerator)
       end
@@ -220,7 +220,7 @@ module Ruact
       it "uses co-located component when controller_path matches (AC#2, AC#3)" do
         pipeline = described_class.new(dual_manifest, controller_path: "posts")
         ctx = Object.new
-        output = pipeline.call("<LikeButton />", ctx.instance_eval { binding })
+        output = pipeline.render({ erb: "<LikeButton />", binding: ctx.instance_eval { binding } }, mode: :string)
         expect(output).to include("/posts/_like_button.jsx")
         expect(output).not_to include("/LikeButton.jsx")
       end
@@ -228,7 +228,7 @@ module Ruact
       it "uses shared component when no controller_path given (AC#1)" do
         pipeline = described_class.new(dual_manifest)
         ctx = Object.new
-        output = pipeline.call("<LikeButton />", ctx.instance_eval { binding })
+        output = pipeline.render({ erb: "<LikeButton />", binding: ctx.instance_eval { binding } }, mode: :string)
         expect(output).to include("/LikeButton.jsx")
         expect(output).not_to include("/posts/_like_button.jsx")
       end
@@ -236,7 +236,7 @@ module Ruact
       it "falls back to shared when controller_path has no co-located key (AC#4)" do
         pipeline = described_class.new(dual_manifest, controller_path: "comments")
         ctx = Object.new
-        output = pipeline.call("<LikeButton />", ctx.instance_eval { binding })
+        output = pipeline.render({ erb: "<LikeButton />", binding: ctx.instance_eval { binding } }, mode: :string)
         expect(output).to include("/LikeButton.jsx")
       end
     end
@@ -245,46 +245,46 @@ module Ruact
 
     describe "prop types via ERB (AC#1–#7)" do
       it "integer prop is a JSON number, not a string (AC#1)" do
-        output = render("<LikeButton postId={@count} />", count: 42)
+        output = render_erb("<LikeButton postId={@count} />", count: 42)
         expect(output).to include('"postId":42')
         expect(output).not_to include('"postId":"42"')
       end
 
       it "string prop is a JSON string (AC#2)" do
-        output = render("<LikeButton label={@title} />", title: "hello")
+        output = render_erb("<LikeButton label={@title} />", title: "hello")
         expect(output).to include('"label":"hello"')
       end
 
       it "dollar-prefixed string is escaped with one extra $ (AC#3)" do
-        output = render("<LikeButton label={@price} />", price: "$9.99")
+        output = render_erb("<LikeButton label={@price} />", price: "$9.99")
         expect(output).to include('"label":"$$9.99"')
       end
 
       it "boolean true prop is a JSON boolean literal (AC#4)" do
-        output = render("<LikeButton enabled={true} />")
+        output = render_erb("<LikeButton enabled={true} />")
         expect(output).to include('"enabled":true')
         expect(output).not_to include('"enabled":"true"')
       end
 
       it "boolean false prop is a JSON boolean literal (AC#4)" do
-        output = render("<LikeButton active={false} />")
+        output = render_erb("<LikeButton active={false} />")
         expect(output).to include('"active":false')
         expect(output).not_to include('"active":"false"')
       end
 
       it "nil prop becomes JSON null (AC#5)" do
-        output = render("<LikeButton value={nil} />")
+        output = render_erb("<LikeButton value={nil} />")
         expect(output).to include('"value":null')
         expect(output).not_to include('"value":"nil"')
       end
 
       it "array prop has correctly typed elements (AC#6)" do
-        output = render("<LikeButton items={[1, \"a\", true, nil]} />")
+        output = render_erb("<LikeButton items={[1, \"a\", true, nil]} />")
         expect(output).to include('"items":[1,"a",true,null]')
       end
 
       it "hash prop produces a JSON object with correct types (AC#7)" do
-        output = render("<LikeButton opts={{debug: true, count: 5, label: \"x\"}} />")
+        output = render_erb("<LikeButton opts={{debug: true, count: 5, label: \"x\"}} />")
         expect(output).to include('"opts":{"debug":true,"count":5,"label":"x"}')
       end
     end
@@ -301,9 +301,12 @@ module Ruact
         pipeline_with_cards = described_class.new(manifest_with_post_card)
         ctx = Object.new
         ctx.instance_variable_set(:@posts, posts)
-        pipeline_with_cards.call(
-          "<% @posts.each do |post| %><PostCard title={post.title} id={post.id} /><% end %>",
-          ctx.instance_eval { binding }
+        pipeline_with_cards.render(
+          {
+            erb: "<% @posts.each do |post| %><PostCard title={post.title} id={post.id} /><% end %>",
+            binding: ctx.instance_eval { binding }
+          },
+          mode: :string
         )
       end
 
@@ -348,19 +351,19 @@ module Ruact
       end
 
       it "serializes as_json object as a JSON object prop (AC#1)" do
-        output = render("<PostCard post={@the_post} />", the_post: post_like_object)
+        output = render_erb("<PostCard post={@the_post} />", the_post: post_like_object)
         expect(output).to include('"id":1')
         expect(output).to include('"title":"Hello"')
       end
 
       it "emits [ruact] warning via the injected logger (AC#1, #3)" do
-        render("<PostCard post={@the_post} />", the_post: post_like_object)
+        render_erb("<PostCard post={@the_post} />", the_post: post_like_object)
         expect(fake_logger).to have_received(:warn)
           .with(match(/\[ruact\] WARNING: Post serialized via as_json/))
       end
 
       it "warning includes attribute names (AC#1)" do
-        render("<PostCard post={@the_post} />", the_post: post_like_object)
+        render_erb("<PostCard post={@the_post} />", the_post: post_like_object)
         expect(fake_logger).to have_received(:warn)
           .with(match(/ALL attributes exposed to client: id, title/))
       end
@@ -370,7 +373,7 @@ module Ruact
 
         it "raises SerializationError when strict_serialization: true (AC#2)" do
           allow(Ruact.config).to receive(:strict_serialization).and_return(true)
-          expect { render("<PostCard post={@the_post} />", the_post: post_like_object) }
+          expect { render_erb("<PostCard post={@the_post} />", the_post: post_like_object) }
             .to raise_error(Ruact::SerializationError, /strict_serialization/)
         end
       end
@@ -411,12 +414,12 @@ module Ruact
       end
 
       it "serializes only declared props (AC#1)" do
-        output = render("<PostCard post={@the_post} />", the_post: serializable_post)
+        output = render_erb("<PostCard post={@the_post} />", the_post: serializable_post)
         expect(output).to include('"id":1', '"title":"Hello"')
       end
 
       it "does NOT emit [ruact] warning (AC#3)" do
-        render("<PostCard post={@the_post} />", the_post: serializable_post)
+        render_erb("<PostCard post={@the_post} />", the_post: serializable_post)
         expect(fake_logger_s).not_to have_received(:warn)
       end
     end
@@ -441,39 +444,39 @@ module Ruact
       let(:pipeline) { described_class.new(manifest_with_hooks) }
 
       it "serializes string prop (AC#3 — useState initial string, onChange placeholder)" do
-        output = render('<SearchInput placeholder={"Search..."} />')
+        output = render_erb('<SearchInput placeholder={"Search..."} />')
         expect(output).to match(/"placeholder":"Search\.\.\."/)
       end
 
       it "serializes boolean true prop for useState initial value (AC#1)" do
-        output = render("<CounterButton enabled={true} />")
+        output = render_erb("<CounterButton enabled={true} />")
         expect(output).to match(/"enabled":true/)
       end
 
       it "serializes boolean false prop for disabled state (AC#1)" do
-        output = render("<CounterButton disabled={false} />")
+        output = render_erb("<CounterButton disabled={false} />")
         expect(output).to match(/"disabled":false/)
       end
 
       it "serializes nil prop as JSON null — no hydration mismatch for absent optionals (AC#4)" do
-        output = render("<CounterButton initialCount={nil} />")
+        output = render_erb("<CounterButton initialCount={nil} />")
         expect(output).to match(/"initialCount":null/)
       end
 
       it "serializes mixed props (integer + string + boolean) in a single component (AC#1, #3, #4)" do
-        output = render('<CounterButton initialCount={0} label={"Votes"} disabled={false} />')
+        output = render_erb('<CounterButton initialCount={0} label={"Votes"} disabled={false} />')
         expect(output).to match(/"initialCount":0/)
         expect(output).to match(/"label":"Votes"/)
         expect(output).to match(/"disabled":false/)
       end
     end
 
-    describe "nested pipeline.call sharing a binding receiver" do
+    describe "nested pipeline.render sharing a binding receiver" do
       let(:nesting_pipeline) { described_class.new(manifest) }
 
       it "restores the outer render context after an inner render completes (Story 7.1 review F1)" do
-        # Reproduces the original review concern: an outer pipeline.call whose
-        # ERB triggers an inner pipeline.call on the same binding receiver
+        # Reproduces the original review concern: an outer pipeline.render whose
+        # ERB triggers an inner pipeline.render on the same binding receiver
         # would, under the old closure-based inject_helper, overwrite the
         # singleton method's bound context. After the inner render returned,
         # the outer ERB's __rsc_component__ calls would register into the
@@ -484,17 +487,110 @@ module Ruact
         inner = nesting_pipeline
         receiver = Object.new
         receiver.define_singleton_method(:run_inner) do
-          inner.call("<LikeButton postId={999} />", binding)
+          inner.render({ erb: "<LikeButton postId={999} />", binding: binding }, mode: :string)
           ""
         end
 
-        outer = nesting_pipeline.call(
-          "<div><%= run_inner %><LikeButton postId={1} /></div>",
-          receiver.instance_eval { binding }
+        outer = nesting_pipeline.render(
+          { erb: "<div><%= run_inner %><LikeButton postId={1} /></div>", binding: receiver.instance_eval { binding } },
+          mode: :string
         )
 
         expect(outer).to match(/"postId":1/),
                          "outer LikeButton (postId=1) must register into the OUTER context, not the discarded inner one"
+      end
+    end
+
+    # --- #render — single coherent entry point (Story 7.2) ---
+    describe "#render contract" do
+      let(:erb_source) { "<LikeButton />" }
+      let(:erb_binding) { Object.new.instance_eval { binding } }
+      let(:html_input)  { "<!-- __RSC_0__ -->" }
+      let(:render_ctx)  { RenderContext.new.tap { |c| c.register("LikeButton", {}) } }
+
+      describe "input validation" do
+        it "raises ArgumentError when :erb is given without sibling :binding" do
+          expect { pipeline.render({ erb: erb_source }, mode: :string) }
+            .to raise_error(ArgumentError, /sibling :binding/)
+        end
+
+        it "raises ArgumentError when :html is given without sibling :render_context" do
+          expect { pipeline.render({ html: html_input }, mode: :string) }
+            .to raise_error(ArgumentError, /sibling :render_context/)
+        end
+
+        it "raises ArgumentError when input mixes :erb and :html keys" do
+          expect do
+            pipeline.render(
+              { erb: erb_source, binding: erb_binding, html: html_input, render_context: render_ctx },
+              mode: :string
+            )
+          end.to raise_error(ArgumentError, /cannot mix :erb and :html/)
+        end
+
+        it "raises ArgumentError when input has neither :erb nor :html" do
+          expect { pipeline.render({}, mode: :string) }
+            .to raise_error(ArgumentError, /must include either :erb .* or :html/)
+        end
+
+        it "raises ArgumentError when input is not a Hash" do
+          expect { pipeline.render(nil, mode: :string) }
+            .to raise_error(ArgumentError, /must be a Hash/)
+        end
+
+        it "raises ArgumentError on unknown :mode value" do
+          expect { pipeline.render({ erb: erb_source, binding: erb_binding }, mode: :weird) }
+            .to raise_error(ArgumentError, /unknown render mode :weird.*expected one of/)
+        end
+      end
+
+      describe "mode contract" do
+        it "returns a String when mode is :string (erb input)" do
+          out = pipeline.render({ erb: erb_source, binding: erb_binding }, mode: :string)
+          expect(out).to be_a(String)
+          expect(out).to match(/"LikeButton"|"\$L0"/)
+        end
+
+        it "returns an Enumerator when mode is :stream (erb input)" do
+          out = pipeline.render({ erb: erb_source, binding: erb_binding }, mode: :stream)
+          expect(out).to be_a(Enumerator)
+          joined = out.to_a.join
+          expect(joined).to match(/"LikeButton"|"\$L0"/)
+        end
+
+        it "returns a String when mode is :string (html input)" do
+          out = pipeline.render({ html: html_input, render_context: render_ctx }, mode: :string)
+          expect(out).to be_a(String)
+          expect(out).to match(/"LikeButton"|"\$L0"/)
+        end
+
+        it "returns an Enumerator when mode is :stream (html input)" do
+          out = pipeline.render({ html: html_input, render_context: render_ctx }, mode: :stream)
+          expect(out).to be_a(Enumerator)
+          joined = out.to_a.join
+          expect(joined).to match(/"LikeButton"|"\$L0"/)
+        end
+
+        it "defaults mode to :string when omitted" do
+          out = pipeline.render({ erb: erb_source, binding: erb_binding })
+          expect(out).to be_a(String)
+        end
+      end
+
+      describe "eager-capture invariant (html input)" do
+        it "does not reach back into the RenderContext after #render returns" do
+          ctx = RenderContext.new
+          ctx.register("LikeButton", { "postId" => 1 })
+
+          enum = pipeline.render({ html: "<!-- __RSC_0__ -->", render_context: ctx }, mode: :stream)
+
+          # Mutating the context after #render returns must not affect the captured registry.
+          ctx.register("LikeButton", { "postId" => 999 })
+
+          out = enum.to_a.join
+          expect(out).to match(/"postId":1/)
+          expect(out).not_to match(/"postId":999/)
+        end
       end
     end
   end

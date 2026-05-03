@@ -32,7 +32,7 @@ RSpec.describe "RenderPipeline benchmark" do
 
   def render_erb(erb_source, active_pipeline = pipeline)
     ctx = Object.new
-    active_pipeline.call(erb_source, ctx.instance_eval { binding })
+    active_pipeline.render({ erb: erb_source, binding: ctx.instance_eval { binding } }, mode: :string)
   end
 
   describe "typical view (20 components)" do

@@ -24,7 +24,9 @@ namespace :benchmark do
 
     Benchmark.ips do |x|
       x.config(time: 5, warmup: 2)
-      x.report("render 20 components") { pipeline.call(erb_typical, binding_ctx) }
+      x.report("render 20 components") do
+        pipeline.render({ erb: erb_typical, binding: binding_ctx }, mode: :string)
+      end
       x.compare!
     end
   end
@@ -47,7 +49,9 @@ namespace :benchmark do
     binding_ctx = ctx.instance_eval { binding }
 
     baseline_path = File.expand_path("../../spec/benchmarks/baseline.json", __dir__)
-    report = MemoryProfiler.report { pipeline.call(erb_typical, binding_ctx) }
+    report = MemoryProfiler.report do
+      pipeline.render({ erb: erb_typical, binding: binding_ctx }, mode: :string)
+    end
     current = report.total_allocated
 
     if File.exist?(baseline_path)
