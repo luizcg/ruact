@@ -61,10 +61,14 @@ module Ruact
       html = render_to_string(opts.merge(layout: false, locals: locals))
 
       if rsc_request? && streaming
+        # Build the Enumerator before mutating streaming response headers: render_html_enum
+        # eagerly resolves manifest references at construction time, so a missing-component
+        # error can still surface as a normal 500 response — matching the legacy
+        # #from_html ordering. Headers are only set once we know the pipeline is happy.
+        enumerator = pipeline.render({ html: html, render_context: render_context }, mode: :stream)
         response.headers["Content-Type"]      = "text/x-component; charset=utf-8"
         response.headers["Cache-Control"]     = "no-cache"
         response.headers["X-Accel-Buffering"] = "no"
-        enumerator = pipeline.render({ html: html, render_context: render_context }, mode: :stream)
         begin
           enumerator.each { |row| response.stream.write(row) }
         ensure
