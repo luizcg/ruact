@@ -39,5 +39,25 @@ module Ruact
         expect { raise PreprocessorError, "test" }.to raise_error(Error)
       end
     end
+
+    describe "Ruact::ConfigurationError" do
+      it "is a subclass of Ruact::Error" do
+        expect(ConfigurationError.ancestors).to include(Error)
+      end
+
+      it "can be raised and rescued as Ruact::Error" do
+        expect { raise ConfigurationError, "test" }.to raise_error(Error)
+      end
+    end
+
+    describe "Ruact::HtmlConverterError" do
+      it "is a subclass of Ruact::Error" do
+        expect(HtmlConverterError.ancestors).to include(Error)
+      end
+
+      it "can be raised and rescued as Ruact::Error" do
+        expect { raise HtmlConverterError, "test" }.to raise_error(Error)
+      end
+    end
   end
 end

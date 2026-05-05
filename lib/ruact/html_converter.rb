@@ -11,6 +11,7 @@ module Ruact
   # - HTML comments matching __RSC_N__ tokens → replaced by client component refs
   # - Text nodes → plain Ruby strings
   # - Multiple root nodes → wrapped in a Fragment (array)
+  # rubocop:disable Metrics/ClassLength
   class HtmlConverter
     # HTML attribute → React prop name mapping
     HTML_TO_REACT = {
@@ -42,6 +43,10 @@ module Ruact
 
     # Convert an HTML string into a ReactElement tree.
     # component_registry is an array of { token:, name:, ref: ClientReference, props: Hash }
+    #
+    # Raises +Ruact::HtmlConverterError+ if +html+ is not a +String+. The
+    # validation runs before Nokogiri is invoked, so the caller's file:line
+    # appears at the top of the backtrace rather than Nokogiri internals.
     def self.convert(html, component_registry = [])
       new(component_registry).convert(html)
     end
@@ -50,7 +55,14 @@ module Ruact
       @registry = component_registry
     end
 
+    # Convert an HTML string into a ReactElement tree (instance form).
+    #
+    # Raises +Ruact::HtmlConverterError+ if +html+ is not a +String+. The
+    # validation runs before Nokogiri is invoked, so the caller's file:line
+    # appears at the top of the backtrace rather than Nokogiri internals.
     def convert(html)
+      validate_html_input!(html)
+
       # Wrap in a fragment container so Nokogiri gives us a consistent root.
       # Use HTML4 fragment parser (universally available, no libgumbo needed).
       doc = Nokogiri::HTML::DocumentFragment.parse(html)
@@ -64,6 +76,80 @@ module Ruact
     end
 
     private
+
+    # Story 7.4: validate the +html+ input at the boundary so that a stray nil
+    # or non-String value produces a clear ruact-named error pointing at the
+    # caller's file:line instead of a Nokogiri stack trace.
+    #
+    # +String === html+ is used instead of +html.is_a?(String)+ because it
+    # delegates to +Module#===+ on +String+ rather than calling a method on
+    # +html+. This means even +BasicObject+ instances (which lack +is_a?+,
+    # +kind_of?+, and +.class+) raise +Ruact::HtmlConverterError+ here instead
+    # of +NoMethodError+. The message-building helper rescues every method
+    # call on +html+ for the same reason.
+    def validate_html_input!(html)
+      return if String === html # rubocop:disable Style/CaseEquality
+
+      # Walk the stack until we leave html_converter.rb — handles both the
+      # class form (HtmlConverter.convert → instance #convert) and the
+      # instance form, so the message always points at the application caller.
+      gem_file = __FILE__
+      stack = caller_locations(1, 10) || []
+      app_frames = stack.drop_while { |loc| loc.path == gem_file }
+      location = app_frames.first || stack.first
+
+      message = build_input_error_message(html, location)
+      app_backtrace = app_frames.map { |loc| "#{loc.path}:#{loc.lineno}:in `#{loc.label}'" }
+      app_backtrace = caller(1) if app_backtrace.empty?
+      raise Ruact::HtmlConverterError, message, app_backtrace
+    end
+
+    def build_input_error_message(value, location)
+      called_from = "Called from: #{location.path}:#{location.lineno}"
+      doc_pointer = "See HtmlConverter.convert documentation for the canonical contract."
+
+      # +nil.equal?(value)+ instead of +value.nil?+: BasicObject has no
+      # +nil?+ method, so identity comparison through nil's side is the
+      # only safe path.
+      if nil.equal?(value)
+        <<~MSG.strip
+          ruact: HtmlConverter.convert received nil; expected a String of HTML.
+            Most likely cause: an ERB template, partial, or render path returned nil instead of an HTML string. Check the call site for a missing yield, an empty respond_to branch, or a partial that returned nil.
+            #{called_from}
+            #{doc_pointer}
+        MSG
+      else
+        klass_name = safe_class_name(value)
+        preview = safe_inspect_preview(value)
+        <<~MSG.strip
+          ruact: HtmlConverter.convert expected a String of HTML; got #{klass_name}.
+            Received: #{preview}
+            #{called_from}
+            #{doc_pointer}
+        MSG
+      end
+    end
+
+    # Rescue around +.class+ so +BasicObject+ instances (and anything else
+    # that overrides or lacks +.class+) still produce a readable message.
+    def safe_class_name(value)
+      value.class.to_s
+    rescue StandardError
+      "an unknown object"
+    end
+
+    # Truncate +inspect+ to 80 chars (preview window). Rescue any exception
+    # raised by a hostile +inspect+ so the validation never propagates a
+    # third-party error class instead of +Ruact::HtmlConverterError+.
+    def safe_inspect_preview(value)
+      raw = value.inspect
+      raw = raw.to_s
+      truncated = raw[0, 80]
+      truncated += "..." if raw.length > 80
+      truncated
+    rescue StandardError
+      "<inspect raised>"
+    end
 
     def ignorable?(node)
       node.text? && node.text.strip.empty?
@@ -169,4 +255,5 @@ module Ruact
       parts.first + parts[1..].map(&:capitalize).join
     end
   end
+  # rubocop:enable Metrics/ClassLength
 end

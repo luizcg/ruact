@@ -122,5 +122,113 @@ module Ruact
         expect(manifest).not_to be_frozen
       end
     end
+
+    describe "#reference_for closest-match suggestion (Story 7.4)" do
+      let(:shared_only_manifest) { described_class.from_hash(manifest_data) }
+      let(:dual_manifest)        { described_class.from_hash(dual_manifest_data) }
+
+      it "suggests the shared key for a one-character typo" do
+        expect { shared_only_manifest.reference_for("LikeButtonn") }
+          .to raise_error(Ruact::ManifestError, /Did you mean "LikeButton"\?/)
+      end
+
+      it "suggests the shared key for a two-character typo (boundary)" do
+        # "LiekButtoon" is the AC7 spec 13 boundary case (transposition + one
+        # insertion); under Damerau-Levenshtein its distance from "LikeButton"
+        # is 2, so the suggestion fires.
+        expect { shared_only_manifest.reference_for("LiekButtoon") }
+          .to raise_error(Ruact::ManifestError, /Did you mean "LikeButton"\?/)
+      end
+
+      it "falls back to the file-path hint when the typo is over distance 2" do
+        expect { shared_only_manifest.reference_for("LkkButttn") }
+          .to raise_error(Ruact::ManifestError) do |error|
+            expect(error.message)
+              .to match(%r{Did you mean to add app/javascript/components/LkkButttn\.jsx and rebuild Vite\?})
+            expect(error.message).not_to match(/Did you mean "LikeButton"\?/)
+          end
+      end
+
+      it "falls back to the file-path hint for a totally unrelated name" do
+        expect { shared_only_manifest.reference_for("Whatever") }
+          .to raise_error(Ruact::ManifestError,
+                          %r{Did you mean to add app/javascript/components/Whatever\.jsx and rebuild Vite\?})
+      end
+
+      it "suggests a co-located key (with original key shown) when it is the closest match" do
+        co_located_only = described_class.from_hash(
+          "posts/_like_button" => {
+            "id" => "/posts/_like_button.jsx",
+            "name" => "default",
+            "chunks" => ["/posts/_like_button.jsx"]
+          }
+        )
+        expect { co_located_only.reference_for("LikeButtoon") }
+          .to raise_error(Ruact::ManifestError, %r{Did you mean "posts/_like_button"\?})
+      end
+
+      it "biases the suggestion toward co-located keys when controller_path is given" do
+        # Both "LikeButton" (shared) and "posts/_like_button" (co-located) tie
+        # at distance 1 from "LikeButtoon". Without controller_path the first
+        # one encountered wins (hash-iteration order); with controller_path:"posts"
+        # the co-located key is preferred so the suggestion is contextual.
+        expect { dual_manifest.reference_for("LikeButtoon", controller_path: "posts") }
+          .to raise_error(Ruact::ManifestError, %r{Did you mean "posts/_like_button"\?})
+      end
+
+      it "preserves the existing 'Did you run the Vite build?' hint in every variant" do
+        vite_hint = /Did you run the Vite build\? Run 'npm run build' or start the Vite dev server\./
+        expect { shared_only_manifest.reference_for("LikeButtonn") }
+          .to raise_error(Ruact::ManifestError, vite_hint)
+        expect { shared_only_manifest.reference_for("Whatever") }
+          .to raise_error(Ruact::ManifestError, vite_hint)
+      end
+
+      it "uses the AC3 verbatim multi-line 'ruact:' message shape" do
+        expect { shared_only_manifest.reference_for("LikeButtonn") }
+          .to raise_error(Ruact::ManifestError) do |error|
+            expect(error.message).to eq(<<~MSG.strip)
+              ruact: Component "LikeButtonn" not found in manifest.
+                Did you mean "LikeButton"?
+                Did you run the Vite build? Run 'npm run build' or start the Vite dev server.
+            MSG
+          end
+      end
+    end
+
+    describe "edge cases (Story 7.4)" do
+      it "does not raise FrozenError when an empty loaded manifest looks up an unknown component" do
+        empty_manifest = Tempfile.create(["empty_manifest", ".json"]) do |f|
+          f.write("{}")
+          f.flush
+          described_class.load(f.path)
+        end
+
+        expect(empty_manifest).to be_frozen
+        expect { empty_manifest.reference_for("LikeButton") }
+          .to raise_error(Ruact::ManifestError, /not found in manifest/)
+      end
+
+      it "uses entry['name'] (not the lookup key) for ClientReference#export_name" do
+        manifest = described_class.from_hash(
+          "LikeButton" => {
+            "id" => "/LikeButton.jsx",
+            "name" => "LikeButton",
+            "chunks" => ["/LikeButton.jsx"]
+          },
+          "posts/_like_button" => {
+            "id" => "/posts/_like_button.jsx",
+            "name" => "default",
+            "chunks" => ["/posts/_like_button.jsx"]
+          }
+        )
+
+        shared_ref     = manifest.reference_for("LikeButton")
+        co_located_ref = manifest.reference_for("LikeButton", controller_path: "posts")
+
+        expect(shared_ref.export_name).to eq("LikeButton")
+        expect(co_located_ref.export_name).to eq("default")
+      end
+    end
   end
 end

@@ -143,5 +143,161 @@ module Ruact
                                             })
       end
     end
+
+    describe "input validation (Story 7.4)" do
+      describe "nil input" do
+        it "raises Ruact::HtmlConverterError" do
+          expect { described_class.convert(nil) }.to raise_error(Ruact::HtmlConverterError)
+        end
+
+        it "message contains 'received nil; expected a String of HTML'" do
+          expect { described_class.convert(nil) }
+            .to raise_error(Ruact::HtmlConverterError,
+                            /HtmlConverter\.convert received nil; expected a String of HTML/)
+        end
+
+        it "message contains the 'Most likely cause' hint" do
+          expect { described_class.convert(nil) }
+            .to raise_error(Ruact::HtmlConverterError, /Most likely cause:/)
+          expect { described_class.convert(nil) }
+            .to raise_error(Ruact::HtmlConverterError, /missing yield, an empty respond_to branch/)
+        end
+
+        it "message contains the documentation pointer" do
+          expect { described_class.convert(nil) }
+            .to raise_error(Ruact::HtmlConverterError,
+                            /See HtmlConverter\.convert documentation for the canonical contract\./)
+        end
+
+        it "message points at the spec's file:line, not html_converter.rb (Called from)" do
+          expected_line = __LINE__ + 1
+          expect { described_class.convert(nil) }
+            .to raise_error(Ruact::HtmlConverterError,
+                            /Called from: #{Regexp.escape(__FILE__)}:#{expected_line}/)
+        end
+
+        it "does not invoke Nokogiri::HTML::DocumentFragment.parse" do
+          allow(Nokogiri::HTML::DocumentFragment).to receive(:parse).and_call_original
+          expect { described_class.convert(nil) }.to raise_error(Ruact::HtmlConverterError)
+          expect(Nokogiri::HTML::DocumentFragment).not_to have_received(:parse)
+        end
+      end
+
+      describe "non-String inputs" do
+        it "raises with 'got Integer' and 'Received: 42' for an Integer" do
+          expect { described_class.convert(42) }
+            .to raise_error(Ruact::HtmlConverterError,
+                            /HtmlConverter\.convert expected a String of HTML; got Integer/)
+          expect { described_class.convert(42) }
+            .to raise_error(Ruact::HtmlConverterError, /Received: 42/)
+        end
+
+        it "raises with 'got Symbol' for a Symbol" do
+          expect { described_class.convert(:symbol) }
+            .to raise_error(Ruact::HtmlConverterError, /got Symbol/)
+          expect { described_class.convert(:symbol) }
+            .to raise_error(Ruact::HtmlConverterError, /Received: :symbol/)
+        end
+
+        it "raises with 'got Array' for an Array" do
+          expect { described_class.convert(["array"]) }
+            .to raise_error(Ruact::HtmlConverterError, /got Array/)
+          expect { described_class.convert(["array"]) }
+            .to raise_error(Ruact::HtmlConverterError, /Received: \["array"\]/)
+        end
+
+        it "raises with 'got Hash' for a Hash" do
+          expect { described_class.convert({ hash: 1 }) }
+            .to raise_error(Ruact::HtmlConverterError, /got Hash/)
+          expect { described_class.convert({ hash: 1 }) }
+            .to raise_error(Ruact::HtmlConverterError, /Received: \{.*hash.*1.*\}/)
+        end
+
+        it "raises with 'got Object' for a generic Object" do
+          expect { described_class.convert(Object.new) }
+            .to raise_error(Ruact::HtmlConverterError, /got Object/)
+        end
+
+        it "message points at the spec's file:line for non-nil non-String input" do
+          expected_line = __LINE__ + 1
+          expect { described_class.convert(42) }
+            .to raise_error(Ruact::HtmlConverterError,
+                            /Called from: #{Regexp.escape(__FILE__)}:#{expected_line}/)
+        end
+
+        it "truncates large input previews to ≤ 84 chars (80 + '...')" do
+          large_value = (1..10_000).to_a
+          message = nil
+          begin
+            described_class.convert(large_value)
+          rescue Ruact::HtmlConverterError => e
+            message = e.message
+          end
+
+          received_line = message.lines.find { |l| l.include?("Received:") }
+          expect(received_line).not_to be_nil
+          preview = received_line.sub(/^\s*Received:\s/, "").strip
+          expect(preview.length).to be <= 84
+          expect(preview).to end_with("...")
+        end
+      end
+
+      describe "subclasses and edge cases" do
+        it "accepts String subclasses (e.g. ActionView SafeBuffer-like)" do
+          safe_buffer_class = Class.new(String)
+          input = safe_buffer_class.new("<div>hi</div>")
+          expect { described_class.convert(input) }.not_to raise_error
+
+          result = described_class.convert(input)
+          expect(result).to be_a(Ruact::Flight::ReactElement)
+          expect(result.type).to eq("div")
+        end
+
+        it "accepts an empty string without raising" do
+          expect { described_class.convert("") }.not_to raise_error
+        end
+
+        it "raises Ruact::HtmlConverterError (not NoMethodError) for BasicObject inputs" do
+          basic = BasicObject.new
+          expect { described_class.convert(basic) }
+            .to raise_error(Ruact::HtmlConverterError, /HtmlConverter\.convert expected a String of HTML/)
+        end
+
+        it "produces a readable message even when value#inspect raises" do
+          hostile = Class.new do
+            def inspect
+              raise "I refuse to introspect"
+            end
+          end.new
+
+          expect { described_class.convert(hostile) }
+            .to raise_error(Ruact::HtmlConverterError, /Received: <inspect raised>/)
+        end
+
+        it "produces a readable message even when value#class raises (BasicObject)" do
+          basic = BasicObject.new
+          expect { described_class.convert(basic) }
+            .to raise_error(Ruact::HtmlConverterError) do |error|
+              expect(error.message).to include("got ")
+              expect(error.message).not_to match(/got\s*$/)
+            end
+        end
+      end
+
+      describe "backtrace shape" do
+        it "frame 0 of the backtrace points outside the gem" do
+          described_class.convert(nil)
+        rescue Ruact::HtmlConverterError => e
+          expect(e.backtrace.first).not_to include("/lib/ruact/html_converter.rb")
+          expect(e.backtrace.first).to include(__FILE__)
+        end
+
+        it "frame 0 references the test file when called from a spec" do
+          described_class.convert(42)
+        rescue Ruact::HtmlConverterError => e
+          expect(e.backtrace.first).to start_with(__FILE__)
+        end
+      end
+    end
   end
 end
