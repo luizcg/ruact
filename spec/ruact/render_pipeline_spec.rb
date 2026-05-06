@@ -534,6 +534,156 @@ module Ruact
                                                   ])
         end
       end
+
+      # --- Story 7.7 regression suite — render context re-entry (post-7.1 shape) ---
+      #
+      # The happy-path round-trip (outer→inner→outer; outer's component registers
+      # in its own context) is gated by ":497 nested pipeline.render sharing a
+      # binding receiver" above. This block adds the three gaps the 2026-04-30
+      # code review identified: inner-raises ensure restoration, 3-level nesting,
+      # and sequential receiver reuse.
+      describe "edge cases (Story 7.7) — render context re-entry", :story_7_7 do
+        let(:nesting_pipeline) { described_class.new(manifest) }
+
+        it "restores the receiver's @__ruact_render_context__ ivar when an inner render raises" do
+          inner = nesting_pipeline
+          receiver = Object.new
+          receiver.define_singleton_method(:run_inner) do
+            inner.render({ erb: "<UnknownComponent />", binding: binding }, mode: :string)
+            ""
+          end
+
+          expect do
+            nesting_pipeline.render(
+              { erb: "<div><%= run_inner %></div>", binding: receiver.instance_eval { binding } },
+              mode: :string
+            )
+          end.to raise_error(/not found in manifest/)
+
+          # The ensure block at render_pipeline.rb#render_erb_enum must run on
+          # both the inner and outer raises, restoring the receiver's ivar back
+          # to its pre-render value (nil for a fresh receiver).
+          expect(receiver.instance_variable_get(:@__ruact_render_context__)).to be_nil
+        end
+
+        it "isolates render contexts across 3 levels of nested renders on the same receiver" do
+          pipe = nesting_pipeline
+          receiver = Object.new
+          receiver.define_singleton_method(:run_inner) do
+            pipe.render({ erb: "<LikeButton postId={3} />", binding: binding }, mode: :string)
+            ""
+          end
+          receiver.define_singleton_method(:run_middle) do
+            pipe.render(
+              { erb: "<LikeButton postId={2} /><%= run_inner %>", binding: binding },
+              mode: :string
+            )
+            ""
+          end
+
+          outer = nesting_pipeline.render(
+            { erb: "<div><%= run_middle %><LikeButton postId={1} /></div>",
+              binding: receiver.instance_eval { binding } },
+            mode: :string
+          )
+
+          # Outer's wire output sees only postId=1 — middle's postId=2 and inner's
+          # postId=3 stayed in their own RenderContexts. The middle/inner output
+          # was discarded by the "" return from each singleton method.
+          expect(outer).to match_flight_structure([
+                                                    like_button_import,
+                                                    { id: 0, class: :model,
+                                                      payload: ["$", "div", nil, {
+                                                        "children" => ["$", "$L1", nil, { "postId" => 1 }]
+                                                      }] }
+                                                  ])
+        end
+
+        it "isolates components across sequential renders that share a binding receiver" do
+          receiver = Object.new
+          binding_for_receiver = receiver.instance_eval { binding }
+
+          output_a = nesting_pipeline.render(
+            { erb: "<LikeButton postId={11} />", binding: binding_for_receiver },
+            mode: :string
+          )
+          output_b = nesting_pipeline.render(
+            { erb: "<LikeButton postId={22} />", binding: binding_for_receiver },
+            mode: :string
+          )
+
+          expect(output_a).to     include_flight_row(class: :model,
+                                                     payload: array_including(hash_including("postId" => 11)))
+          expect(output_a).not_to include_flight_row(class: :model,
+                                                     payload: array_including(hash_including("postId" => 22)))
+          expect(output_b).to     include_flight_row(class: :model,
+                                                     payload: array_including(hash_including("postId" => 22)))
+          expect(output_b).not_to include_flight_row(class: :model,
+                                                     payload: array_including(hash_including("postId" => 11)))
+
+          # After both renders complete, ensure-block restoration leaves the
+          # receiver's ivar back at its pre-render value (nil for a fresh
+          # receiver) — no leftover RenderContext leaking out of the pipeline.
+          expect(receiver.instance_variable_get(:@__ruact_render_context__)).to be_nil
+        end
+      end
+
+      # --- Story 7.7 regression suite — ERB without instance variables ---
+      #
+      # The render_erb helper at :46-50 supports empty **locals (zero ivars set
+      # on the binding receiver), and `:54 plain HTML` exercises that path
+      # implicitly. This block makes the empty-binding contract explicit so a
+      # future refactor (e.g. an early `binding_context.eval('instance_variables')`
+      # check that assumes ≥ 1 ivar) cannot break it silently.
+      describe "edge cases (Story 7.7) — ERB without instance variables", :story_7_7 do
+        it "renders plain HTML against a binding with zero instance variables" do
+          ctx = Object.new
+          expect(ctx.instance_variables).to eq([])
+
+          output = pipeline.render(
+            { erb: "<div>hello</div>", binding: ctx.instance_eval { binding } },
+            mode: :string
+          )
+
+          expect(output).to match_flight_structure([
+                                                     { id: 0, class: :model,
+                                                       payload: ["$", "div", nil, { "children" => "hello" }] }
+                                                   ])
+        end
+
+        it "renders ERB that calls a method on self without crashing on an empty binding" do
+          ctx = Object.new
+          expect(ctx.instance_variables).to eq([])
+
+          output = pipeline.render(
+            { erb: "<p><%= self.class.name %></p>", binding: ctx.instance_eval { binding } },
+            mode: :string
+          )
+
+          expect(output).to include_flight_row(
+            class: :model,
+            payload: array_including(hash_including("children" => "Object"))
+          )
+        end
+
+        it "leaves the receiver's @__ruact_render_context__ ivar at nil after a render against an empty binding" do
+          ctx = Object.new
+          expect(ctx.instance_variables).to eq([])
+
+          pipeline.render(
+            { erb: "<%= self.class %>", binding: ctx.instance_eval { binding } },
+            mode: :string
+          )
+
+          # The pipeline's ensure block (render_pipeline.rb:174-178) restores
+          # prev_ctx (nil for a fresh receiver). The ivar may remain *defined*
+          # on the receiver with value nil — both `[]` and `[:@__ruact_render_context__]`
+          # are acceptable post-render states; the contract is the *value* is nil,
+          # not the presence of the symbol in instance_variables.
+          stashed = ctx.instance_variable_get(:@__ruact_render_context__)
+          expect(stashed).to be_nil
+        end
+      end
     end
 
     # --- #render with html input — ActionView integration path (Story 1.6, consolidated in 7.2) ---

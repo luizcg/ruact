@@ -186,6 +186,40 @@ module Ruact
           end
         end
 
+        # --- Story 7.7 regression suite — as_json returning self message shape ---
+        #
+        # The "with as_json returning self" context at :169 above asserts the error
+        # class plus the substring "infinite recursion". That gate passes if the
+        # message drifts to e.g. "infinite recursion detected" with no class name
+        # and no actionable hint — the user reading a Sentry issue would not learn
+        # which model misbehaved or how to fix it. The block below gates the full
+        # message shape from gem/lib/ruact/flight/serializer.rb#serialize_as_json:
+        # the offending class name + "Ruact::Serializable" + "rsc_props" must all
+        # appear so the message remains debuggable in production.
+        describe "edge cases (Story 7.7) — as_json returning self message shape", :story_7_7 do
+          let(:self_returning_model) do
+            Class.new do
+              def as_json
+                self
+              end
+
+              def self.name
+                "SelfModel"
+              end
+            end.new
+          end
+
+          it "names the offending class and points the user at Ruact::Serializable + rsc_props" do
+            b = StubBundlerConfig.new
+            expect { Renderer.render(self_returning_model, b, strict_serialization: false) }
+              .to raise_error(Ruact::SerializationError) do |error|
+                expect(error.message).to include("SelfModel")
+                expect(error.message).to include("Ruact::Serializable")
+                expect(error.message).to include("rsc_props")
+              end
+          end
+        end
+
         context "with as_json raising an exception" do
           let(:model_raising_error) do
             Class.new do

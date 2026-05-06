@@ -299,5 +299,27 @@ module Ruact
         end
       end
     end
+
+    # Detailed coverage of HtmlConverter input validation (nil + non-String inputs,
+    # backtrace shape, BasicObject handling) lives in the "input validation (Story 7.4)"
+    # block above (lines 147-300). This regression suite is intentionally minimal — two
+    # smoke specs that name the suite for greppability via `:story_7_7` and the
+    # "Story 7.7" describe substring; do NOT duplicate the 7.4 detailed coverage here.
+    describe "edge cases (Story 7.7) — code-review regression suite", :story_7_7 do
+      it "raises Ruact::HtmlConverterError for nil input (smoke; full coverage at :147-184)" do
+        expect { described_class.convert(nil) }.to raise_error(Ruact::HtmlConverterError) do |error|
+          expect(error.message).to include("received nil")
+          expect(error.message).to include("expected a String of HTML")
+        end
+      end
+
+      it "raises Ruact::HtmlConverterError for a non-String input (smoke; full coverage at :186-243)" do
+        expect { described_class.convert(42) }.to raise_error(Ruact::HtmlConverterError) do |error|
+          expect(error.message).to include("expected a String of HTML")
+          expect(error.message).to include("got Integer")
+          expect(error.message).to include("Received: 42")
+        end
+      end
+    end
   end
 end
