@@ -61,9 +61,19 @@ module Ruact
         let(:fallback)  { ReactElement.new(type: "span") }
         let(:inner)     { ReactElement.new(type: "div") }
 
+        # Configuration is frozen post-Story 7.3, so RSpec mocks cannot proxy it.
+        # Configure via Ruact.configure and reset around each example.
+        around do |example|
+          Ruact.instance_variable_set(:@config, nil)
+          Ruact.instance_variable_set(:@configured_at_least_once, false)
+          example.run
+          Ruact.instance_variable_set(:@config, nil)
+          Ruact.instance_variable_set(:@configured_at_least_once, false)
+        end
+
         context "when deferred delay exceeds suspense_timeout (streaming: true)" do
           before do
-            allow(Ruact.config).to receive(:suspense_timeout).and_return(1.0)
+            Ruact.configure { |c| c.suspense_timeout = 1.0 }
           end
 
           it "emits an E-type error row instead of the model row" do
@@ -90,7 +100,7 @@ module Ruact
 
         context "when deferred delay is within suspense_timeout (streaming: true)" do
           before do
-            allow(Ruact.config).to receive(:suspense_timeout).and_return(10.0)
+            Ruact.configure { |c| c.suspense_timeout = 10.0 }
           end
 
           it "emits a model row (not an error row) and no E row" do

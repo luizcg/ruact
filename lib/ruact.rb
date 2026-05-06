@@ -28,21 +28,68 @@ module Ruact
       File.expand_path("../vendor/javascript/vite-plugin-ruact/index.js", __dir__)
     end
 
-    # Yields the configuration object for block-style setup.
+    # Yields a mutable Configuration draft for block-style setup. The draft is
+    # frozen and atomically swapped into `Ruact.config` when the block returns.
+    # Mutating `Ruact.config` outside this block raises
+    # `Ruact::ConfigurationError` (Story 7.3).
+    #
+    # When called a second time after boot, this method emits a `[ruact]`
+    # warning advising that runtime re-configuration is unusual.
     #
     # @example
     #   Ruact.configure do |config|
     #     config.strict_serialization = true
     #   end
+    # @yieldparam [Ruact::Configuration] mutable draft cloned from the current
+    #   configuration (or built from defaults on first call)
     def configure
-      yield config
+      draft = if defined?(@config) && @config
+                Configuration.new(template: @config)
+              else
+                Configuration.new
+              end
+
+      yield draft
+
+      warn_if_re_configuration!
+      @config = draft.__send__(:seal!)
     end
 
-    # Returns the singleton configuration instance.
+    # Returns the singleton configuration instance, frozen on first access so
+    # that mutation outside `Ruact.configure` always raises (Story 7.3).
+    # First-access publication counts as the boot configuration, so a later
+    # `Ruact.configure` call after default reads triggers the AC3 warning
+    # (otherwise the warning would be silently bypassed in apps that never
+    # call `Ruact.configure` at boot but reconfigure later).
     #
-    # @return [Ruact::Configuration]
+    # @return [Ruact::Configuration] frozen
     def config
-      @config ||= Configuration.new
+      return @config if defined?(@config) && @config
+
+      @config = Configuration.new.__send__(:seal!)
+      @configured_at_least_once = true
+      @config
+    end
+
+    private
+
+    def warn_if_re_configuration!
+      return unless @configured_at_least_once
+
+      caller_loc = caller_locations(2, 1).first
+      message = "[ruact] Ruact.configure called after boot at #{caller_loc.path}:#{caller_loc.lineno}. " \
+                "Re-configuration at runtime is unusual and may indicate that configuration is being " \
+                "driven by request state, environment, or feature flags rather than initializer-time invariants. " \
+                "If this is intentional (e.g. test setup), ignore this warning; otherwise, consolidate " \
+                "configuration into config/initializers/ruact.rb."
+
+      if defined?(Rails) && Rails.respond_to?(:logger) && Rails.logger
+        Rails.logger.warn(message)
+      else
+        warn(message)
+      end
+    ensure
+      @configured_at_least_once = true
     end
   end
 end

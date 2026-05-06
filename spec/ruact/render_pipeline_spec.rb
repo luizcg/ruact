@@ -305,8 +305,18 @@ module Ruact
         context "with strict_serialization pipeline" do
           let(:pipeline) { described_class.new(as_json_manifest, logger: fake_logger) }
 
+          # Configuration is frozen post-Story 7.3, so RSpec mocks cannot proxy it.
+          # Configure via Ruact.configure and reset around the example.
+          around do |example|
+            Ruact.instance_variable_set(:@config, nil)
+            Ruact.instance_variable_set(:@configured_at_least_once, false)
+            example.run
+            Ruact.instance_variable_set(:@config, nil)
+            Ruact.instance_variable_set(:@configured_at_least_once, false)
+          end
+
           it "raises SerializationError when strict_serialization: true (AC#2)" do
-            allow(Ruact.config).to receive(:strict_serialization).and_return(true)
+            Ruact.configure { |c| c.strict_serialization = true }
             expect { render_erb("<PostCard post={@the_post} />", the_post: post_like_object) }
               .to raise_error(Ruact::SerializationError, /strict_serialization/)
           end
