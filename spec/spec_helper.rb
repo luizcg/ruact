@@ -26,7 +26,11 @@ end
 require "logger"
 require "ruact"
 
-Dir[File.join(__dir__, "support", "**", "*.rb")].each { |f| require f }
+Dir[File.join(__dir__, "support", "**", "*.rb")].each do |f|
+  next if f.end_with?("_spec.rb") # spec files are loaded by the RSpec runner; avoid double registration
+
+  require f
+end
 
 RSpec.configure do |config|
   config.order = :random
@@ -35,5 +39,16 @@ RSpec.configure do |config|
   end
   config.mock_with :rspec do |mocks|
     mocks.verify_partial_doubles = true
+  end
+
+  # Story 7.3: Ruact.config is a frozen singleton with a boot-state flag for the
+  # re-configuration warning. Reset both before every example so the boot flag
+  # cannot leak between specs — otherwise the AC3 warning may fire into a
+  # Rails.logger that has become a per-example RSpec double from an earlier
+  # spec, producing "originally created in one example but has leaked" failures
+  # under random order.
+  config.before do
+    Ruact.instance_variable_set(:@config, nil)
+    Ruact.instance_variable_set(:@configured_at_least_once, false)
   end
 end

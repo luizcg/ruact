@@ -38,19 +38,62 @@ Expected output (`client_reference.txt`):
 
 ---
 
-## How `match_flight_fixture` Works
+## How to assert on Flight output
 
-The custom RSpec matcher is defined in `spec/support/matchers/flight_fixture_matcher.rb`:
+Three RSpec matcher modes live in `spec/support/matchers/flight_fixture_matcher.rb`. Pick the mode that names what you actually care about — defaulting to `match_flight_structure` for new specs avoids the cosmetic-change brittleness that bit Phase 1 (a `JSON.generate` tweak broke 30+ specs at once).
 
+| Mode | When to use | What it tolerates | Failure shape |
+|---|---|---|---|
+| `match_flight_fixture(name)` | The wire format itself is the contract — bytes-for-bytes guard. Use for serializer escape rules, ordering invariants, or any test where "the output looks exactly like this" is the assertion. | Nothing — exact `==` against the fixture file. | Inspected expected vs. actual strings (whitespace and escapes visible). |
+| `match_flight_structure(expected)` | The parsed semantics are the contract — change-tolerant. Use for round-tripping tests, scaffolding, end-to-end render tests, and any case where JSON key reordering or whitespace tweaks should not break the spec. | JSON key insertion order inside payload hashes; whitespace inside JSON; relative ordering among `:import` rows (which Flight treats as an unordered set). Cross-class row order (imports → models → deferred → errors) is **preserved** because the wire protocol depends on it. | Row-indexed diff naming the differing field path (e.g. `Row 0 (model) differs at .payload[0]:`). |
+| `include_flight_row(predicate)` | A specific shape must appear regardless of order or siblings. Use for concurrency tests, partial assertions in multi-row outputs, or "this row exists somewhere" checks. | Sibling rows; ordering. Predicate is subset-matched (only the keys you list are compared). | Predicate inspect + a list of every parsed row with id/class/payload preview. |
+
+### Worked examples
+
+Each example is a complete RSpec assertion you can paste into a spec file (above `RSpec.describe` blocks where the matchers are autoloaded by `spec_helper`).
+
+**`match_flight_fixture` — wire-format contract guard:**
 ```ruby
-expect(output).to match_flight_fixture("nil")
+serialized = "0:\"$$danger\"\n"
+expect(serialized).to match_flight_fixture("string_dollar_escape")
+# Asserts byte-for-byte against `string_dollar_escape.txt` — proves the `$` → `$$` escape rule.
 ```
 
-This reads `spec/fixtures/flight/nil.txt` and performs an **exact string comparison** against `output`. There is no normalisation — whitespace, newlines, and ordering must match exactly.
+**`match_flight_structure` — parsed-semantics assertion:**
+```ruby
+wire = %(1:I["/LikeButton.jsx","LikeButton",["/LikeButton.jsx"]]\n) +
+       %(0:["$","$L1",null,{"postId":42}]\n)
 
-### Failure output
+expect(wire).to match_flight_structure([
+  { id: 1, class: :import, payload: ["/LikeButton.jsx", "LikeButton", ["/LikeButton.jsx"]] },
+  { id: 0, class: :model,  payload: ["$", "$L1", nil, { "postId" => 42 }] }
+])
+# Passes even if `JSON.generate` re-orders props later — what matters is that postId=42 round-trips.
+```
 
-When a fixture does not match, the failure message shows both the expected (fixture file content) and actual (serializer output) as inspected strings, making it easy to spot differences in whitespace or character escaping.
+**`include_flight_row` — ordering-independent presence check:**
+```ruby
+wire = %(0:["$","CounterButton",null,{"initialCount":0}]\n)
+
+expect(wire).to include_flight_row(
+  class: :model,
+  payload: hash_including("initialCount" => 0)
+)
+# Used in concurrency specs where multiple threads emit interleaved rows; only the row's shape matters.
+```
+
+### ❌ Avoid / ✅ Prefer
+
+```ruby
+❌ expect(output).to include('"postId":42')   # cosmetic-change brittle
+✅ expect(output).to include_flight_row(class: :model, payload: hash_including("postId" => 42))
+```
+
+A future `JSON.generate` change that emits keys in different insertion order (`{"label":"x","postId":42}` instead of `{"postId":42,"label":"x"}`) breaks the literal substring match. The structural form parses the row and compares hashes by key-set, so it survives the cosmetic change.
+
+### When a fixture spec fails after a serializer change
+
+If `match_flight_fixture` fails after touching `Ruact::Flight::Serializer`, that's by design — the wire format **is** the contract for those fixtures. Either the change is intentional (update the fixture file and the CHANGELOG) or it isn't (revert). Don't switch the spec to `match_flight_structure` to "make it green"; that hides the regression that fixture mode is designed to catch.
 
 ---
 
