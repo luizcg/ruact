@@ -22,7 +22,7 @@ jobs:
     name: No legacy gem-name references
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Grep for legacy name references
         # Pattern is assembled from concatenated string fragments so this
         # very workflow file is grep-clean even though it talks about the
@@ -59,7 +59,7 @@ jobs:
       BUNDLE_DEPLOYMENT: "false"
       BUNDLE_FROZEN: "false"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.ruby }}
@@ -73,7 +73,7 @@ jobs:
         # upload partial/aborted runs. `fail_ci_if_error: false` keeps a
         # Codecov outage from reddening a build whose tests passed.
         if: matrix.ruby == '3.3' && matrix.rails == '7.2' && success()
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage/lcov.info
@@ -85,7 +85,7 @@ jobs:
     name: RuboCop
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
@@ -98,7 +98,7 @@ jobs:
     name: YARD Docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
@@ -111,7 +111,7 @@ jobs:
     name: Memory Benchmark
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
