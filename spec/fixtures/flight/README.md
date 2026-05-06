@@ -106,6 +106,11 @@ If `match_flight_fixture` fails after touching `Ruact::Flight::Serializer`, that
 | `boolean_false.txt` | Ruby `false` serializes to the JSON `false` literal |
 | `number_integer.txt` | Ruby integer (e.g. `42`) serializes to a bare JSON number |
 | `number_float.txt` | Ruby float (e.g. `3.14`) serializes to a bare JSON float |
+| `bigint.txt` | Ruby integer above `MAX_SAFE_INTEGER` (`2**53`) serializes to `"$n<decimal>"` so the JS client can rebuild a `BigInt` |
+| `nan.txt` | `Float::NAN` serializes to `"$NaN"` (JSON has no NaN literal; Flight uses the `$`-prefix sentinel) |
+| `infinity.txt` | `Float::INFINITY` serializes to `"$Infinity"` |
+| `negative_infinity.txt` | `-Float::INFINITY` serializes to `"$-Infinity"` |
+| `undefined.txt` | The `:undefined` symbol sentinel serializes to `"$undefined"` so the JS client decodes it as `undefined` (JSON has no undefined literal) |
 | `string_basic.txt` | Plain Ruby string serializes to a JSON double-quoted string |
 | `string_dollar_escape.txt` | Strings starting with `$` are escaped to `$$…` to avoid collision with Flight's `$L` reference syntax |
 | `array.txt` | Ruby array serializes to a JSON array in row 0 |

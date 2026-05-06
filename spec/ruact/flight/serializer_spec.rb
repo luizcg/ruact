@@ -16,87 +16,32 @@ module Ruact
 
       let(:bundler) { StubBundlerConfig.new }
 
-      # --- Primitives ---
-
-      describe "strings" do
-        it "serializes a plain string" do
-          expect(render.call("hello")).to eq("0:\"hello\"\n")
-        end
-
-        it "escapes strings starting with $" do
-          expect(render.call("$danger")).to eq("0:\"$$danger\"\n")
-        end
-      end
-
-      describe "numbers" do
-        it "serializes an integer" do
-          expect(render.call(42)).to eq("0:42\n")
-        end
-
-        it "serializes a bigint (> MAX_SAFE_INTEGER) as $n<decimal>" do
-          big = 9_007_199_254_740_992
-          expect(render.call(big)).to eq("0:\"$n#{big}\"\n")
-        end
-
-        it "serializes Float::NAN" do
-          expect(render.call(Float::NAN)).to eq("0:\"$NaN\"\n")
-        end
-
-        it "serializes Float::INFINITY" do
-          expect(render.call(Float::INFINITY)).to eq("0:\"$Infinity\"\n")
-        end
-
-        it "serializes -Float::INFINITY" do
-          expect(render.call(-Float::INFINITY)).to eq("0:\"$-Infinity\"\n")
-        end
-      end
-
-      describe "nil/boolean" do
-        it "serializes nil as null" do
-          expect(render.call(nil)).to eq("0:null\n")
-        end
-
-        it "serializes true" do
-          expect(render.call(true)).to eq("0:true\n")
-        end
-
-        it "serializes false" do
-          expect(render.call(false)).to eq("0:false\n")
-        end
-      end
-
-      describe "special symbols" do
-        it "serializes :undefined as $undefined" do
-          expect(render.call(:undefined)).to eq("0:\"$undefined\"\n")
-        end
-      end
-
-      # --- Collections ---
-
-      describe "hash" do
-        it "serializes a hash with symbol keys" do
-          out = render.call({ greeting: "hello", count: 42 })
-          expect(out).to eq("0:{\"greeting\":\"hello\",\"count\":42}\n")
-        end
-      end
-
-      describe "array" do
-        it "serializes a plain array" do
-          expect(render.call([1, 2, 3])).to eq("0:[1,2,3]\n")
-        end
-      end
-
       # --- React Element (DOM) ---
+      #
+      # Primitive scalar/collection inputs (nil, booleans, integer, float, string,
+      # `$`-escaped string, hash, array) are guarded by the fixture-mode block at
+      # the bottom of this file. The cases below assert on the *parsed shape* of
+      # ReactElement payloads — fixture mode is overkill for them since the
+      # invariant under test is "the parsed tuple is `["$", <type>, <key>, <props>]`",
+      # not the literal byte sequence.
 
       describe "ReactElement" do
         it "serializes a DOM element" do
           el = ReactElement.new(type: "div", props: { className: "box", children: "hi" })
-          expect(render.call(el)).to eq("0:[\"$\",\"div\",null,{\"className\":\"box\",\"children\":\"hi\"}]\n")
+          expected = [
+            { id: 0, class: :model,
+              payload: ["$", "div", nil, { "className" => "box", "children" => "hi" }] }
+          ]
+          expect(render.call(el)).to match_flight_structure(expected)
         end
 
         it "serializes a DOM element with a key" do
           el = ReactElement.new(type: "li", key: "item-1", props: { children: "one" })
-          expect(render.call(el)).to eq("0:[\"$\",\"li\",\"item-1\",{\"children\":\"one\"}]\n")
+          expected = [
+            { id: 0, class: :model,
+              payload: ["$", "li", "item-1", { "children" => "one" }] }
+          ]
+          expect(render.call(el)).to match_flight_structure(expected)
         end
       end
 
@@ -106,11 +51,18 @@ module Ruact
         it "emits an I row for the import and references $L1 in root" do
           ref = ClientReference.new(module_id: "./LikeButton", export_name: "LikeButton")
           el  = ReactElement.new(type: ref, props: { postId: 1, initialCount: 5 })
-          out = render.call(el)
 
-          expect(out).to match(%r{1:I\["\./LikeButton","LikeButton"\]})
-          expect(out).to match(/0:\["\$","\$L1"/)
-          expect(out.index("1:I")).to be < out.index("0:["), "import row must precede model row"
+          # Story 7.6 Decision B: collapse the original sibling regex pair plus
+          # the `out.index("1:I") < out.index("0:[")` ordering check into a
+          # single structural assertion. Non-import rows compare positionally,
+          # so the import row in expected position 0 + the model row in
+          # expected position 1 encode the ordering invariant.
+          expected = [
+            { id: 1, class: :import, payload: ["./LikeButton", "LikeButton"] },
+            { id: 0, class: :model,
+              payload: ["$", "$L1", nil, { "postId" => 1, "initialCount" => 5 }] }
+          ]
+          expect(render.call(el)).to match_flight_structure(expected)
         end
 
         it "deduplicates: same ClientReference object emits only one I row" do
@@ -159,8 +111,10 @@ module Ruact
           end
 
           it "serializes via as_json, returning a hash (AC#3)" do
-            expect(render_loose.call(model_with_as_json)).to include('"id":1')
-            expect(render_loose.call(model_with_as_json)).to include('"name":"Alice"')
+            expect(render_loose.call(model_with_as_json)).to include_flight_row(
+              class: :model,
+              payload: hash_including("id" => 1, "name" => "Alice")
+            )
           end
 
           it "calls on_as_json_warning with class name and attribute list (AC#1, #3)" do
@@ -208,7 +162,7 @@ module Ruact
           it "serializes the array without crashing" do
             b = StubBundlerConfig.new
             output = Renderer.render(model_returning_array, b, strict_serialization: false)
-            expect(output).to include("[1,2,3]")
+            expect(output).to include_flight_row(class: :model, payload: [1, 2, 3])
           end
         end
 
@@ -286,13 +240,16 @@ module Ruact
         end
 
         it "serializes via rsc_serialize — only declared props (AC#1)" do
-          expect(render.call(serializable_obj)).to include('"id":1', '"title":"Hello"')
+          expect(render.call(serializable_obj)).to include_flight_row(
+            class: :model,
+            payload: hash_including("id" => 1, "title" => "Hello")
+          )
         end
 
         it "works with strict_serialization: true — Serializable bypasses strict gate (AC#1)" do
           b = StubBundlerConfig.new
           output = Renderer.render(serializable_obj, b, strict_serialization: true)
-          expect(output).to include('"id":1')
+          expect(output).to include_flight_row(class: :model, payload: hash_including("id" => 1))
         end
 
         it "does NOT call on_as_json_warning (AC#3)" do
@@ -306,6 +263,12 @@ module Ruact
       end
 
       # --- Fixture Contracts (AC#9) ---
+      #
+      # Fixture mode is the canonical guard for the Flight wire-format invariants
+      # of every primitive type: byte-exact escape rules, scalar canonical bytes,
+      # ordering. Story 7.6 deleted the duplicate literal-`eq` blocks that lived
+      # at the top of this file; these fixture-mode blocks are now the single
+      # source of truth for those invariants.
 
       describe "fixture contracts (AC#9)" do
         let(:fixture_render) { ->(model) { Renderer.render(model, ClientManifest.from_hash({})) } }
@@ -336,6 +299,26 @@ module Ruact
 
         it "float serializes to fixture" do
           expect(fixture_render.call(3.14)).to match_flight_fixture("number_float")
+        end
+
+        it "bigint (> MAX_SAFE_INTEGER) serializes to fixture as $n<decimal>" do
+          expect(fixture_render.call(9_007_199_254_740_992)).to match_flight_fixture("bigint")
+        end
+
+        it "Float::NAN serializes to fixture as $NaN" do
+          expect(fixture_render.call(Float::NAN)).to match_flight_fixture("nan")
+        end
+
+        it "Float::INFINITY serializes to fixture as $Infinity" do
+          expect(fixture_render.call(Float::INFINITY)).to match_flight_fixture("infinity")
+        end
+
+        it "-Float::INFINITY serializes to fixture as $-Infinity" do
+          expect(fixture_render.call(-Float::INFINITY)).to match_flight_fixture("negative_infinity")
+        end
+
+        it ":undefined serializes to fixture as $undefined" do
+          expect(fixture_render.call(:undefined)).to match_flight_fixture("undefined")
         end
 
         it "mixed array serializes to fixture" do
