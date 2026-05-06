@@ -54,11 +54,14 @@ RSpec.describe "Flight wire matchers" do
 
     it "produces the AC3 verbatim row-indexed diff for a single-field semantic regression" do
       broken_wire = %(0:["$X","div",null,{"className":"box","children":"hi"}]\n)
-      expected_structure = [
-        { id: 0, class: :model,
-          payload: ["$", "div", nil, { "className" => "box", "children" => "hi" }] }
-      ]
+      expected_payload = ["$", "div", nil, { "className" => "box", "children" => "hi" }]
+      got_payload      = ["$X", "div", nil, { "className" => "box", "children" => "hi" }]
+      expected_structure = [{ id: 0, class: :model, payload: expected_payload }]
 
+      # Hash#inspect changed between Ruby 3.3 (`{"a"=>"b"}`) and Ruby 3.4
+      # (`{"a" => "b"}`). The AC3 contract is "values shown via .inspect" —
+      # so we render the expected message with the same .inspect the matcher
+      # uses at runtime, keeping the spec stable across the CI Ruby matrix.
       expected_message = <<~MSG.strip
         Expected Flight output to match structure.
 
@@ -67,8 +70,8 @@ RSpec.describe "Flight wire matchers" do
           got:      "$X"
 
         Row 0 (model) full diff:
-          expected: ["$", "div", nil, {"className" => "box", "children" => "hi"}]
-          got:      ["$X", "div", nil, {"className" => "box", "children" => "hi"}]
+          expected: #{expected_payload.inspect}
+          got:      #{got_payload.inspect}
       MSG
 
       expect do
