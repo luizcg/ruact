@@ -57,15 +57,19 @@ module Ruact
         results = run_isolation_iteration(iter, thread_count, pipeline)
 
         results.each_with_index do |output, tid|
-          expect(output).to include("ThreadComponent#{tid}"),
-                            "iter #{iter} thread #{tid}: missing own component"
-          expect(output).to include("\"thread_id\":#{tid}")
+          expect(output).to include_flight_row(
+            class: :import, payload: array_including("ThreadComponent#{tid}")
+          ), "iter #{iter} thread #{tid}: missing own component import"
+          expect(output).to include_flight_row(
+            class: :model, payload: array_including(hash_including("thread_id" => tid))
+          ), "iter #{iter} thread #{tid}: missing own thread_id prop"
 
           (0...thread_count).each do |other_tid|
             next if other_tid == tid
 
-            expect(output).not_to include("ThreadComponent#{other_tid}"),
-                                  "iter #{iter} thread #{tid} leaked ThreadComponent#{other_tid}"
+            expect(output).not_to include_flight_row(
+              class: :import, payload: array_including("ThreadComponent#{other_tid}")
+            ), "iter #{iter} thread #{tid} leaked ThreadComponent#{other_tid}"
           end
         end
       end
