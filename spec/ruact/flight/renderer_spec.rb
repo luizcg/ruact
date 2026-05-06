@@ -31,7 +31,7 @@ module Ruact
         it "root row always has id 0" do
           element = ReactElement.new(type: "p")
           output  = described_class.render(element, empty_manifest)
-          expect(output.lines.last).to start_with("0:")
+          expect(Ruact::Spec::FlightWireParser.parse(output).last).to include(id: 0, class: :model)
         end
       end
 
@@ -86,6 +86,7 @@ module Ruact
             suspense = SuspenseElement.new(fallback: fallback, children: inner, delay: 5.0)
             rows = described_class.each(suspense, empty_manifest, streaming: true).to_a
             error_row = rows.find { |r| r.include?(":E") }
+            # Error message string is the contract — see Story 7.6 Decision E.
             expect(error_row).to include("Suspense timeout exceeded")
           end
 
