@@ -31,6 +31,16 @@ module Ruact
 
     let(:pipeline) { described_class.new(manifest) }
 
+    # Methods (not `let`) so nested describes don't exceed RSpec/MultipleMemoizedHelpers
+    # while still sharing a single source of truth for the LikeButton import row shape.
+    def like_button_chunk
+      "/assets/LikeButton-abc.js"
+    end
+
+    def like_button_import
+      { id: 1, class: :import, payload: [like_button_chunk, "LikeButton", [like_button_chunk]] }
+    end
+
     # Helper for the ERB-input path of #render. All describe blocks below — except
     # the explicitly-marked "#render with html input" — exercise this path.
     def render_erb(erb_source, **locals)
@@ -43,8 +53,13 @@ module Ruact
       describe "plain HTML" do
         it "serializes a plain HTML element" do
           output = render_erb('<div class="hello"><p>World</p></div>')
-          expect(output).to match(/0:\["\$","div"/)
-          expect(output).to match(/"className":"hello"/)
+          expect(output).to match_flight_structure([
+                                                     { id: 0, class: :model,
+                                                       payload: ["$", "div", nil, {
+                                                         "className" => "hello",
+                                                         "children" => ["$", "p", nil, { "children" => "World" }]
+                                                       }] }
+                                                   ])
         end
       end
 
@@ -61,11 +76,17 @@ module Ruact
           output = render_erb("<div><LikeButton postId={@post_id} initialCount={5} /></div>",
                               post_id: 42)
 
-          expect(output).to match(/I\[/)
-          expect(output).to match(/LikeButton/)
-          expect(output).to match(/"postId":42/)
-          expect(output).to match(/"initialCount":5/)
-          expect(output.lines.last).to start_with("0:"), "last row should be root (id=0)"
+          # Story 7.6 Decision B: collapse the four sibling regex assertions plus
+          # the `output.lines.last.start_with?("0:")` ordering check into a single
+          # structural assertion. Non-import rows compare positionally, so the
+          # import in expected position 0 + the model in position 1 encodes
+          # "import row precedes (and root is last)".
+          inner_button = ["$", "$L1", nil, { "postId" => 42, "initialCount" => 5 }]
+          expected = [
+            like_button_import,
+            { id: 0, class: :model, payload: ["$", "div", nil, { "children" => inner_button }] }
+          ]
+          expect(output).to match_flight_structure(expected)
         end
       end
 
@@ -84,7 +105,10 @@ module Ruact
       describe "ERB instance variables" do
         it "evaluates ERB and passes instance variables into the output" do
           output = render_erb("<p><%= @title %></p>", title: "Hello RSC")
-          expect(output).to match(/"Hello RSC"/)
+          expect(output).to match_flight_structure([
+                                                     { id: 0, class: :model,
+                                                       payload: ["$", "p", nil, { "children" => "Hello RSC" }] }
+                                                   ])
         end
       end
 
@@ -113,8 +137,9 @@ module Ruact
           expect(errors).to be_empty, "Threads raised: #{errors.map(&:message).join(', ')}"
 
           10.times do |i|
-            expect(results[i]).to include("\"postId\":#{i}"),
-                                  "Thread #{i} must contain postId=#{i} — got: #{results[i].inspect}"
+            expect(results[i]).to include_flight_row(
+              class: :model, payload: array_including(hash_including("postId" => i))
+            ), "Thread #{i} must contain postId=#{i} — got: #{results[i].inspect}"
           end
         end
       end
@@ -123,12 +148,14 @@ module Ruact
         it "produces identical byte output on repeated renders of the same view" do
           first  = render_erb("<div><LikeButton postId={1} /></div>")
           second = render_erb("<div><LikeButton postId={1} /></div>")
+          # Determinism check — byte equality is the contract, see Story 7.6 Decision E.
           expect(first).to eq(second)
         end
 
         it "produces different output for different input data" do
           output_a = render_erb("<LikeButton postId={1} />")
           output_b = render_erb("<LikeButton postId={2} />")
+          # Determinism check — byte inequality is the contract, see Story 7.6 Decision E.
           expect(output_a).not_to eq(output_b)
         end
       end
@@ -155,23 +182,23 @@ module Ruact
           pipeline = described_class.new(dual_manifest, controller_path: "posts")
           ctx = Object.new
           output = pipeline.render({ erb: "<LikeButton />", binding: ctx.instance_eval { binding } }, mode: :string)
-          expect(output).to include("/posts/_like_button.jsx")
-          expect(output).not_to include("/LikeButton.jsx")
+          expect(output).to     include_flight_row(class: :import, payload: array_including("/posts/_like_button.jsx"))
+          expect(output).not_to include_flight_row(class: :import, payload: array_including("/LikeButton.jsx"))
         end
 
         it "uses shared component when no controller_path given (AC#1)" do
           pipeline = described_class.new(dual_manifest)
           ctx = Object.new
           output = pipeline.render({ erb: "<LikeButton />", binding: ctx.instance_eval { binding } }, mode: :string)
-          expect(output).to include("/LikeButton.jsx")
-          expect(output).not_to include("/posts/_like_button.jsx")
+          expect(output).to     include_flight_row(class: :import, payload: array_including("/LikeButton.jsx"))
+          expect(output).not_to include_flight_row(class: :import, payload: array_including("/posts/_like_button.jsx"))
         end
 
         it "falls back to shared when controller_path has no co-located key (AC#4)" do
           pipeline = described_class.new(dual_manifest, controller_path: "comments")
           ctx = Object.new
           output = pipeline.render({ erb: "<LikeButton />", binding: ctx.instance_eval { binding } }, mode: :string)
-          expect(output).to include("/LikeButton.jsx")
+          expect(output).to include_flight_row(class: :import, payload: array_including("/LikeButton.jsx"))
         end
       end
 
@@ -180,46 +207,68 @@ module Ruact
       describe "prop types via ERB (AC#1–#7)" do
         it "integer prop is a JSON number, not a string (AC#1)" do
           output = render_erb("<LikeButton postId={@count} />", count: 42)
-          expect(output).to include('"postId":42')
-          expect(output).not_to include('"postId":"42"')
+          expect(output).to     include_flight_row(class: :model,
+                                                   payload: array_including(hash_including("postId" => 42)))
+          expect(output).not_to include_flight_row(class: :model,
+                                                   payload: array_including(hash_including("postId" => "42")))
         end
 
         it "string prop is a JSON string (AC#2)" do
           output = render_erb("<LikeButton label={@title} />", title: "hello")
-          expect(output).to include('"label":"hello"')
+          expect(output).to include_flight_row(class: :model,
+                                               payload: array_including(hash_including("label" => "hello")))
         end
 
         it "dollar-prefixed string is escaped with one extra $ (AC#3)" do
+          # The `$`-prefix escape is a Flight-protocol wire convention, not a
+          # JSON escape — the parser is byte-faithful and does NOT decode the
+          # extra `$` away. So the parsed prop value carries the escaped form
+          # `"$$9.99"`. The byte-exactness of the escape rule itself is
+          # guarded by serializer_spec's `string_dollar_escape` fixture; here
+          # we just assert that the escape kicks in through the ERB pipeline.
           output = render_erb("<LikeButton label={@price} />", price: "$9.99")
-          expect(output).to include('"label":"$$9.99"')
+          expect(output).to include_flight_row(class: :model,
+                                               payload: array_including(hash_including("label" => "$$9.99")))
         end
 
         it "boolean true prop is a JSON boolean literal (AC#4)" do
           output = render_erb("<LikeButton enabled={true} />")
-          expect(output).to include('"enabled":true')
-          expect(output).not_to include('"enabled":"true"')
+          expect(output).to     include_flight_row(class: :model,
+                                                   payload: array_including(hash_including("enabled" => true)))
+          expect(output).not_to include_flight_row(class: :model,
+                                                   payload: array_including(hash_including("enabled" => "true")))
         end
 
         it "boolean false prop is a JSON boolean literal (AC#4)" do
           output = render_erb("<LikeButton active={false} />")
-          expect(output).to include('"active":false')
-          expect(output).not_to include('"active":"false"')
+          expect(output).to     include_flight_row(class: :model,
+                                                   payload: array_including(hash_including("active" => false)))
+          expect(output).not_to include_flight_row(class: :model,
+                                                   payload: array_including(hash_including("active" => "false")))
         end
 
         it "nil prop becomes JSON null (AC#5)" do
           output = render_erb("<LikeButton value={nil} />")
-          expect(output).to include('"value":null')
-          expect(output).not_to include('"value":"nil"')
+          expect(output).to     include_flight_row(class: :model,
+                                                   payload: array_including(hash_including("value" => nil)))
+          expect(output).not_to include_flight_row(class: :model,
+                                                   payload: array_including(hash_including("value" => "nil")))
         end
 
         it "array prop has correctly typed elements (AC#6)" do
           output = render_erb("<LikeButton items={[1, \"a\", true, nil]} />")
-          expect(output).to include('"items":[1,"a",true,null]')
+          expect(output).to include_flight_row(
+            class: :model,
+            payload: array_including(hash_including("items" => [1, "a", true, nil]))
+          )
         end
 
         it "hash prop produces a JSON object with correct types (AC#7)" do
           output = render_erb("<LikeButton opts={{debug: true, count: 5, label: \"x\"}} />")
-          expect(output).to include('"opts":{"debug":true,"count":5,"label":"x"}')
+          expect(output).to include_flight_row(
+            class: :model,
+            payload: array_including(hash_including("opts" => { "debug" => true, "count" => 5, "label" => "x" }))
+          )
         end
       end
 
@@ -244,16 +293,26 @@ module Ruact
           )
         end
 
+        # Loop renders multiple PostCards as siblings under a Fragment-like root,
+        # so model row 0's payload is an Array of React-element tuples
+        # ([["$", "$L1", nil, {props}], …]). Predicate is nested:
+        # array_including(array_including(hash_including(prop))).
         it "each PostCard receives its correct title prop" do
-          expect(loop_output).to include('"title":"First"')
-          expect(loop_output).to include('"title":"Second"')
-          expect(loop_output).to include('"title":"Third"')
+          %w[First Second Third].each do |title|
+            expect(loop_output).to include_flight_row(
+              class: :model,
+              payload: array_including(array_including(hash_including("title" => title)))
+            )
+          end
         end
 
         it "each PostCard receives its correct id prop as a JSON number" do
-          expect(loop_output).to include('"id":1')
-          expect(loop_output).to include('"id":2')
-          expect(loop_output).to include('"id":3')
+          [1, 2, 3].each do |id|
+            expect(loop_output).to include_flight_row(
+              class: :model,
+              payload: array_including(array_including(hash_including("id" => id)))
+            )
+          end
         end
       end
 
@@ -286,8 +345,10 @@ module Ruact
 
         it "serializes as_json object as a JSON object prop (AC#1)" do
           output = render_erb("<PostCard post={@the_post} />", the_post: post_like_object)
-          expect(output).to include('"id":1')
-          expect(output).to include('"title":"Hello"')
+          expect(output).to include_flight_row(
+            class: :model,
+            payload: array_including(hash_including("post" => hash_including("id" => 1, "title" => "Hello")))
+          )
         end
 
         it "emits [ruact] warning via the injected logger (AC#1, #3)" do
@@ -359,7 +420,10 @@ module Ruact
 
         it "serializes only declared props (AC#1)" do
           output = render_erb("<PostCard post={@the_post} />", the_post: serializable_post)
-          expect(output).to include('"id":1', '"title":"Hello"')
+          expect(output).to include_flight_row(
+            class: :model,
+            payload: array_including(hash_including("post" => hash_including("id" => 1, "title" => "Hello")))
+          )
         end
 
         it "does NOT emit [ruact] warning (AC#3)" do
@@ -389,29 +453,44 @@ module Ruact
 
         it "serializes string prop (AC#3 — useState initial string, onChange placeholder)" do
           output = render_erb('<SearchInput placeholder={"Search..."} />')
-          expect(output).to match(/"placeholder":"Search\.\.\."/)
+          expect(output).to include_flight_row(
+            class: :model, payload: array_including(hash_including("placeholder" => "Search..."))
+          )
         end
 
         it "serializes boolean true prop for useState initial value (AC#1)" do
           output = render_erb("<CounterButton enabled={true} />")
-          expect(output).to match(/"enabled":true/)
+          expect(output).to include_flight_row(
+            class: :model, payload: array_including(hash_including("enabled" => true))
+          )
         end
 
         it "serializes boolean false prop for disabled state (AC#1)" do
           output = render_erb("<CounterButton disabled={false} />")
-          expect(output).to match(/"disabled":false/)
+          expect(output).to include_flight_row(
+            class: :model, payload: array_including(hash_including("disabled" => false))
+          )
         end
 
         it "serializes nil prop as JSON null — no hydration mismatch for absent optionals (AC#4)" do
           output = render_erb("<CounterButton initialCount={nil} />")
-          expect(output).to match(/"initialCount":null/)
+          expect(output).to include_flight_row(
+            class: :model, payload: array_including(hash_including("initialCount" => nil))
+          )
         end
 
         it "serializes mixed props (integer + string + boolean) in a single component (AC#1, #3, #4)" do
+          # Three sibling assertions on the same render → Decision B (full structure)
+          # so the failure message names exactly which prop drifted, not just
+          # "some row matched, some didn't".
           output = render_erb('<CounterButton initialCount={0} label={"Votes"} disabled={false} />')
-          expect(output).to match(/"initialCount":0/)
-          expect(output).to match(/"label":"Votes"/)
-          expect(output).to match(/"disabled":false/)
+          counter_module = "/assets/CounterButton-abc.js"
+          expected = [
+            { id: 1, class: :import, payload: [counter_module, "CounterButton", [counter_module]] },
+            { id: 0, class: :model,
+              payload: ["$", "$L1", nil, { "initialCount" => 0, "label" => "Votes", "disabled" => false }] }
+          ]
+          expect(output).to match_flight_structure(expected)
         end
       end
 
@@ -442,9 +521,17 @@ module Ruact
             mode: :string
           )
 
-          expect(outer).to match(/"postId":1/),
-                           "outer LikeButton (postId=1) must register into the OUTER context, " \
-                           "not the discarded inner one"
+          # The outer LikeButton (postId=1) is nested inside the div's children,
+          # so the postId hash lives at payload[3]["children"][3]. Asserting on
+          # the full known structure proves the inner render's postId=999 did
+          # not leak through the registry into the outer's children.
+          expect(outer).to match_flight_structure([
+                                                    like_button_import,
+                                                    { id: 0, class: :model,
+                                                      payload: ["$", "div", nil, {
+                                                        "children" => ["$", "$L1", nil, { "postId" => 1 }]
+                                                      }] }
+                                                  ])
         end
       end
     end
@@ -470,8 +557,18 @@ module Ruact
 
         output = pipeline.render({ html: html, render_context: ctx }, mode: :string)
 
-        expect(output).to include("NavBar")
-        expect(output).to include('"currentUser":42')
+        # NavBar lives nested inside the div's children, so the props hash is
+        # at payload[3]["children"][3]. Asserting full structure here keeps the
+        # 7.6 cosmetic-robustness contract while preserving the original test
+        # intent (placeholder-token resolution + props serialization).
+        expect(output).to match_flight_structure([
+                                                   { id: 1, class: :import,
+                                                     payload: ["/NavBar.jsx", "NavBar", ["/NavBar.jsx"]] },
+                                                   { id: 0, class: :model,
+                                                     payload: ["$", "div", nil, {
+                                                       "children" => ["$", "$L1", nil, { "currentUser" => 42 }]
+                                                     }] }
+                                                 ])
       end
 
       it "eagerly captures registry so further mutation does not affect the Enumerator" do
@@ -486,7 +583,9 @@ module Ruact
         ctx.components.clear
 
         expect { enumerator.to_a }.not_to raise_error
-        expect(enumerator.to_a.join).to include("NavBar")
+        expect(enumerator.to_a.join).to include_flight_row(
+          class: :import, payload: array_including("/NavBar.jsx")
+        )
       end
 
       it "produces the same Flight output as the erb-input path for equivalent input" do
@@ -503,9 +602,14 @@ module Ruact
         html  = "<!-- #{token} -->"
         html_output = pipeline_html.render({ html: html, render_context: ctx }, mode: :string)
 
-        # Both should contain the NavBar import row and a root model row
-        expect(html_output).to include("NavBar")
-        expect(html_output).to match(/0:\[/)
+        # Both should contain the NavBar import row and the root model row (id: 0).
+        # html_output here is the raw Flight wire (mode: :string returns wire bytes,
+        # not an HTML shell), so structural matchers apply. Original assertion was
+        # `match(/0:\[/)` which encoded "the root row exists"; preserve the id: 0
+        # constraint via include_flight_row so a future change that emitted only a
+        # nested model row (without root) would still fail.
+        expect(html_output).to include_flight_row(class: :import, payload: array_including("/NavBar.jsx"))
+        expect(html_output).to include_flight_row(id: 0, class: :model)
       end
 
       it "returns an Enumerator (lazy) when mode is :stream" do
@@ -596,27 +700,27 @@ module Ruact
         it "returns a String when mode is :string (erb input)" do
           out = pipeline.render({ erb: erb_source, binding: erb_binding }, mode: :string)
           expect(out).to be_a(String)
-          expect(out).to match(/"LikeButton"|"\$L0"/)
+          expect(out).to include_flight_row(class: :import, payload: array_including("LikeButton"))
         end
 
         it "returns an Enumerator when mode is :stream (erb input)" do
           out = pipeline.render({ erb: erb_source, binding: erb_binding }, mode: :stream)
           expect(out).to be_a(Enumerator)
           joined = out.to_a.join
-          expect(joined).to match(/"LikeButton"|"\$L0"/)
+          expect(joined).to include_flight_row(class: :import, payload: array_including("LikeButton"))
         end
 
         it "returns a String when mode is :string (html input)" do
           out = pipeline.render({ html: html_input, render_context: render_ctx }, mode: :string)
           expect(out).to be_a(String)
-          expect(out).to match(/"LikeButton"|"\$L0"/)
+          expect(out).to include_flight_row(class: :import, payload: array_including("LikeButton"))
         end
 
         it "returns an Enumerator when mode is :stream (html input)" do
           out = pipeline.render({ html: html_input, render_context: render_ctx }, mode: :stream)
           expect(out).to be_a(Enumerator)
           joined = out.to_a.join
-          expect(joined).to match(/"LikeButton"|"\$L0"/)
+          expect(joined).to include_flight_row(class: :import, payload: array_including("LikeButton"))
         end
 
         it "defaults mode to :string when omitted" do
@@ -636,8 +740,9 @@ module Ruact
           ctx.register("LikeButton", { "postId" => 999 })
 
           out = enum.to_a.join
-          expect(out).to match(/"postId":1/)
-          expect(out).not_to match(/"postId":999/)
+          expect(out).to     include_flight_row(class: :model, payload: array_including(hash_including("postId" => 1)))
+          expect(out).not_to include_flight_row(class: :model,
+                                                payload: array_including(hash_including("postId" => 999)))
         end
       end
     end
