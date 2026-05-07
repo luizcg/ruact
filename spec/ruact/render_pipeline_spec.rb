@@ -546,19 +546,29 @@ module Ruact
         let(:nesting_pipeline) { described_class.new(manifest) }
 
         it "restores the outer's render context inside the inner ensure before re-raise" do
-          # Two contracts under test:
-          #   1. Inner's ensure (render_pipeline.rb#render_erb_enum :174-178) runs
+          # Three contracts under test:
+          #   1. Outer's ERB sees the outer's RenderContext on the receiver — captured
+          #      via `capture_outer` before run_inner triggers the failure path. This
+          #      pins the *specific* outer context object so contract 2 can assert
+          #      object identity (not just "some RenderContext").
+          #   2. Inner's ensure (render_pipeline.rb#render_erb_enum :174-178) runs
           #      BEFORE the inner's `raise` propagates, so by the time a rescue
-          #      handler sits on top of `inner.render(...)`, the ivar is back to
-          #      the OUTER's RenderContext — not nil, not the inner's discarded
-          #      ctx. Capturing the ivar inside that rescue handler observes the
-          #      restoration *before* the outer's ensure later masks it as nil.
-          #   2. Outer's ensure runs after the re-raised manifest failure unwinds
+          #      handler sits on top of `inner.render(...)`, the ivar holds the
+          #      *same* outer RenderContext captured in contract 1 — proving the
+          #      inner restored to the outer's specific context, not just any
+          #      RenderContext, and not nil. Capturing inside the rescue observes
+          #      the restoration before the outer's ensure later masks it as nil.
+          #   3. Outer's ensure runs after the re-raised manifest failure unwinds
           #      through outer ERB; post-render the ivar is back to its pre-render
           #      value (nil for a fresh receiver).
           inner = nesting_pipeline
-          captured_during_unwind = nil
+          captured_outer_ctx       = nil
+          captured_during_unwind   = nil
           receiver = Object.new
+          receiver.define_singleton_method(:capture_outer) do
+            captured_outer_ctx = instance_variable_get(:@__ruact_render_context__)
+            ""
+          end
           receiver.define_singleton_method(:run_inner) do
             inner.render({ erb: "<UnknownComponent />", binding: binding }, mode: :string)
           rescue Ruact::ManifestError
@@ -566,15 +576,21 @@ module Ruact
             raise
           end
 
-          outer_input = { erb: "<div><%= run_inner %></div>", binding: receiver.instance_eval { binding } }
+          outer_input = {
+            erb: "<div><%= capture_outer %><%= run_inner %></div>",
+            binding: receiver.instance_eval { binding }
+          }
           expect { nesting_pipeline.render(outer_input, mode: :string) }
             .to raise_error(Ruact::ManifestError) do |error|
               expect(error.message).to include("not found in manifest")
             end
 
-          # Contract 1 — inner-restoration observable before the outer ensure clears it.
-          expect(captured_during_unwind).to be_a(Ruact::RenderContext)
-          # Contract 2 — outer ensure restored prev_ctx (nil for a fresh receiver).
+          # Contract 1 — the outer's RenderContext was on the receiver during outer ERB eval.
+          expect(captured_outer_ctx).to be_a(Ruact::RenderContext)
+          # Contract 2 — the inner ensure restored the SAME outer RenderContext (object identity),
+          # not merely some other RenderContext instance.
+          expect(captured_during_unwind).to equal(captured_outer_ctx)
+          # Contract 3 — outer ensure restored prev_ctx (nil for a fresh receiver).
           expect(receiver.instance_variable_get(:@__ruact_render_context__)).to be_nil
         end
 
