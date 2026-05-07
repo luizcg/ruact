@@ -31,10 +31,13 @@ Metrics/BlockLength:
 Naming/VariableNumber:
   Exclude:
     - "lib/tasks/**/*.rake"
-    # Spec story-tag convention: `describe ..., :story_7_7` mirrors the story
-    # ID (e.g., 7.7 → :story_7_7) so a single rspec invocation runs the
-    # regression suite for that story (project-context §11).
-    - "spec/**/*"
+  # Spec story-tag convention: `describe ..., :story_7_7` mirrors the story
+  # ID (7.7 → :story_7_7) so a single rspec invocation runs the regression
+  # suite for that story (project-context §11). Narrowed to the exact symbol
+  # shape rather than excluding all of spec/ — anything else under spec/ that
+  # tries to use snake_case-with-numbers still trips the cop.
+  AllowedPatterns:
+    - '\bstory_\d+_\d+\b'
 
 Metrics/ClassLength:
   Max: 150

@@ -545,24 +545,36 @@ module Ruact
       describe "edge cases (Story 7.7) — render context re-entry", :story_7_7 do
         let(:nesting_pipeline) { described_class.new(manifest) }
 
-        it "restores the receiver's @__ruact_render_context__ ivar when an inner render raises" do
+        it "restores the outer's render context inside the inner ensure before re-raise" do
+          # Two contracts under test:
+          #   1. Inner's ensure (render_pipeline.rb#render_erb_enum :174-178) runs
+          #      BEFORE the inner's `raise` propagates, so by the time a rescue
+          #      handler sits on top of `inner.render(...)`, the ivar is back to
+          #      the OUTER's RenderContext — not nil, not the inner's discarded
+          #      ctx. Capturing the ivar inside that rescue handler observes the
+          #      restoration *before* the outer's ensure later masks it as nil.
+          #   2. Outer's ensure runs after the re-raised manifest failure unwinds
+          #      through outer ERB; post-render the ivar is back to its pre-render
+          #      value (nil for a fresh receiver).
           inner = nesting_pipeline
+          captured_during_unwind = nil
           receiver = Object.new
           receiver.define_singleton_method(:run_inner) do
             inner.render({ erb: "<UnknownComponent />", binding: binding }, mode: :string)
-            ""
+          rescue Ruact::ManifestError
+            captured_during_unwind = instance_variable_get(:@__ruact_render_context__)
+            raise
           end
 
-          expect do
-            nesting_pipeline.render(
-              { erb: "<div><%= run_inner %></div>", binding: receiver.instance_eval { binding } },
-              mode: :string
-            )
-          end.to raise_error(/not found in manifest/)
+          outer_input = { erb: "<div><%= run_inner %></div>", binding: receiver.instance_eval { binding } }
+          expect { nesting_pipeline.render(outer_input, mode: :string) }
+            .to raise_error(Ruact::ManifestError) do |error|
+              expect(error.message).to include("not found in manifest")
+            end
 
-          # The ensure block at render_pipeline.rb#render_erb_enum must run on
-          # both the inner and outer raises, restoring the receiver's ivar back
-          # to its pre-render value (nil for a fresh receiver).
+          # Contract 1 — inner-restoration observable before the outer ensure clears it.
+          expect(captured_during_unwind).to be_a(Ruact::RenderContext)
+          # Contract 2 — outer ensure restored prev_ctx (nil for a fresh receiver).
           expect(receiver.instance_variable_get(:@__ruact_render_context__)).to be_nil
         end
 
