@@ -9,7 +9,7 @@ module Ruact
     let(:helper_obj) do
       obj = Object.new
       obj.extend(described_class)
-      obj.instance_variable_set(:@__ruact_render_context__, render_context)
+      obj.instance_variable_set(:@ruact_render_context, render_context)
       obj
     end
 

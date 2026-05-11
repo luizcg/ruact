@@ -6,19 +6,22 @@ module Ruact
   # preprocessor transforms PascalCase tags into +<%= __rsc_component__(...) %>+.
   #
   # Thread-safe: ActionView creates a fresh view context per request, so the
-  # render context (set by Ruact::Controller#rsc_render before render_to_string)
-  # is per-request — no shared state.
+  # render context (set by Ruact::Controller#rsc_render on the controller as
+  # +@ruact_render_context+ and copied to the view by Rails's view_assigns
+  # plumbing — see Story 7.9 / Bug 7.8-B) is per-request — no shared state.
   module ViewHelper
     # Registers +name+ with +props+ in the per-render RenderContext (set by
-    # Ruact::Controller#rsc_render on the view context as +@__ruact_render_context__+)
-    # and returns an HTML comment placeholder that HtmlConverter later replaces
-    # with a ReactElement node.
+    # Ruact::Controller#rsc_render on the controller as +@ruact_render_context+;
+    # Rails copies it to the view via +_assigns_for_view_context+ because the
+    # name does not match +DEFAULT_PROTECTED_INSTANCE_VARIABLES+'s +/\A@_/+
+    # filter) and returns an HTML comment placeholder that HtmlConverter later
+    # replaces with a ReactElement node.
     #
     # The returned string MUST be html_safe so ActionView does not escape the
     # angle brackets — if it were escaped, HtmlConverter would not find the
     # placeholder in the HTML output.
     def __rsc_component__(name, props = {})
-      ctx = @__ruact_render_context__
+      ctx = @ruact_render_context
       raise Ruact::Error, "ruact: __rsc_component__ called outside an rsc_render flow" if ctx.nil?
 
       token = ctx.register(name, props)

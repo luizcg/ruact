@@ -50,21 +50,57 @@ module Ruact
       pipeline  = RenderPipeline.new(rsc_manifest, controller_path: controller_path, logger: logger)
       streaming = rsc_request? && self.class.ancestors.include?(ActionController::Live)
 
-      # Allocate a per-render context; expose it to the view via an instance
-      # variable. ViewHelper#__rsc_component__ reads it during ERB evaluation.
-      # ActionView allocates a fresh view_context per controller action, so this
-      # is per-request safe under multi-threaded servers (NFR8).
+      # Allocate a per-render context and expose it to the view via a normal
+      # (non-`@_`-prefixed) instance variable on the controller. Rails 8's
+      # `render_to_string` allocates a fresh `ActionView::Base` distinct from
+      # `controller.view_context`; setting the ivar on `view_context` does not
+      # reach that view. By contrast, controller ivars *not* matching
+      # `AbstractController::Base::DEFAULT_PROTECTED_INSTANCE_VARIABLES`
+      # (i.e. anything not prefixed with `@_`) are copied to the view via
+      # `_assigns_for_view_context`, so the view evaluated inside
+      # `render_to_string` receives `@ruact_render_context` populated.
+      # ViewHelper#__rsc_component__ reads it during ERB evaluation. The
+      # controller instance is per-request (Rails allocates a new one per
+      # action), so this is per-request safe under multi-threaded servers
+      # (NFR8). See Story 7.9 / Bug 7.8-B.
+      with_render_context do |render_context|
+        opts = template ? { template: template } : { action: action_name }
+        html = render_to_string(opts.merge(layout: false, locals: locals))
+        emit_rsc_response(pipeline, html, render_context, streaming: streaming)
+      end
+    end
+
+    # Allocates a fresh `Ruact::RenderContext`, exposes it as the
+    # `@ruact_render_context` ivar for the duration of the block, then
+    # restores the controller's prior ivar state. When the ivar wasn't
+    # defined before this call, `remove_instance_variable` puts the
+    # controller back in its original state — restoring it as a defined
+    # `nil` would leak a phantom assignment into `view_assigns`
+    # (`{"ruact_render_context" => nil}`) on any subsequent error/rescue
+    # render in the same request.
+    def with_render_context
+      had_previous = instance_variable_defined?(:@ruact_render_context)
+      previous     = @ruact_render_context if had_previous
       render_context = RenderContext.new
-      view_context.instance_variable_set(:@__ruact_render_context__, render_context)
+      @ruact_render_context = render_context
+      begin
+        yield render_context
+      ensure
+        if had_previous
+          @ruact_render_context = previous
+        else
+          remove_instance_variable(:@ruact_render_context)
+        end
+      end
+    end
 
-      opts = template ? { template: template } : { action: action_name }
-      html = render_to_string(opts.merge(layout: false, locals: locals))
-
+    # Build the wire output and write it to the response. Streaming responses
+    # only fire after `pipeline.render` returns without raising — that way a
+    # missing-component error can still surface as a normal 500 response
+    # (matching the legacy `#from_html` ordering) before any streaming
+    # response headers are mutated.
+    def emit_rsc_response(pipeline, html, render_context, streaming:)
       if rsc_request? && streaming
-        # Build the Enumerator before mutating streaming response headers: render_html_enum
-        # eagerly resolves manifest references at construction time, so a missing-component
-        # error can still surface as a normal 500 response — matching the legacy
-        # #from_html ordering. Headers are only set once we know the pipeline is happy.
         enumerator = pipeline.render({ html: html, render_context: render_context }, mode: :stream)
         response.headers["Content-Type"]      = "text/x-component; charset=utf-8"
         response.headers["Cache-Control"]     = "no-cache"

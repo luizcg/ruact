@@ -79,10 +79,23 @@ module Ruact
       # --- Error handling ---
 
       describe "unsupported type (AC#2)" do
+        # Build a class with no `as_json` method. ActiveSupport adds Object#as_json
+        # when Rails is loaded (Story 7.9), so Object.new no longer triggers the
+        # "no as_json" branch; this class explicitly undefines it.
+        let(:no_as_json_class) do
+          Class.new do
+            undef_method :as_json if method_defined?(:as_json) || private_method_defined?(:as_json)
+
+            def self.name
+              "UnsupportedType"
+            end
+          end
+        end
+
         it "raises SerializationError with class name and Serializable hint" do
-          expect { render.call(Object.new) }
-            .to raise_error(Ruact::SerializationError, /Object/)
-          expect { render.call(Object.new) }
+          expect { render.call(no_as_json_class.new) }
+            .to raise_error(Ruact::SerializationError, /UnsupportedType/)
+          expect { render.call(no_as_json_class.new) }
             .to raise_error(Ruact::SerializationError, /include Ruact::Serializable/)
         end
       end
@@ -102,7 +115,18 @@ module Ruact
           end.new
         end
 
-        let(:model_without_as_json) { Object.new }
+        let(:model_without_as_json) do
+          # ActiveSupport adds Object#as_json when Rails is loaded (Story 7.9), so
+          # Object.new no longer represents "no as_json defined". Use a class that
+          # explicitly undefines it instead.
+          Class.new do
+            undef_method :as_json if method_defined?(:as_json) || private_method_defined?(:as_json)
+
+            def self.name
+              "ModelWithoutAsJson"
+            end
+          end.new
+        end
 
         context "with strict_serialization: false (default)" do
           let(:render_loose) do

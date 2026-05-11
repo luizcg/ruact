@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Ruact::Controller#rsc_render` now renders successfully under Rails 8** ([Story 7.9](../_bmad-output/implementation-artifacts/7-9-fix-render-to-string-view-context-ivar-handoff.md); resolves Bug 7.8-B). Previously every PascalCase component in a Rails 8 app raised `Ruact::Error: __rsc_component__ called outside an rsc_render flow` (HTTP 500). The render context is now routed through the controller's standard view-assigns plumbing so it reaches the view used by `render_to_string`.
+
 ### Tooling
 
 - **Code coverage instrumentation** (Story 6.7). Added `simplecov` and `simplecov-lcov` as development dependencies; gem CI uploads coverage from the canonical matrix cell (Ruby 3.3 × Rails 7.2) to Codecov on every push and PR with the `gem` flag. **Baseline at merge: 88.30% line (581/658), 72.25% branch (239 specs).** (Corrects the earlier 87.89% figure recorded at story-merge time, which was a typo of the SimpleCov output for 567/644 = 88.04%; the current numbers reflect the post-review state after Story 6.7 review F1 refactored `html_converter.rb#convert_element` into helpers, which added a few lines and one new spec.) Coverage is informativo (not a CI gate); see Codecov PR comments for diff coverage on individual changes. Diff coverage target per project DoD: ≥ 90% line / ≥ 80% branch on new code.
