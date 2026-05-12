@@ -13,39 +13,39 @@ module Ruact
       obj
     end
 
-    describe "#__rsc_component__" do
+    describe "#__ruact_component__" do
       it "registers the component in the render context and returns an HTML comment" do
-        result = helper_obj.__rsc_component__("NavBar", { "currentUser" => 1 })
-        expect(result).to match(/<!-- __RSC_\d+__ -->/)
+        result = helper_obj.__ruact_component__("NavBar", { "currentUser" => 1 })
+        expect(result).to match(/<!-- __RUACT_\d+__ -->/)
         expect(render_context.components.length).to eq(1)
         expect(render_context.components.first[:name]).to eq("NavBar")
         expect(render_context.components.first[:props]).to eq({ "currentUser" => 1 })
       end
 
       it "returns an html_safe string so ActionView does not escape the comment" do
-        result = helper_obj.__rsc_component__("Button", {})
+        result = helper_obj.__ruact_component__("Button", {})
         expect(result).to be_html_safe
       end
 
       it "uses incrementing token numbers for successive registrations" do
-        token0 = helper_obj.__rsc_component__("Foo", {})
-        token1 = helper_obj.__rsc_component__("Bar", {})
-        expect(token0).to include("__RSC_0__")
-        expect(token1).to include("__RSC_1__")
+        token0 = helper_obj.__ruact_component__("Foo", {})
+        token1 = helper_obj.__ruact_component__("Bar", {})
+        expect(token0).to include("__RUACT_0__")
+        expect(token1).to include("__RUACT_1__")
       end
 
       it "passes props through to the registry entry" do
-        helper_obj.__rsc_component__("LikeButton", { "postId" => 42, "label" => "Like" })
+        helper_obj.__ruact_component__("LikeButton", { "postId" => 42, "label" => "Like" })
         entry = render_context.components.first
         expect(entry[:props]["postId"]).to eq(42)
         expect(entry[:props]["label"]).to eq("Like")
       end
 
-      it "raises a clear error when called outside an rsc_render flow" do
+      it "raises a clear error when called outside a ruact_render flow" do
         bare = Object.new
         bare.extend(described_class)
-        expect { bare.__rsc_component__("NavBar", {}) }
-          .to raise_error(Ruact::Error, /__rsc_component__ called outside an rsc_render flow/)
+        expect { bare.__ruact_component__("NavBar", {}) }
+          .to raise_error(Ruact::Error, /__ruact_component__ called outside a ruact_render flow/)
       end
     end
   end

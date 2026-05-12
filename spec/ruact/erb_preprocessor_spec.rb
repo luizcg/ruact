@@ -8,19 +8,19 @@ module Ruact
 
     describe "self-closing tags" do
       it "transforms a self-closing tag with no props" do
-        expect(transform.call("<Button />")).to eq(%(<%= __rsc_component__("Button", {}) %>))
+        expect(transform.call("<Button />")).to eq(%(<%= __ruact_component__("Button", {}) %>))
       end
 
       it "transforms a self-closing tag with props" do
         result = transform.call("<LikeButton postId={@post.id} initialCount={5} />")
-        expect(result).to eq(%(<%= __rsc_component__("LikeButton", { "postId" => @post.id, "initialCount" => 5 }) %>))
+        expect(result).to eq(%(<%= __ruact_component__("LikeButton", { "postId" => @post.id, "initialCount" => 5 }) %>))
       end
     end
 
     describe "opening tags" do
       it "transforms an opening tag with props" do
         result = transform.call("<Dialog open={true}>")
-        expect(result).to eq(%(<%= __rsc_component__("Dialog", { "open" => true }) %>))
+        expect(result).to eq(%(<%= __ruact_component__("Dialog", { "open" => true }) %>))
       end
     end
 
@@ -39,7 +39,7 @@ module Ruact
     describe "complex prop expressions" do
       it "handles nested braces in a prop value" do
         result = transform.call("<Select options={Category.all.map { |c| c.id }} />")
-        expect(result).to eq(%(<%= __rsc_component__("Select", { "options" => Category.all.map { |c| c.id } }) %>))
+        expect(result).to eq(%(<%= __ruact_component__("Select", { "options" => Category.all.map { |c| c.id } }) %>))
       end
     end
 
@@ -65,8 +65,8 @@ module Ruact
       it "transforms multiple components in the same string" do
         source = '<Button /> and <Badge label={"hello"} />'
         result = transform.call(source)
-        expect(result).to match(/__rsc_component__\("Button"/)
-        expect(result).to match(/__rsc_component__\("Badge"/)
+        expect(result).to match(/__ruact_component__\("Button"/)
+        expect(result).to match(/__ruact_component__\("Badge"/)
         expect(result).to match(/"hello"/)
       end
     end
@@ -82,7 +82,7 @@ module Ruact
         result = transform.call(source)
         expect(result).to match(/<div class="container">/)
         expect(result).to match(%r{<h1>Hello</h1>})
-        expect(result).to match(/__rsc_component__\("LikeButton"/)
+        expect(result).to match(/__ruact_component__\("LikeButton"/)
       end
     end
   end

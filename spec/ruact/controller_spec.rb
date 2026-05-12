@@ -24,37 +24,37 @@ module Ruact
     let(:fake_request) { Struct.new(:headers, :format).new({}, nil) }
     let(:controller)   { test_class.new(fake_request) }
 
-    describe "#rsc_manifest" do
+    describe "#ruact_manifest" do
       it "reads from Ruact.manifest (AC#6)" do
         test_manifest = ClientManifest.from_hash({})
         allow(Ruact).to receive(:manifest).and_return(test_manifest)
-        expect(controller.send(:rsc_manifest)).to be test_manifest
+        expect(controller.send(:ruact_manifest)).to be test_manifest
       end
     end
 
-    describe "#rsc_request?" do
+    describe "#ruact_request?" do
       it "returns true when Accept: text/x-component" do
         fake_request.headers["Accept"] = "text/x-component"
-        expect(controller.send(:rsc_request?)).to be true
+        expect(controller.send(:ruact_request?)).to be true
       end
 
       it "returns true when Accept header includes text/x-component alongside other types" do
         fake_request.headers["Accept"] = "text/x-component, */*"
-        expect(controller.send(:rsc_request?)).to be true
+        expect(controller.send(:ruact_request?)).to be true
       end
 
-      it "returns true when RSC-Request: 1 header is set" do
-        fake_request.headers["RSC-Request"] = "1"
-        expect(controller.send(:rsc_request?)).to be true
+      it "returns true when Ruact-Request: 1 header is set" do
+        fake_request.headers["Ruact-Request"] = "1"
+        expect(controller.send(:ruact_request?)).to be true
       end
 
       it "returns false when Accept: text/html" do
         fake_request.headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-        expect(controller.send(:rsc_request?)).to be false
+        expect(controller.send(:ruact_request?)).to be false
       end
 
       it "returns false when no Accept header is set" do
-        expect(controller.send(:rsc_request?)).to be false
+        expect(controller.send(:ruact_request?)).to be false
       end
     end
 
@@ -63,43 +63,43 @@ module Ruact
       let(:json_format) { Class.new { def html? = false }.new }
 
       before do
-        allow(controller).to receive(:rsc_template_exists?).and_return(true)
-        allow(controller).to receive(:rsc_render)
+        allow(controller).to receive(:ruact_template_exists?).and_return(true)
+        allow(controller).to receive(:ruact_render)
       end
 
-      it "calls rsc_render when format is HTML and template exists (AC#1)" do
+      it "calls ruact_render when format is HTML and template exists (AC#1)" do
         allow(fake_request).to receive(:format).and_return(html_format)
         controller.send(:default_render)
-        expect(controller).to have_received(:rsc_render)
+        expect(controller).to have_received(:ruact_render)
       end
 
-      it "calls rsc_render for RSC requests (text/x-component) even without html? (AC#1)" do
+      it "calls ruact_render for RSC requests (text/x-component) even without html? (AC#1)" do
         allow(fake_request).to receive(:format).and_return(json_format)
-        fake_request.headers["RSC-Request"] = "1"
+        fake_request.headers["Ruact-Request"] = "1"
         controller.send(:default_render)
-        expect(controller).to have_received(:rsc_render)
+        expect(controller).to have_received(:ruact_render)
       end
 
-      it "does NOT call rsc_render when format is not HTML and not RSC (AC#5, AC#6 — FR26)" do
+      it "does NOT call ruact_render when format is not HTML and not RSC (AC#5, AC#6 — FR26)" do
         allow(fake_request).to receive(:format).and_return(json_format)
-        allow(controller).to receive(:rsc_render)
+        allow(controller).to receive(:ruact_render)
         begin
           controller.send(:default_render)
         rescue StandardError
           nil
         end
-        expect(controller).not_to have_received(:rsc_render)
+        expect(controller).not_to have_received(:ruact_render)
       end
 
-      it "does NOT call rsc_render when no template exists" do
-        allow(controller).to receive(:rsc_template_exists?).and_return(false)
+      it "does NOT call ruact_render when no template exists" do
+        allow(controller).to receive(:ruact_template_exists?).and_return(false)
         allow(fake_request).to receive(:format).and_return(html_format)
         begin
           controller.send(:default_render)
         rescue StandardError
           nil
         end
-        expect(controller).not_to have_received(:rsc_render)
+        expect(controller).not_to have_received(:ruact_render)
       end
     end
 
@@ -130,7 +130,7 @@ module Ruact
         end
       end
 
-      let(:rsc_ctrl) do
+      let(:ruact_ctrl) do
         redirect_test_class.new(Struct.new(:headers, :host).new({ "Accept" => "text/x-component" }, "localhost"))
       end
       let(:html_ctrl) do
@@ -138,12 +138,12 @@ module Ruact
       end
 
       context "when RSC request with same-origin URL (AC #1, #5)" do
-        before { allow(rsc_ctrl).to receive(:url_for).and_return("/posts/1") }
+        before { allow(ruact_ctrl).to receive(:url_for).and_return("/posts/1") }
 
         it "calls render with a Flight redirect row (not a 302)" do
-          allow(rsc_ctrl).to receive(:render)
-          rsc_ctrl.send(:redirect_to, "/posts/1")
-          expect(rsc_ctrl).to have_received(:render).with(
+          allow(ruact_ctrl).to receive(:render)
+          ruact_ctrl.send(:redirect_to, "/posts/1")
+          expect(ruact_ctrl).to have_received(:render).with(
             plain: "0:{\"redirectUrl\":\"/posts/1\",\"redirectType\":\"push\"}\n",
             content_type: "text/x-component"
           )
@@ -151,19 +151,19 @@ module Ruact
 
         it "redirect row matches the flight fixture (AC #5)" do
           rendered_plain = nil
-          allow(rsc_ctrl).to receive(:render) { |opts| rendered_plain = opts[:plain] }
-          rsc_ctrl.send(:redirect_to, "/posts/1")
+          allow(ruact_ctrl).to receive(:render) { |opts| rendered_plain = opts[:plain] }
+          ruact_ctrl.send(:redirect_to, "/posts/1")
           expect(rendered_plain).to match_flight_fixture("redirect_row")
         end
       end
 
       context "when RSC request with external URL (AC #3)" do
-        before { allow(rsc_ctrl).to receive(:url_for).and_return("https://external.com/page") }
+        before { allow(ruact_ctrl).to receive(:url_for).and_return("https://external.com/page") }
 
         it "does NOT emit a redirect row (falls back to super)" do
-          allow(rsc_ctrl).to receive(:render)
-          rsc_ctrl.send(:redirect_to, "https://external.com/page")
-          expect(rsc_ctrl).not_to have_received(:render)
+          allow(ruact_ctrl).to receive(:render)
+          ruact_ctrl.send(:redirect_to, "https://external.com/page")
+          expect(ruact_ctrl).not_to have_received(:render)
         end
       end
 
@@ -178,30 +178,30 @@ module Ruact
       end
     end
 
-    describe "#rsc_html_shell" do
+    describe "#ruact_html_shell" do
       # vite_tags requires Rails.env — stub it so we can test the shell structure.
       before { allow(controller).to receive(:vite_tags).and_return("") }
 
       let(:payload) { "0:[\"$\",\"div\",null,{}]\n" }
 
       it "returns a string containing window.__FLIGHT_DATA" do
-        html = controller.send(:rsc_html_shell, payload)
+        html = controller.send(:ruact_html_shell, payload)
         expect(html).to include("__FLIGHT_DATA")
       end
 
       it "wraps the payload in an IIFE push" do
-        html = controller.send(:rsc_html_shell, payload)
+        html = controller.send(:ruact_html_shell, payload)
         expect(html).to include("d.push(")
       end
 
       it "contains a root div#root element" do
-        html = controller.send(:rsc_html_shell, payload)
+        html = controller.send(:ruact_html_shell, payload)
         expect(html).to include('<div id="root">')
       end
 
       it "escapes </script> in the payload to prevent XSS breakout" do
         dangerous_payload = "0:\"</script><script>alert(1)</script>\"\n"
-        html = controller.send(:rsc_html_shell, dangerous_payload)
+        html = controller.send(:ruact_html_shell, dangerous_payload)
         # The HTML must contain exactly ONE </script> — the real closing tag of the script block.
         # If the payload's </script> leaked through, there would be more than one.
         occurrences = html.scan("</script>")

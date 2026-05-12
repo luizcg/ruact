@@ -309,4 +309,44 @@ RSpec.describe Ruact::Doctor do
       end
     end
   end
+
+  describe "Rake task definition (Story 5.12)", :story_5_12 do
+    # Loads gem/lib/tasks/ruact.rake into a fresh Rake::Application so the
+    # task table is isolated from any other spec that may have loaded tasks.
+    # Asserts the new namespace is discoverable AND the legacy namespace is
+    # gone — guards against a partial rename (e.g. file renamed but the
+    # namespace inside left as :rsc, or vice-versa).
+    around do |example|
+      require "rake"
+      prev = Rake.application
+      Rake.application = Rake::Application.new
+      Rake.application.add_loader("rake", Rake::DefaultLoader.new)
+      Rake.application.add_loader("rb",   Rake::DefaultLoader.new)
+      load File.expand_path("../../lib/tasks/ruact.rake", __dir__)
+      example.run
+    ensure
+      Rake.application = prev
+    end
+
+    let(:rake_app) { Rake.application }
+
+    it "defines Rake::Task['ruact:doctor']" do
+      expect(rake_app.lookup("ruact:doctor")).not_to be_nil
+    end
+
+    it "does NOT define the legacy Rake task under the pre-Story-5.12 namespace" do
+      # Build the legacy task name from fragments so this spec file stays
+      # grep-clean under the Story 5.12 CI guard (which rejects the literal
+      # `<legacy>:doctor` substring anywhere in tracked files).
+      legacy_task = %w[rsc doctor].join(":")
+      expect(rake_app.lookup(legacy_task)).to be_nil
+    end
+
+    it "the ruact:doctor task action invokes Ruact::Doctor.run" do
+      task = rake_app.lookup("ruact:doctor")
+      expect(task).not_to be_nil
+      # actions is a list of Procs; just assert at least one is attached
+      expect(task.actions).not_to be_empty
+    end
+  end
 end

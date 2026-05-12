@@ -62,10 +62,10 @@ module Ruact
     end
 
     describe "client component via registry" do
-      it "replaces RSC comment placeholder with the registered ReactElement" do
+      it "replaces Ruact comment placeholder with the registered ReactElement" do
         ref      = Flight::ClientReference.new(module_id: "./LikeButton", export_name: "LikeButton")
-        registry = [{ token: "__RSC_0__", name: "LikeButton", ref: ref, props: { "postId" => 1 } }]
-        result   = convert.call("<!-- __RSC_0__ -->", registry)
+        registry = [{ token: "__RUACT_0__", name: "LikeButton", ref: ref, props: { "postId" => 1 } }]
+        result   = convert.call("<!-- __RUACT_0__ -->", registry)
 
         expect(result).to be_a(Flight::ReactElement)
         expect(result.type).to eq(ref)
@@ -74,8 +74,8 @@ module Ruact
 
       it "wraps a client component inside a parent DOM element" do
         ref      = Flight::ClientReference.new(module_id: "./Button", export_name: "Button")
-        registry = [{ token: "__RSC_0__", name: "Button", ref: ref, props: {} }]
-        result   = convert.call('<div class="wrapper"><!-- __RSC_0__ --></div>', registry)
+        registry = [{ token: "__RUACT_0__", name: "Button", ref: ref, props: {} }]
+        result   = convert.call('<div class="wrapper"><!-- __RUACT_0__ --></div>', registry)
 
         expect(result.type).to eq("div")
         child = result.props["children"]

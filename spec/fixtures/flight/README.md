@@ -119,7 +119,7 @@ If `match_flight_fixture` fails after touching `Ruact::Flight::Serializer`, that
 | `client_component_with_props.txt` | A `ClientReference` with props passes them as the fourth element of the root array |
 | `react_element_no_props.txt` | A `ReactElement` with no props produces `["$","<tag>",null,{}]` in row 0 |
 | `as_json_object.txt` | An object responding to `as_json` is serialized via that method; if it resolves to a `ClientReference`, import + root rows are emitted |
-| `serializable_object.txt` | An object including `Ruact::Serializable` and declaring `rsc_props` serializes only the declared props |
+| `serializable_object.txt` | An object including `Ruact::Serializable` and declaring `ruact_props` serializes only the declared props |
 | `redirect_row.txt` | A redirect instruction serializes to a JSON object with `redirectUrl` and `redirectType` keys in row 0 |
 
 ---

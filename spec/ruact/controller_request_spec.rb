@@ -4,7 +4,7 @@
 #
 # Exercises Ruact::Controller end-to-end through Rails 8's full controller
 # lifecycle (ActionController::Base#dispatch → ActionView::Base allocation →
-# template render → __rsc_component__ helper). The bug closed by this spec
+# template render → __ruact_component__ helper). The bug closed by this spec
 # was invisible to unit-only controller_spec.rb because that file stubs
 # render_to_string and never instantiates ActionView::Base.
 #
@@ -86,7 +86,7 @@ module ControllerRequestSpecSupport
   end
 
   # Demo controller for the spec. Uses an inline `append_view_path` instead of
-  # relying on Rails.root/app/views, so Controller#rsc_render is invoked
+  # relying on Rails.root/app/views, so Controller#ruact_render is invoked
   # directly from #show rather than via default_render (which short-circuits
   # when the conventional template path does not exist on disk).
   class DemoController < ActionController::Base
@@ -95,7 +95,7 @@ module ControllerRequestSpecSupport
     append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
 
     def show
-      rsc_render
+      ruact_render
     end
   end
 end
@@ -146,11 +146,11 @@ module Ruact # rubocop:disable Style/OneClassPerFile
     end
 
     describe "regression guard: render context reaches ViewHelper" do
-      it "ViewHelper#__rsc_component__ does NOT raise the outside-flow error" do
+      it "ViewHelper#__ruact_component__ does NOT raise the outside-flow error" do
         # If the handoff regresses, the request returns 500 with this exact
         # message in the body or raises the exception in the request chain.
         get "/demo/show"
-        expect(last_response.body).not_to include("__rsc_component__ called outside an rsc_render flow")
+        expect(last_response.body).not_to include("__ruact_component__ called outside a ruact_render flow")
       end
 
       it "Flight payload contains the registered component import row" do
@@ -176,7 +176,7 @@ module Ruact # rubocop:disable Style/OneClassPerFile
       end
 
       it "ensure block removes the ivar entirely when it was not defined before" do
-        # Direct unit-level guard: when rsc_render starts on a controller
+        # Direct unit-level guard: when ruact_render starts on a controller
         # instance with no prior @ruact_render_context, the ensure block
         # must put the controller back into the instance_variable_defined?
         # = false state — not into the "ivar is defined as nil" state,
@@ -187,8 +187,8 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         # Invoke just the ivar lifecycle by stubbing the heavy parts.
         allow(controller).to receive_messages(
           render_to_string: "<div></div>",
-          rsc_request?: false,
-          rsc_manifest: Ruact.manifest,
+          ruact_request?: false,
+          ruact_manifest: Ruact.manifest,
           controller_path: "controller_request_spec_support/demo",
           logger: Logger.new(IO::NULL),
           action_name: "show"
@@ -196,7 +196,7 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         allow(controller).to receive(:render)
 
         expect(controller.instance_variable_defined?(:@ruact_render_context)).to be(false)
-        controller.send(:rsc_render)
+        controller.send(:ruact_render)
         expect(controller.instance_variable_defined?(:@ruact_render_context)).to be(false)
       end
     end

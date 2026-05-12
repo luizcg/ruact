@@ -218,7 +218,7 @@ module Ruact
         # and no actionable hint — the user reading a Sentry issue would not learn
         # which model misbehaved or how to fix it. The block below gates the full
         # message shape from gem/lib/ruact/flight/serializer.rb#serialize_as_json:
-        # the offending class name + "Ruact::Serializable" + "rsc_props" must all
+        # the offending class name + "Ruact::Serializable" + "ruact_props" must all
         # appear so the message remains debuggable in production.
         describe "edge cases (Story 7.7) — as_json returning self message shape", :story_7_7 do
           let(:self_returning_model) do
@@ -233,13 +233,13 @@ module Ruact
             end.new
           end
 
-          it "names the offending class and points the user at Ruact::Serializable + rsc_props" do
+          it "names the offending class and points the user at Ruact::Serializable + ruact_props" do
             b = StubBundlerConfig.new
             expect { Renderer.render(self_returning_model, b, strict_serialization: false) }
               .to raise_error(Ruact::SerializationError) do |error|
                 expect(error.message).to include("SelfModel")
                 expect(error.message).to include("Ruact::Serializable")
-                expect(error.message).to include("rsc_props")
+                expect(error.message).to include("ruact_props")
               end
           end
         end
@@ -293,11 +293,11 @@ module Ruact
               "FakeSerializable"
             end
 
-            rsc_props :id, :title
+            ruact_props :id, :title
           end.new
         end
 
-        it "serializes via rsc_serialize — only declared props (AC#1)" do
+        it "serializes via ruact_serialize — only declared props (AC#1)" do
           expect(render.call(serializable_obj)).to include_flight_row(
             class: :model,
             payload: hash_including("id" => 1, "title" => "Hello")
@@ -461,7 +461,7 @@ module Ruact
               "Post"
             end
 
-            rsc_props :id, :title
+            ruact_props :id, :title
           end.new
         end
 

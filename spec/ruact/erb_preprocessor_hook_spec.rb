@@ -24,13 +24,13 @@ module Ruact
       it "applies ErbPreprocessor.transform to source before calling super" do
         source = "<LikeButton postId={1} />"
         result = handler.call(fake_template, source)
-        expect(result).to include("__rsc_component__")
+        expect(result).to include("__ruact_component__")
         expect(result).to include('"LikeButton"')
         expect(result).not_to include("<LikeButton")
       end
 
       it "passes source unchanged when no PascalCase tags present (fast-path)" do
-        source = "<div class=\"hello\"><p>No RSC here</p></div>"
+        source = "<div class=\"hello\"><p>No ruact here</p></div>"
         result = handler.call(fake_template, source)
         expect(result).to eq(source)
       end
@@ -45,7 +45,7 @@ module Ruact
       it "transforms Suspense tags correctly" do
         source = "<Suspense fallback=\"Loading\"><PostCard /></Suspense>"
         result = handler.call(fake_template, source)
-        expect(result).to include("__rsc_component__")
+        expect(result).to include("__ruact_component__")
       end
     end
   end

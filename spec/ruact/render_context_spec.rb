@@ -14,16 +14,16 @@ module Ruact
         expect(ctx.components.first[:props]).to eq({ "currentUser" => 1 })
       end
 
-      it "returns a token of the form __RSC_<index>__" do
+      it "returns a token of the form __RUACT_<index>__" do
         token = ctx.register("Foo", {})
-        expect(token).to eq("__RSC_0__")
+        expect(token).to eq("__RUACT_0__")
       end
 
       it "increments token indices across successive registrations" do
         t0 = ctx.register("A", {})
         t1 = ctx.register("B", {})
         t2 = ctx.register("C", {})
-        expect([t0, t1, t2]).to eq(%w[__RSC_0__ __RSC_1__ __RSC_2__])
+        expect([t0, t1, t2]).to eq(%w[__RUACT_0__ __RUACT_1__ __RUACT_2__])
       end
     end
 
@@ -36,12 +36,12 @@ module Ruact
     describe "#by_token" do
       it "finds a registered component by its token" do
         ctx.register("NavBar", { "x" => 1 })
-        entry = ctx.by_token("__RSC_0__")
+        entry = ctx.by_token("__RUACT_0__")
         expect(entry[:name]).to eq("NavBar")
       end
 
       it "returns nil for an unknown token" do
-        expect(ctx.by_token("__RSC_99__")).to be_nil
+        expect(ctx.by_token("__RUACT_99__")).to be_nil
       end
     end
 

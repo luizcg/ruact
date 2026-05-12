@@ -414,7 +414,7 @@ module Ruact
               "Post"
             end
 
-            rsc_props :id, :title
+            ruact_props :id, :title
           end.new
         end
 
@@ -502,7 +502,7 @@ module Ruact
           # ERB triggers an inner pipeline.render on the same binding receiver
           # would, under the old closure-based inject_helper, overwrite the
           # singleton method's bound context. After the inner render returned,
-          # the outer ERB's __rsc_component__ calls would register into the
+          # the outer ERB's __ruact_component__ calls would register into the
           # inner's discarded RenderContext — leaking the outer component out.
           #
           # The fix stores the active context on the receiver as an ivar and
@@ -804,7 +804,7 @@ module Ruact
     describe "#render contract" do
       let(:erb_source) { "<LikeButton />" }
       let(:erb_binding) { Object.new.instance_eval { binding } }
-      let(:html_input)  { "<!-- __RSC_0__ -->" }
+      let(:html_input)  { "<!-- __RUACT_0__ -->" }
       let(:render_ctx)  { RenderContext.new.tap { |c| c.register("LikeButton", {}) } }
 
       describe "input validation" do
@@ -912,7 +912,7 @@ module Ruact
           ctx = RenderContext.new
           ctx.register("LikeButton", { "postId" => 1 })
 
-          enum = pipeline.render({ html: "<!-- __RSC_0__ -->", render_context: ctx }, mode: :stream)
+          enum = pipeline.render({ html: "<!-- __RUACT_0__ -->", render_context: ctx }, mode: :stream)
 
           # Mutating the context after #render returns must not affect the captured registry.
           ctx.register("LikeButton", { "postId" => 999 })
