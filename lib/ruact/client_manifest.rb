@@ -196,13 +196,13 @@ module Ruact
     def resolve_key(name, controller_path)
       return name unless controller_path
 
-      co_located = "#{controller_path}/_#{rsc_underscore(name)}"
+      co_located = "#{controller_path}/_#{pascal_to_snake_case(name)}"
       include?(co_located) ? co_located : name
     end
 
     # Converts PascalCase component names to snake_case without requiring ActiveSupport.
     # Equivalent to ActiveSupport::Inflector.underscore for PascalCase inputs.
-    def rsc_underscore(name)
+    def pascal_to_snake_case(name)
       name.gsub(/([A-Z]+)([A-Z][a-z])/, '\1_\2')
           .gsub(/([a-z\d])([A-Z])/, '\1_\2')
           .downcase

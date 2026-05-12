@@ -7,7 +7,7 @@ module Ruact
   #   ERB source → (preprocessor) → evaluated HTML → (HtmlConverter) → ReactElement tree
   #                                                                    → (Flight::Renderer) → wire bytes
   #
-  # External code should use `Ruact::Controller#rsc_render` instead. `Ruact::RenderPipeline`
+  # External code should use `Ruact::Controller#ruact_render` instead. `Ruact::RenderPipeline`
   # (and the rest of `Ruact::Flight::*` / `Ruact::Internal::*`) are not part of the public API
   # and may change between minor versions.
   #
@@ -23,7 +23,7 @@ module Ruact
 
     # Render a server component tree to Flight wire format.
     #
-    # **Internal API.** External code should call `Ruact::Controller#rsc_render` instead.
+    # **Internal API.** External code should call `Ruact::Controller#ruact_render` instead.
     # `Ruact::RenderPipeline` is not part of the public API and may change between minor
     # versions without deprecation. Reach into it only when extending the gem itself.
     #
@@ -59,7 +59,7 @@ module Ruact
     #
     # @example Pre-rendered HTML, streaming output
     #   ctx = Ruact::RenderContext.new
-    #   pipeline.render({ html: "<!-- __RSC_0__ -->", render_context: ctx }, mode: :stream)
+    #   pipeline.render({ html: "<!-- __RUACT_0__ -->", render_context: ctx }, mode: :stream)
     #   # => #<Enumerator: ...>  (yields Flight rows lazily)
     def render(input, mode: :string)
       validate_mode!(mode)
@@ -157,7 +157,7 @@ module Ruact
     end
 
     # ERB-source path: evaluate ERB, collect components into a fresh RenderContext via
-    # injected `__rsc_component__` helper, then convert + serialize.
+    # injected `__ruact_component__` helper, then convert + serialize.
     #
     # NB: `Ruact.config.strict_serialization` and the `as_json` warning callback are read
     # inside the Enumerator block (consumption time), preserving the legacy `_stream`
@@ -219,12 +219,12 @@ module Ruact
         @logger.warn(
           "[ruact] WARNING: #{class_name} serialized via as_json — " \
           "ALL attributes exposed to client: #{attrs}. " \
-          "Use `include Ruact::Serializable` with `rsc_props` for explicit control"
+          "Use `include Ruact::Serializable` with `ruact_props` for explicit control"
         )
       end
     end
 
-    # Install __rsc_component__ on the binding's receiver and stash the active
+    # Install __ruact_component__ on the binding's receiver and stash the active
     # render context on the receiver as @__ruact_render_context__. The singleton
     # method reads the ivar dynamically, so nested renders sharing the same
     # receiver (e.g., inner pipeline.render from inside ERB) see whatever context
@@ -235,11 +235,11 @@ module Ruact
     def inject_helper!(binding_context, render_context)
       receiver = binding_context.eval("self")
       receiver.instance_variable_set(:@__ruact_render_context__, render_context)
-      return if receiver.respond_to?(:__rsc_component__)
+      return if receiver.respond_to?(:__ruact_component__)
 
-      receiver.define_singleton_method(:__rsc_component__) do |name, props = {}|
+      receiver.define_singleton_method(:__ruact_component__) do |name, props = {}|
         ctx = instance_variable_get(:@__ruact_render_context__)
-        raise Ruact::Error, "ruact: __rsc_component__ called outside an active render context" if ctx.nil?
+        raise Ruact::Error, "ruact: __ruact_component__ called outside an active render context" if ctx.nil?
 
         token = ctx.register(name, props)
         "<!-- #{token} -->"

@@ -19,7 +19,7 @@ module Ruact
     #     Defaults to Rails.root.join("public/react-client-manifest.json") when nil.
     #
     # @!attribute [r] strict_serialization
-    #   @return [Boolean] When true, objects without explicit rsc_props declaration
+    #   @return [Boolean] When true, objects without explicit ruact_props declaration
     #     raise Ruact::SerializationError. Defaults to false in development, true in production.
     #
     # @!attribute [r] suspense_timeout

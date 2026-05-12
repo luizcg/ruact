@@ -9,10 +9,10 @@ module Ruact
   #
   # becomes a placeholder that evaluates the props as Ruby:
   #
-  #   <%= __rsc_component__("LikeButton", { "postId" => @post.id, "initialCount" => 5 }) %>
+  #   <%= __ruact_component__("LikeButton", { "postId" => @post.id, "initialCount" => 5 }) %>
   #
   # The placeholder is replaced by an HTML comment with a unique token:
-  #   <!-- __RSC_COMPONENT_0__ -->
+  #   <!-- __RUACT_0__ -->
   #
   # The actual ClientReference + props are registered in the binding and
   # collected by HtmlConverter after the ERB renders.
@@ -40,16 +40,16 @@ module Ruact
     end
 
     def transform(source)
-      # Step 1: transform <Suspense> paired tags into <rsc-suspense> HTML elements.
+      # Step 1: transform <Suspense> paired tags into <ruact-suspense> HTML elements.
       # This runs before the general component regex so Suspense isn't treated as a component.
       result = source
                .gsub(SUSPENSE_OPEN_RE) do
                  attrs    = ::Regexp.last_match(1)
                  fallback = extract_string_attr(attrs, "fallback") || ""
                  escaped  = fallback.gsub('"', "&quot;")
-                 %(<rsc-suspense data-rsc-fallback="#{escaped}">)
+                 %(<ruact-suspense data-ruact-fallback="#{escaped}">)
                end
-        .gsub(SUSPENSE_CLOSE_RE, "</rsc-suspense>")
+        .gsub(SUSPENSE_CLOSE_RE, "</ruact-suspense>")
 
       # Step 2: transform remaining PascalCase self-closing / opening component tags.
       result.gsub(COMPONENT_TAG_RE) do |match|
@@ -61,7 +61,7 @@ module Ruact
         begin
           props_ruby = parse_props(attrs_string)
           props_hash = props_ruby.empty? ? "{}" : "{ #{props_ruby} }"
-          %(<%= __rsc_component__(#{component_name.inspect}, #{props_hash}) %>)
+          %(<%= __ruact_component__(#{component_name.inspect}, #{props_hash}) %>)
         rescue PreprocessorError => e
           raise PreprocessorError, "#{e.message} at line #{line}: #{match.strip}"
         end

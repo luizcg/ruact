@@ -21,7 +21,7 @@ module Ruact
 
     # Returns the boot-time cached manifest (set by Railtie#config.to_prepare).
     # No per-request file I/O (AC#6).
-    def rsc_manifest
+    def ruact_manifest
       Ruact.manifest
     end
 
@@ -29,8 +29,8 @@ module Ruact
     # JSON, XML, and other formats bypass RSC entirely so respond_to blocks
     # and explicit render calls work without interference.
     def default_render
-      if rsc_template_exists? && (request.format.html? || rsc_request?)
-        rsc_render
+      if ruact_template_exists? && (request.format.html? || ruact_request?)
+        ruact_render
       else
         super
       end
@@ -46,9 +46,9 @@ module Ruact
     # +template+: logical template name (e.g. "posts/custom"), or nil to use
     #             the current action's default template.
     # +locals+:   hash of local variables to pass to the template.
-    def rsc_render(template: nil, locals: {})
-      pipeline  = RenderPipeline.new(rsc_manifest, controller_path: controller_path, logger: logger)
-      streaming = rsc_request? && self.class.ancestors.include?(ActionController::Live)
+    def ruact_render(template: nil, locals: {})
+      pipeline  = RenderPipeline.new(ruact_manifest, controller_path: controller_path, logger: logger)
+      streaming = ruact_request? && self.class.ancestors.include?(ActionController::Live)
 
       # Allocate a per-render context and expose it to the view via a normal
       # (non-`@_`-prefixed) instance variable on the controller. Rails 8's
@@ -59,14 +59,14 @@ module Ruact
       # (i.e. anything not prefixed with `@_`) are copied to the view via
       # `_assigns_for_view_context`, so the view evaluated inside
       # `render_to_string` receives `@ruact_render_context` populated.
-      # ViewHelper#__rsc_component__ reads it during ERB evaluation. The
+      # ViewHelper#__ruact_component__ reads it during ERB evaluation. The
       # controller instance is per-request (Rails allocates a new one per
       # action), so this is per-request safe under multi-threaded servers
       # (NFR8). See Story 7.9 / Bug 7.8-B.
       with_render_context do |render_context|
         opts = template ? { template: template } : { action: action_name }
         html = render_to_string(opts.merge(layout: false, locals: locals))
-        emit_rsc_response(pipeline, html, render_context, streaming: streaming)
+        emit_ruact_response(pipeline, html, render_context, streaming: streaming)
       end
     end
 
@@ -99,8 +99,8 @@ module Ruact
     # missing-component error can still surface as a normal 500 response
     # (matching the legacy `#from_html` ordering) before any streaming
     # response headers are mutated.
-    def emit_rsc_response(pipeline, html, render_context, streaming:)
-      if rsc_request? && streaming
+    def emit_ruact_response(pipeline, html, render_context, streaming:)
+      if ruact_request? && streaming
         enumerator = pipeline.render({ html: html, render_context: render_context }, mode: :stream)
         response.headers["Content-Type"]      = "text/x-component; charset=utf-8"
         response.headers["Cache-Control"]     = "no-cache"
@@ -112,10 +112,10 @@ module Ruact
         end
       else
         payload = pipeline.render({ html: html, render_context: render_context }, mode: :string)
-        if rsc_request?
+        if ruact_request?
           render plain: payload, content_type: "text/x-component"
         else
-          render html: rsc_html_shell(payload).html_safe, layout: false
+          render html: ruact_html_shell(payload).html_safe, layout: false
         end
       end
     end
@@ -126,7 +126,7 @@ module Ruact
     # HTTP round-trip.  Non-RSC requests and external-origin redirects fall through
     # to the standard Rails implementation.
     def redirect_to(options = {}, response_options = {})
-      return super unless rsc_request?
+      return super unless ruact_request?
 
       url = url_for(options)
 
@@ -151,12 +151,12 @@ module Ruact
              content_type: "text/x-component"
     end
 
-    def rsc_request?
+    def ruact_request?
       request.headers["Accept"]&.include?("text/x-component") ||
-        request.headers["RSC-Request"] == "1"
+        request.headers["Ruact-Request"] == "1"
     end
 
-    def rsc_template_exists?
+    def ruact_template_exists?
       File.exist?(default_template_path)
     end
 
@@ -166,7 +166,7 @@ module Ruact
       Rails.root.join("app", "views", controller, "#{action}.html.erb")
     end
 
-    def rsc_html_shell(flight_payload)
+    def ruact_html_shell(flight_payload)
       escaped_payload = flight_payload.gsub("</script>", '<\/script>')
       <<~HTML
         <!DOCTYPE html>

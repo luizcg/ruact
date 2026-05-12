@@ -18,7 +18,7 @@ module Ruact
     attr_reader :components
 
     def register(name, props)
-      token = "__RSC_#{@components.length}__"
+      token = "__RUACT_#{@components.length}__"
       @components << { token: token, name: name, props: props }
       token
     end

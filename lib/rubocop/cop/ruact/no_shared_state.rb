@@ -10,7 +10,7 @@ module RuboCop
       # @example
       #   # bad
       #   @@manifest = nil
-      #   Thread.current[:rsc_request] = req
+      #   Thread.current[:ruact_request] = req
       #
       #   # good
       #   def serialize(value, request:)

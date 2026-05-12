@@ -9,7 +9,7 @@ module Ruact
     end
 
     rake_tasks do
-      load File.expand_path("../tasks/rsc.rake", __dir__)
+      load File.expand_path("../tasks/ruact.rake", __dir__)
     end
 
     # Load the client manifest at boot (and on each code reload in development).
@@ -22,7 +22,7 @@ module Ruact
     # - production:  raises ManifestError; app does not start
     #
     # Also registers ActionView integration:
-    # - ViewHelper provides __rsc_component__ in every view context
+    # - ViewHelper provides __ruact_component__ in every view context
     # - ErbPreprocessorHook applies the RSC preprocessor to all ERB templates
     #   (layouts, views, partials) transparently via prepend.
     config.to_prepare do

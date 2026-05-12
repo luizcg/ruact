@@ -166,7 +166,7 @@ module Ruact
       # --- Serializable (explicit opt-in, no warning) ---
 
       def serialize_serializable(value)
-        serialize_model(value.rsc_serialize)
+        serialize_model(value.ruact_serialize)
       end
 
       # --- as_json fallback (strict_serialization: false only) ---
@@ -182,7 +182,7 @@ module Ruact
         if data.equal?(value)
           raise Ruact::SerializationError,
                 "#{value.class.name}#as_json returned self — would cause infinite recursion. " \
-                "Include Ruact::Serializable and declare rsc_props instead"
+                "Include Ruact::Serializable and declare ruact_props instead"
         end
 
         attr_names = data.is_a?(Hash) ? data.keys.join(", ") : ""

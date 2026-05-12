@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-namespace :rsc do
+namespace :ruact do
   desc "Check ruact installation and configuration (FR27)"
   task doctor: :environment do
     require "ruact/doctor"

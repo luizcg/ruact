@@ -5,7 +5,7 @@ require "pathname"
 
 module Ruact
   # Runs a suite of installation health checks and prints ✓/✗ per check.
-  # Extracted from the rsc:doctor Rake task for direct testability (FR27).
+  # Extracted from the ruact:doctor Rake task for direct testability (FR27).
   class Doctor
     CHECKS = %i[manifest vite controller layout streaming legacy_constant].freeze
     # Built via Array#join so the gem-CI `name-propagation` guard does not

@@ -8,7 +8,7 @@ module Ruact
   # Rules:
   # - HTML attributes → React equivalents (class→className, for→htmlFor, etc.)
   # - data-react-key="x" → becomes the React key on the element
-  # - HTML comments matching __RSC_N__ tokens → replaced by client component refs
+  # - HTML comments matching __RUACT_N__ tokens → replaced by client component refs
   # - Text nodes → plain Ruby strings
   # - Multiple root nodes → wrapped in a Fragment (array)
   # rubocop:disable Metrics/ClassLength
@@ -162,7 +162,7 @@ module Ruact
         text.strip.empty? ? nil : text
 
       when Nokogiri::XML::Node::COMMENT_NODE
-        # Check if this is an RSC component placeholder
+        # Check if this is a Ruact component placeholder
         token = node.content.strip
         entry = @registry.find { |c| c[:token] == token }
         return nil unless entry
@@ -181,7 +181,7 @@ module Ruact
 
     def convert_element(node)
       tag = node.name.downcase
-      return convert_suspense_element(node) if tag == "rsc-suspense"
+      return convert_suspense_element(node) if tag == "ruact-suspense"
 
       props = build_props(node, tag)
       children = convert_children(node)
@@ -191,7 +191,7 @@ module Ruact
     end
 
     def convert_suspense_element(node)
-      fallback_text = node["data-rsc-fallback"] || ""
+      fallback_text = node["data-ruact-fallback"] || ""
       fallback = if fallback_text.empty?
                    nil
                  else

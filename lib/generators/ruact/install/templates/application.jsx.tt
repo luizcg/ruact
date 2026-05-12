@@ -1,7 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import { useState, useEffect } from 'react';
 import { createFromFlightPayload } from './flight-client.js';
-import { setupRouter, teardownRouter } from './rsc-router.js';
+import { setupRouter, teardownRouter } from './ruact-router.js';
 
 // MODULE_REGISTRY maps react-client-manifest "id" values to component exports.
 // Add each "use client" component here as you create it.

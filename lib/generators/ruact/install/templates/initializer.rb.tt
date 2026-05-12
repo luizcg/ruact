@@ -5,7 +5,7 @@ Ruact.configure do |config|
   # Defaults to Rails.root.join("public/react-client-manifest.json").
   # config.manifest_path = Rails.root.join("public", "react-client-manifest.json")
 
-  # When true, objects without explicit rsc_props declaration raise
+  # When true, objects without explicit ruact_props declaration raise
   # Ruact::SerializationError instead of falling back to as_json.
   # Recommended: true in production to prevent accidental attribute exposure.
   # config.strict_serialization = Rails.env.production?
