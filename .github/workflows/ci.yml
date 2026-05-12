@@ -16,18 +16,31 @@ on:
 
 jobs:
   name-propagation:
-    # Required status check — fails if legacy gem-name references appear
-    # in user-facing files (Story 5.1 AC6). Exclusion list mirrors AC6
-    # exactly: CHANGELOG.md, doc/, *.gem.
-    name: No legacy gem-name references
+    # Required status check — fails if the legacy gem name or the legacy
+    # API-surface prefix appear in user-facing files. Two complementary
+    # guards:
+    #
+    #   (a) Story 5.1 — guards against the legacy gem-name regression
+    #       (the `rails[_-]rsc` / PascalCase form). The legacy names are
+    #       written here in the same regex-character-class form that the
+    #       grep step itself uses, so this workflow file stays grep-clean
+    #       under its own checks.
+    #   (b) Story 5.12 — guards against the residual legacy prefix on the
+    #       API surface (controller methods, header name, Rake task, view
+    #       helper, token format, Serializable DSL) being re-introduced
+    #       after the pre-v0.1.0 clean cut.
+    #
+    # Exclusion list mirrors the AC1 / AC6 contracts exactly: CHANGELOG.md
+    # (historical record), doc/ (generated YARD), *.gem (built artifacts).
+    name: No legacy gem-name or legacy-prefix API references
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Grep for legacy name references
+      - name: Grep for legacy gem-name references (Story 5.1)
         # Pattern is assembled from concatenated string fragments so this
         # very workflow file is grep-clean even though it talks about the
-        # legacy names — that lets the canonical AC6 exclusion list stay
-        # at three entries (Story 5.1 review F4).
+        # legacy names — that lets the canonical exclusion list stay at
+        # three entries (Story 5.1 review F4).
         run: |
           PATTERN='rails[_-]rsc|Rails''Rsc'
           if git grep -nE "$PATTERN" -- \
@@ -38,7 +51,39 @@ jobs:
             echo "::error::Rename to 'ruact' / 'Ruact'. See Story 5.1 in _bmad-output/implementation-artifacts/."
             exit 1
           fi
-          echo "::notice::No legacy name references found."
+          echo "::notice::No legacy gem-name references found."
+      - name: Grep for residual rsc_* API references (Story 5.12)
+        # AC1 of Story 5.12: every identifier renamed in the clean cut.
+        # Uses Perl mode (-P) for word boundaries. Pattern fragments are
+        # split with $R / $RU shell-vars so this workflow file is itself
+        # grep-clean — the file contains `${R}` / `${RU}` references, not
+        # literal `rsc` / `RSC` strings that would match the pattern (same
+        # strategy as Story 5.1 review F4).
+        #
+        # Coverage (Story 5.12 review F5 — broaden beyond curated list):
+        #   - any <legacy>_<identifier> (catches private helpers),
+        #   - any __<legacy>_<X>__ helper,
+        #   - any __<UPPER>_<X>__ token format,
+        #   - any data-<legacy> / data-<legacy>-<X> DOM attribute,
+        #   - the [-:] router / suspense / doctor literals,
+        #   - the legacy Request HTTP header,
+        #   - the legacy lib/tasks/<legacy>.rake file path.
+        # Literals are intentionally written with placeholder text so this
+        # workflow file is itself grep-clean under its own regex.
+        run: |
+          R='rsc'
+          RU="$(printf '%s' "$R" | tr a-z A-Z)"
+          PATTERN="\\b(${R}_\\w+|__${R}_\\w+__|__${RU}_\\w*[0-9]+__|data-${R}(-\\w+|=)|${R}[-:](router|suspense|doctor)|${RU}-Request|lib/tasks/${R}\\.rake)\\b"
+          if git grep -nP "$PATTERN" -- \
+               ':!CHANGELOG.md' \
+               ':!doc/' \
+               ':!*.gem' \
+               ':!coverage/'; then
+            echo "::error::Residual rsc_* API reference found in gem source."
+            echo "::error::Rename to the ruact_* equivalent. See Story 5.12 in _bmad-output/implementation-artifacts/."
+            exit 1
+          fi
+          echo "::notice::No residual rsc_* API references found."
 
   rspec:
     # Required status check — all 8 matrix combinations must pass to merge.

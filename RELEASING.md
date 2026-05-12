@@ -150,17 +150,23 @@ When a release contains a breaking change:
    ## [1.0.0] - YYYY-MM-DD
 
    ### Changed
-   - [BREAKING] `rsc_render` now requires explicit `template:` keyword for non-standard action names
+   - [BREAKING] `Ruact::Serializable.ruact_props` now rejects non-Symbol arguments at class-load time
 
    #### Migration Guide
 
    **Before:**
    ```ruby
-   render_rsc "posts/custom"
+   class Post
+     include Ruact::Serializable
+     ruact_props "id", "title"   # strings silently coerced
+   end
    ```
    **After:**
    ```ruby
-   rsc_render template: "posts/custom"
+   class Post
+     include Ruact::Serializable
+     ruact_props :id, :title     # must be Symbols
+   end
    ```
    ```
 

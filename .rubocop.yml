@@ -49,7 +49,7 @@ Metrics/ModuleLength:
 
 Metrics/AbcSize:
   Max: 50
-  # Note: PoC methods (rsc_render, each, convert_element) will be refactored
+  # Note: PoC methods (ruact_render, each, convert_element) will be refactored
   # in later stories. Current values reflect tech debt, not design intent.
 
 Metrics/CyclomaticComplexity:
