@@ -44,6 +44,8 @@ export function runtimePackagePath() {
  * }> }} snapshot
  * @returns {string}
  */
+export const VALID_JS_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
 export function render(snapshot) {
   const { version, generated_at, functions } = snapshot;
   let out = "";
@@ -53,7 +55,12 @@ export function render(snapshot) {
   out += `import { _makeRef } from "${RUNTIME_IMPORT_SPECIFIER}";\n`;
 
   if (!functions || functions.length === 0) {
-    out += "\n// (no server functions registered)\n";
+    out += "\n// (no server functions registered yet — Stories 8.1 / 9.1 populate)\n";
+    // `noUnusedLocals` would otherwise flag the `_makeRef` import. The `void`
+    // discard pattern keeps the import alive at zero runtime cost; once an
+    // action / query is registered the export below references `_makeRef`
+    // directly and this line is omitted.
+    out += "void _makeRef;\n";
   } else {
     out += "\n";
     for (const fn of functions) {
@@ -64,13 +71,31 @@ export function render(snapshot) {
 }
 
 function renderExport(fn) {
+  validateJsIdentifier(fn.js_identifier, fn.ruby_symbol);
   const signature =
     fn.kind === "query"
       ? "() => Promise<unknown>"
       : "(args?: Record<string, unknown>) => Promise<unknown>";
+  // JSON.stringify produces a JSON string literal — escaping backslashes,
+  // double quotes, and control characters — so an arbitrary `ruby_symbol`
+  // (from a corrupted or hand-edited snapshot) cannot break out of the
+  // `_makeRef("<here>")` argument.
+  const rubySymLiteral = JSON.stringify(String(fn.ruby_symbol));
   return (
     `export const ${fn.js_identifier}: ${signature} =\n` +
-    `  _makeRef("${fn.ruby_symbol}");\n`
+    `  _makeRef(${rubySymLiteral});\n`
+  );
+}
+
+function validateJsIdentifier(jsId, rubySym) {
+  if (typeof jsId === "string" && VALID_JS_IDENTIFIER.test(jsId)) return;
+  throw new Error(
+    "ruact server-function codegen rejected a snapshot entry: " +
+      `ruby_symbol=${JSON.stringify(rubySym)} ` +
+      `js_identifier=${JSON.stringify(jsId)} is not a valid JS identifier ` +
+      "(must match /^[A-Za-z_$][A-Za-z0-9_$]*$/). The snapshot JSON is " +
+      "corrupted or was hand-edited — regenerate via " +
+      "`bin/rails ruact:server_functions:generate`.",
   );
 }
 

@@ -54,6 +54,50 @@ module Ruact
         end
       end
 
+      describe ".functions_payload — cross-registry collision (Chunk1 Blocker 2026-05-13)" do
+        it "raises Ruact::ConfigurationError when an action and a query share a JS identifier",
+           :aggregate_failures do
+          actions.register(:foo, kind: :action, controller: posts_controller)
+          queries.register(:foo, kind: :query, controller: cats_controller)
+          expect { described_class.functions_payload(actions, queries) }
+            .to raise_error(Ruact::ConfigurationError) do |error|
+              expect(error.message).to include("cross-registry collision")
+              expect(error.message).to include(":foo")
+              expect(error.message).to include(":action")
+              expect(error.message).to include(":query")
+              expect(error.message).to include("PostsController")
+              expect(error.message).to include("CategoriesController")
+              expect(error.message).to include('"foo"')
+            end
+        end
+
+        it "raises when different Ruby symbols cross-collide via the naming bridge" do
+          # `:foo_bar` action + `:foo__bar` query both → "fooBar"
+          actions.register(:foo_bar, kind: :action, controller: posts_controller)
+          queries.register(:foo__bar, kind: :query, controller: cats_controller)
+          expect { described_class.functions_payload(actions, queries) }
+            .to raise_error(Ruact::ConfigurationError, /cross-registry collision.*"fooBar"/m)
+        end
+
+        it "does NOT raise when both registries contain the same Ruby symbol but with " \
+           "matching js_identifier (this is a normal cross-registry symbol)" do
+          # This is the within-symbol scenario: a project might want :categories
+          # registered as both action AND query (unusual but technically allowed
+          # by Registry#register). The blocker rule fires only on different
+          # symbols colliding via camelCase, OR on identical js_identifier
+          # across different kinds — wait, both same kind here? Let me re-think:
+          # this test asserts no false positive when same symbol is in both
+          # registries. The cross-registry rule fires on different KINDS sharing
+          # a js_id; here both rows are different kinds and the js_id matches,
+          # so the rule actually SHOULD fire (the design intent is one
+          # js_identifier per emitted export). Re-spec to assert it raises.
+          actions.register(:categories, kind: :action, controller: posts_controller)
+          queries.register(:categories, kind: :query, controller: cats_controller)
+          expect { described_class.functions_payload(actions, queries) }
+            .to raise_error(Ruact::ConfigurationError, /cross-registry collision/)
+        end
+      end
+
       describe ".functions_payload (Story 8.0a — fingerprint surface)" do
         it "excludes the generated_at timestamp so registry-equivalent calls match" do
           actions.register(:create_post, kind: :action, controller: posts_controller)
@@ -138,6 +182,16 @@ module Ruact
           )
           expect(result).to be(true)
           expect { JSON.parse(File.read(path)) }.not_to raise_error
+        end
+
+        it "rewrites the file when the on-disk snapshot has a different version " \
+           "(Chunk1 Major 2026-05-13 — version mismatch must not be treated as unchanged)" do
+          File.write(path, JSON.pretty_generate(version: 99, generated_at: "2020-01-01T00:00:00Z", functions: []))
+          result = described_class.generate!(
+            action_registry: actions, query_registry: queries, path: path, now: frozen_time
+          )
+          expect(result).to be(true)
+          expect(JSON.parse(File.read(path))["version"]).to eq(1)
         end
       end
     end

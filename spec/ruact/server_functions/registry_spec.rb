@@ -73,6 +73,24 @@ module Ruact
         it "tolerates a nil controller (Rails-console registration path)" do
           expect { registry.register(:create_post, kind: :action) }.not_to raise_error
         end
+
+        it "rejects kinds other than :action / :query (Chunk1 Major 2026-05-13)" do
+          expect { registry.register(:create_post, kind: :wat, controller: posts_controller) }
+            .to raise_error(Ruact::ConfigurationError) do |error|
+              expect(error.message).to include(":create_post")
+              expect(error.message).to include("PostsController")
+              expect(error.message).to include(":wat")
+              expect(error.message).to include("[:action, :query]")
+            end
+        end
+
+        it "wraps NameBridge symbol-shape failures with AC7 'invalid server-function " \
+           "symbol :SYMBOL in CONTROLLER' framing (Re-run patch m5)" do
+          expect { registry.register(:RECALCULATE, kind: :action, controller: posts_controller) }
+            .to raise_error(Ruact::ConfigurationError) do |error|
+              expect(error.message).to start_with("invalid server-function symbol :RECALCULATE in PostsController")
+            end
+        end
       end
 
       describe "#entries (Story 8.0a)" do

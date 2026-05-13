@@ -47,10 +47,45 @@ describe("Story 8.0a — render()", () => {
         "// Generated at: 2026-05-13T12:34:56Z",
         `import { _makeRef } from "${RUNTIME_IMPORT_SPECIFIER}";`,
         "",
-        "// (no server functions registered)",
+        "// (no server functions registered yet — Stories 8.1 / 9.1 populate)",
+        "void _makeRef;",
         "",
       ].join("\n"),
     );
+  });
+
+  it("references _makeRef via `void` even when empty so noUnusedLocals stays " +
+    "green (Re-run patch 2026-05-13)", () => {
+    expect(render(baseSnapshot())).toContain("void _makeRef;");
+  });
+
+  it("rejects a snapshot entry whose js_identifier is not a valid JS identifier " +
+    "(snapshot trust-boundary guard — Re-run patch 2026-05-13)", () => {
+    const evil = baseSnapshot({
+      functions: [
+        {
+          ruby_symbol: "create_post",
+          js_identifier: ');\nevil();_makeRef("x',
+          kind: "action",
+        },
+      ],
+    });
+    expect(() => render(evil)).toThrow(/valid JS identifier/);
+  });
+
+  it("JSON-escapes ruby_symbol in the _makeRef argument so quotes/backslashes " +
+    "cannot break out (Re-run patch 2026-05-13)", () => {
+    const weird = baseSnapshot({
+      functions: [
+        {
+          ruby_symbol: 'weird"\\name',
+          js_identifier: "weirdName",
+          kind: "action",
+        },
+      ],
+    });
+    // The emitted call site should contain a JSON-escaped string literal.
+    expect(render(weird)).toContain('_makeRef("weird\\"\\\\name");');
   });
 
   it("emits one export per registered function", () => {

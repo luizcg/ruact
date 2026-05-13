@@ -11,7 +11,10 @@ module Ruact
     #
     # The "functions" array is sorted by `ruby_symbol` for deterministic output
     # so that fingerprint comparisons (used by the write-if-changed guard) are
-    # stable across runs.
+    # stable across runs. Cross-registry JS-identifier collisions are detected
+    # here (the per-registry `Registry#register` only sees its own entries; a
+    # `ruact_action :foo` colliding with a `ruact_query :foo` is invisible to
+    # both registries in isolation).
     module Snapshot
       # Bump only when the on-disk schema changes incompatibly. The Vite plugin
       # must be updated in lockstep.
@@ -26,6 +29,8 @@ module Ruact
         # @param query_registry  [Ruact::ServerFunctions::Registry]
         # @param now [Time] timestamp to stamp into `generated_at` (UTC, ISO-8601).
         # @return [Hash] the serializable snapshot.
+        # @raise [Ruact::ConfigurationError] when a JS identifier is registered
+        #   in both registries (cross-registry collision; see {.functions_payload}).
         def dump(action_registry, query_registry, now: Time.now.utc)
           {
             version: VERSION,
@@ -37,11 +42,16 @@ module Ruact
         # Returns the payload-only array of function entries, sorted by
         # `ruby_symbol`. Used both inside {.dump} and as the fingerprint surface
         # by {.generate!}'s short-circuit (so timestamp churn alone never causes
-        # a rewrite).
+        # a rewrite). Detects cross-registry JS-identifier collisions and
+        # raises before emitting — a `ruact_action :foo` and `ruact_query :foo`
+        # would emit two `export const foo` lines at codegen, which `tsc` rejects.
         #
         # @return [Array<Hash>] each entry has string keys per the JSON contract.
+        # @raise [Ruact::ConfigurationError] when the action and query registries
+        #   both contain entries that map to the same JS identifier.
         def functions_payload(action_registry, query_registry)
           combined = action_registry.entries.values + query_registry.entries.values
+          detect_cross_registry_collision!(combined)
           combined.sort_by { |entry| entry.ruby_symbol.to_s }.map do |entry|
             {
               "ruby_symbol" => entry.ruby_symbol.to_s,
@@ -59,6 +69,11 @@ module Ruact
         # `generated_at` is freshly stamped only when the registry actually
         # changed; otherwise the on-disk content stays byte-identical.
         #
+        # The short-circuit compares **both** `version` and `functions` against
+        # the on-disk snapshot — a schema bump (`VERSION` increment) forces a
+        # rewrite even when the registry payload is unchanged, so the Vite
+        # plugin never reads a stale-version snapshot after a gem upgrade.
+        #
         # @param action_registry [Ruact::ServerFunctions::Registry]
         # @param query_registry  [Ruact::ServerFunctions::Registry]
         # @param path [String, Pathname] absolute path to the snapshot JSON.
@@ -67,10 +82,8 @@ module Ruact
         def generate!(action_registry:, query_registry:, path:, now: Time.now.utc)
           new_functions = functions_payload(action_registry, query_registry)
 
-          if File.exist?(path)
-            existing = parse_existing_payload(path)
-            return false if existing == new_functions
-          end
+          existing_version, existing_functions = read_existing_snapshot(path)
+          return false if existing_version == VERSION && existing_functions == new_functions
 
           snapshot = {
             version: VERSION,
@@ -82,17 +95,46 @@ module Ruact
 
         private
 
+        def detect_cross_registry_collision!(entries)
+          by_js_id = entries.group_by(&:js_identifier).select { |_, group| group.size >= 2 }
+          return if by_js_id.empty?
+
+          # If both rows are the same Ruby symbol it is a within-registry duplicate
+          # (caught by Registry#register's own collision detection). A genuine
+          # cross-registry collision is any group whose entries span more than
+          # one kind — i.e. one action + one query share the same js_identifier.
+          cross = by_js_id.find do |_, group|
+            kinds = group.map(&:kind).uniq
+            kinds.size > 1
+          end
+          return unless cross
+
+          js_id, group = cross
+          parts = group.map do |entry|
+            ":#{entry.ruby_symbol} (kind: :#{entry.kind}, in #{describe_controller(entry.controller)})"
+          end
+          raise Ruact::ConfigurationError,
+                "ruact server-function cross-registry collision: " \
+                "#{parts.join(' and ')} both map to JS identifier \"#{js_id}\""
+        end
+
         def describe_controller(controller)
           return nil if controller.nil?
 
           controller.respond_to?(:name) && controller.name ? controller.name : controller.inspect
         end
 
-        def parse_existing_payload(path)
+        # Reads `(version, functions)` from the on-disk snapshot. Returns
+        # `[nil, nil]` when the file is missing, vanished between the stat and
+        # the read (TOCTOU race fix — `File.exist?` removed; we catch `ENOENT`
+        # from `File.read` directly), or malformed.
+        def read_existing_snapshot(path)
           parsed = JSON.parse(File.read(path))
-          parsed.is_a?(Hash) ? parsed["functions"] : nil
-        rescue JSON::ParserError
-          nil
+          return [nil, nil] unless parsed.is_a?(Hash)
+
+          [parsed["version"], parsed["functions"]]
+        rescue Errno::ENOENT, JSON::ParserError
+          [nil, nil]
         end
       end
     end

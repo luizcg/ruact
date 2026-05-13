@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "json"
+
 module Ruact
   module ServerFunctions
     # Renders the snapshot Hash into the TypeScript module emitted to
@@ -22,6 +24,14 @@ module Ruact
       ACTION_SIGNATURE = "(args?: Record<string, unknown>) => Promise<unknown>"
       QUERY_SIGNATURE  = "() => Promise<unknown>"
 
+      # JS identifier shape — same as `NameBridge::VALID_SYMBOL` but expressed
+      # in JS-identifier terms (leading letter / underscore / `$`, then alnum
+      # / underscore / `$`). The codegen validates every entry it consumes
+      # because the JSON bridge is a trust boundary — a malformed snapshot
+      # (`functions[].js_identifier == ");\nevil();_makeRef("foo`) would
+      # otherwise inject TS at module top level.
+      VALID_JS_IDENTIFIER = /\A[A-Za-z_$][A-Za-z0-9_$]*\z/
+
       class << self
         # Renders +snapshot+ into the TS module text. Pure; no I/O.
         #
@@ -29,6 +39,8 @@ module Ruact
         #   must contain `:version`, `:generated_at`, `:functions` (with string-keyed
         #   entries).
         # @return [String] TS module bytes, terminated by a single trailing newline.
+        # @raise [Ruact::ConfigurationError] when an entry's `js_identifier`
+        #   does not match {VALID_JS_IDENTIFIER} (snapshot-trust-boundary guard).
         def render(snapshot)
           version      = snapshot.fetch(:version) { snapshot.fetch("version") }
           generated_at = snapshot.fetch(:generated_at) { snapshot.fetch("generated_at") }
@@ -41,11 +53,16 @@ module Ruact
           io << "import { _makeRef } from #{RUNTIME_IMPORT};\n"
 
           if functions.empty?
-            io << "\n// (no server functions registered)\n"
+            io << "\n// (no server functions registered yet — Stories 8.1 / 9.1 populate)\n"
+            # `noUnusedLocals` would otherwise flag the `_makeRef` import. The
+            # `void` discard pattern keeps the import alive at zero runtime
+            # cost; once an action/query is registered the export below
+            # references `_makeRef` directly and this line is omitted.
+            io << "void _makeRef;\n"
           else
             io << "\n"
-            functions.each do |fn|
-              io << render_export(fn)
+            functions.each do |entry|
+              io << render_export(entry)
             end
           end
 
@@ -65,12 +82,32 @@ module Ruact
         private
 
         def render_export(entry)
-          js_id     = entry["js_identifier"] || entry[:js_identifier]
-          kind      = (entry["kind"] || entry[:kind]).to_s
-          ruby_sym  = entry["ruby_symbol"] || entry[:ruby_symbol]
+          js_id    = entry["js_identifier"] || entry[:js_identifier]
+          kind     = (entry["kind"] || entry[:kind]).to_s
+          ruby_sym = entry["ruby_symbol"] || entry[:ruby_symbol]
+
+          validate_js_identifier!(js_id, ruby_sym)
           signature = kind == "query" ? QUERY_SIGNATURE : ACTION_SIGNATURE
 
-          "export const #{js_id}: #{signature} =\n  _makeRef(\"#{ruby_sym}\");\n"
+          "export const #{js_id}: #{signature} =\n  _makeRef(#{json_escape(ruby_sym.to_s)});\n"
+        end
+
+        def validate_js_identifier!(js_id, ruby_sym)
+          return if js_id.is_a?(String) && js_id.match?(VALID_JS_IDENTIFIER)
+
+          raise Ruact::ConfigurationError,
+                "ruact server-function codegen rejected a snapshot entry: " \
+                "ruby_symbol=#{ruby_sym.inspect} js_identifier=#{js_id.inspect} " \
+                "is not a valid JS identifier (must match #{VALID_JS_IDENTIFIER.inspect}). " \
+                "The snapshot JSON is corrupted or was hand-edited — regenerate via " \
+                "`bin/rails ruact:server_functions:generate`."
+        end
+
+        # Wraps `ruby_symbol` in a JSON-escaped string literal so backslashes,
+        # double quotes, and control characters cannot break out of the
+        # `_makeRef("<here>")` argument.
+        def json_escape(str)
+          JSON.dump(str)
         end
       end
     end

@@ -79,18 +79,26 @@ module Ruact
           "app/javascript/.ruact/server-functions.ts",
           "tmp/cache/ruact/"
         ]
-        existing = File.read(gitignore)
-        new_entries = entries.reject { |e| existing.include?(e) }
+        # Substring matches (`existing.include?(entry)`) were unsafe — they
+        # would skip "tmp/cache/ruact/" when the file already contained
+        # "tmp/cache/ruact/some-cache.bin", leaving the directory itself
+        # un-ignored. Match by exact normalized line instead.
+        existing_lines = File.read(gitignore).each_line.to_set { |line| line.chomp.strip }
+        new_entries = entries.reject { |e| existing_lines.include?(e) }
         return if new_entries.empty?
 
         append_to_file ".gitignore", "\n# ruact (Story 8.0a — auto-generated server-functions module)\n"
         new_entries.each { |entry| append_to_file ".gitignore", "#{entry}\n" }
       end
 
+      # Invokes `ruact:server_functions:generate` so a fresh install completes
+      # with the AC8-required empty-but-valid generated module on disk.
+      # Failures (a NameBridge violation, a collision, an unwritable
+      # `tmp/cache/ruact/` directory) propagate intentionally — silencing
+      # them via a rescue would let an install finish in a broken state, which
+      # is the bug the Re-run review caught.
       def prime_server_functions_codegen
         rake "ruact:server_functions:generate"
-      rescue StandardError => e
-        say_status "skip", "ruact:server_functions:generate not invocable yet — #{e.message}", :yellow
       end
 
       def create_vite_config

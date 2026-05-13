@@ -5,7 +5,9 @@ module Ruact
     # In-memory storage for server-function entries. One instance backs
     # `Ruact.action_registry`; another backs `Ruact.query_registry` — kept
     # separate so the JSON snapshot can emit a `kind` field per entry without
-    # the call sites having to thread an extra parameter through.
+    # the call sites having to thread an extra parameter through. Cross-registry
+    # JS-identifier collisions are detected by {Ruact::ServerFunctions::Snapshot}
+    # at snapshot time (a single registry only sees its own entries).
     #
     # Thread-safety: not thread-safe by design. Registration happens at
     # controller-class load time (`config.to_prepare` in dev, eager-load in
@@ -13,6 +15,12 @@ module Ruact
     # snapshot of the internal hash so concurrent readers cannot observe a
     # partial registration.
     class Registry
+      # The only kinds the codegen knows how to emit. Story 8.1 owns `:action`,
+      # Story 9.1 owns `:query`. Any other value is rejected at registration
+      # time — silent acceptance would otherwise let an unknown kind fall
+      # through and be emitted as an action signature.
+      ALLOWED_KINDS = %i[action query].freeze
+
       def initialize
         @entries = {}
       end
@@ -20,8 +28,7 @@ module Ruact
       # Adds +symbol+ to the registry.
       #
       # @param symbol [Symbol] the Ruby identifier (snake_case).
-      # @param kind [Symbol] `:action` or `:query` — informational, used by the
-      #   snapshot and downstream tooling.
+      # @param kind [Symbol] `:action` or `:query`. Other values raise.
       # @param controller [Class, nil] the controller class registering the
       #   function. Used in collision-error messages.
       # @yield the implementation body; stored verbatim for Story 8.1 / 9.1 to
@@ -29,10 +36,13 @@ module Ruact
       #   until 8.1 and 9.1 land).
       # @return [Ruact::ServerFunctions::RegistryEntry] the entry just inserted.
       # @raise [Ruact::ConfigurationError] when +symbol+ fails the naming-bridge
-      #   rule or when a different Ruby symbol already maps to the same JS
-      #   identifier.
+      #   rule, when +kind+ is not in {ALLOWED_KINDS}, or when a different Ruby
+      #   symbol already maps to the same JS identifier in THIS registry. Cross-
+      #   registry collisions (one action + one query sharing a JS identifier)
+      #   are detected later by {Ruact::ServerFunctions::Snapshot.functions_payload}.
       def register(symbol, kind:, controller: nil, &block)
-        js_identifier = NameBridge.to_js_identifier(symbol)
+        validate_kind!(symbol, kind, controller)
+        js_identifier = translate_symbol(symbol, controller)
         detect_collision!(symbol, js_identifier, controller)
 
         entry = RegistryEntry.new(
@@ -73,6 +83,25 @@ module Ruact
 
       private
 
+      def validate_kind!(symbol, kind, controller)
+        return if ALLOWED_KINDS.include?(kind)
+
+        raise Ruact::ConfigurationError,
+              "invalid server-function symbol :#{symbol} in #{describe_controller(controller)}: " \
+              "kind #{kind.inspect} is not one of #{ALLOWED_KINDS.inspect}"
+      end
+
+      # Wraps the NameBridge call to attach controller context to the raised
+      # error (the AC7 "invalid server-function symbol :SYMBOL in CONTROLLER"
+      # shape). NameBridge itself is controller-agnostic; the wrap lives at the
+      # registry boundary because that is where controller context exists.
+      def translate_symbol(symbol, controller)
+        NameBridge.to_js_identifier(symbol)
+      rescue Ruact::ConfigurationError => e
+        raise Ruact::ConfigurationError,
+              "invalid server-function symbol :#{symbol} in #{describe_controller(controller)} — #{e.message}"
+      end
+
       def detect_collision!(symbol, js_identifier, controller)
         existing = @entries.values.find do |e|
           e.js_identifier == js_identifier && e.ruby_symbol != symbol
@@ -80,7 +109,7 @@ module Ruact
         return unless existing
 
         raise Ruact::ConfigurationError,
-              "ruact server-function naming collision: " \
+              "server-function naming collision: " \
               ":#{symbol} (in #{describe_controller(controller)}) and " \
               ":#{existing.ruby_symbol} (in #{describe_controller(existing.controller)}) " \
               "both map to JS identifier \"#{js_identifier}\""

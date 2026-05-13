@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require "fileutils"
-require "digest"
+require "securerandom"
 
 module Ruact
   module ServerFunctions
@@ -27,12 +27,25 @@ module Ruact
         #   created (typically a read-only filesystem mounted into the app).
         def write_if_changed!(path:, content:) # rubocop:disable Naming/PredicateMethod
           path = path.to_s
-          return false if File.exist?(path) && File.read(path) == content
+          # TOCTOU-safe read: catch `ENOENT` from `File.read` rather than
+          # gating on `File.exist?` — between the stat and the read the file
+          # may be removed by another process (e.g. `rails tmp:clear`).
+          existing = begin
+            File.read(path)
+          rescue StandardError
+            nil
+          end
+          return false if existing == content
 
           dir = File.dirname(path)
           ensure_writable!(dir)
 
-          tmp = "#{path}.tmp.#{Process.pid}.#{Digest::SHA256.hexdigest(content)[0, 8]}"
+          # Random suffix so two same-process writes of identical content do
+          # not race over the same temp filename (e.g. JSON-snapshot writer
+          # + Ruby TS codegen running back-to-back inside the rake task on
+          # an unchanged registry — the digest-prefix-only tmp name was
+          # deterministic, which collided).
+          tmp = "#{path}.tmp.#{Process.pid}.#{SecureRandom.hex(8)}"
           File.binwrite(tmp, content)
           File.rename(tmp, path)
           true

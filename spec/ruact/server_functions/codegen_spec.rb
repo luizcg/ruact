@@ -15,7 +15,7 @@ module Ruact
       end
 
       describe ".render — empty registry (Story 8.0a AC4)" do
-        it "emits a valid module with import line and `(no server functions registered)`" do
+        it "emits a valid module with import line and the empty-registry comment" do
           result = described_class.render(base_snapshot)
 
           expect(result).to eq(<<~TS)
@@ -24,7 +24,8 @@ module Ruact
             // Generated at: 2026-05-13T12:34:56Z
             import { _makeRef } from "ruact/server-functions-runtime";
 
-            // (no server functions registered)
+            // (no server functions registered yet — Stories 8.1 / 9.1 populate)
+            void _makeRef;
           TS
         end
 
@@ -32,6 +33,13 @@ module Ruact
           result = described_class.render(base_snapshot)
           expect(result).to end_with("\n")
           expect(result).not_to end_with("\n\n")
+        end
+
+        it "references _makeRef even when empty so noUnusedLocals stays green " \
+           "(Re-run patch 2026-05-13)" do
+          # Strictly checks that the import is "touched" — the canonical
+          # `void _makeRef;` is the lightweight discard pattern.
+          expect(described_class.render(base_snapshot)).to include("void _makeRef;")
         end
       end
 
@@ -116,6 +124,45 @@ module Ruact
                                                 kind: "action" }
                                             ])
           expect(described_class.render(string_keys)).to eq(described_class.render(symbol_keys))
+        end
+      end
+
+      describe ".render — snapshot trust-boundary guards (Re-run patch 2026-05-13)" do
+        it "rejects a snapshot entry whose js_identifier is not a valid JS identifier " \
+           "(would otherwise inject TS at module top level)" do
+          snapshot = base_snapshot.merge(functions: [
+                                           { "ruby_symbol" => "create_post",
+                                             "js_identifier" => ");\nevil();_makeRef(\"x",
+                                             "kind" => "action" }
+                                         ])
+          expect { described_class.render(snapshot) }
+            .to raise_error(Ruact::ConfigurationError) do |error|
+              expect(error.message).to include("snapshot")
+              expect(error.message).to include("valid JS identifier")
+            end
+        end
+
+        it "rejects an entry with a non-String js_identifier" do
+          snapshot = base_snapshot.merge(functions: [
+                                           { "ruby_symbol" => "create_post",
+                                             "js_identifier" => nil,
+                                             "kind" => "action" }
+                                         ])
+          expect { described_class.render(snapshot) }
+            .to raise_error(Ruact::ConfigurationError, /valid JS identifier/)
+        end
+
+        it "JSON-escapes the ruby_symbol argument to _makeRef so backslashes / quotes " \
+           "in a (hand-edited or corrupted) snapshot cannot break out of the string literal" do
+          # The js_identifier still has to be a valid identifier — only the
+          # ruby_symbol can carry arbitrary string content. Escape it.
+          snapshot = base_snapshot.merge(functions: [
+                                           { "ruby_symbol" => "weird\"\\name",
+                                             "js_identifier" => "weirdName",
+                                             "kind" => "action" }
+                                         ])
+          out = described_class.render(snapshot)
+          expect(out).to include('_makeRef("weird\"\\\\name");')
         end
       end
 
