@@ -110,6 +110,18 @@ module Ruact
             end
           end
 
+          it "rejects :eval and :arguments (strict-mode invalid binding names — " \
+             "Story 8.0 Re-run patch 2026-05-13)" do
+            # ES module code runs in strict mode, where `eval` and `arguments`
+            # cannot be used as identifier names. The 8.0a codegen emits a
+            # `"type": "module"` file, so these guards apply unconditionally.
+            %i[eval arguments].each do |sym|
+              expect { described_class.to_js_identifier(sym) }
+                .to raise_error(Ruact::ConfigurationError, /JS reserved word/),
+                    "expected :#{sym} to raise as strict-mode invalid binding name"
+            end
+          end
+
           it "rejects multi-word symbols that camelCase into a reserved word" do
             # No real Ruby snake_case maps to a single reserved word post-
             # camelCasing (reserved words are themselves single-word), but the

@@ -30,16 +30,19 @@ module Ruact
       UNDERSCORE_ONLY = /\A_+\z/
 
       # ES2020+ reserved + strict-mode reserved + contextually-reserved at
-      # module top level. The codegen emits in a module context (the generated
-      # `app/javascript/.ruact/server-functions.ts` is `"type": "module"`), so
-      # `await` is reserved. Keep this list sorted; matches the MDN reference
-      # plus the contextual additions called out in the review patch.
+      # module top level + strict-mode invalid binding names. The codegen emits
+      # in a module context (the generated `app/javascript/.ruact/server-functions.ts`
+      # is `"type": "module"`, so all code runs in strict mode), so `await`,
+      # `eval`, and `arguments` are all reserved as identifier names.
+      # Keep this list sorted; matches the MDN reference plus the contextual
+      # additions and the strict-mode `eval`/`arguments` ban from the
+      # 2026-05-13 Re-run review patch.
       RESERVED_JS_IDENTIFIERS = %w[
-        async await break case catch class const continue debugger
-        default delete do else enum export extends false finally for
-        function if implements import in instanceof interface let new
-        null package private protected public return static super switch
-        this throw true try typeof var void while with yield
+        arguments async await break case catch class const continue
+        debugger default delete do else enum eval export extends false
+        finally for function if implements import in instanceof interface
+        let new null package private protected public return static super
+        switch this throw true try typeof var void while with yield
       ].to_set.freeze
 
       class << self
