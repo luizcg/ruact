@@ -52,6 +52,18 @@ export function PostForm() {
 Same accessor mechanics for actions and queries. No hook. No context provider.
 No prop drilling. The import IS the accessor.
 
+> **Note (2026-05-13, append-only):** the `export declare function` sketch
+> above is superseded. The real codegen (Story 8.0a) emits runtime exports
+> via `_makeRef("<symbol>")` with conservative TypeScript signatures
+> (actions: `(args?: Record<string, unknown>) => Promise<unknown>`; queries:
+> `() => Promise<unknown>`), not `export declare`. The `<form action={fn}>`
+> sketch above also under-specifies the React-form path: when React invokes
+> a server reference via `<form action>`, it passes a single `FormData`
+> argument — Story 8.1 / 8.2 own how that `FormData` is unwrapped into Rails
+> `params`. Query transport is POST (not GET); `useQuery(ref, params?)`
+> returns `{ data, loading, error }` (not Suspense-only). See the Decision
+> log entries from 2026-05-13 for the full resolutions.
+
 ## Alternatives considered
 
 The full scoring matrix lives in
@@ -197,7 +209,7 @@ invariant is preserved.
 
 | # | Machinery | Owning story | "Done" signal |
 |---|---|---|---|
-| 1 | `Ruact.action_registry` + `Ruact.query_registry` (Ruby) | Story 8.1 (actions) + Story 9.1 (queries) | `Ruact.action_registry[:create_post] # => RuactAction(controller:, params:, returns:)` after the Ruby DSL macro evaluates |
+| 1 | `Ruact.action_registry` + `Ruact.query_registry` (Ruby) — empty storage stubs + module-level accessors | **Storage: Implemented in Story 8.0a** (empty `Ruact::ServerFunctions::Registry` instances, `register` / `entries` / `clear!` + collision detection); **Population: Story 8.1 (actions) + Story 9.1 (queries)** — the DSL macros write into the storage 8.0a defined | `Ruact.action_registry # => Ruact::ServerFunctions::Registry` (empty at 8.0a merge); after Story 8.1's `ruact_action` evaluates, `Ruact.action_registry.entries[:create_post]` returns a populated `RegistryEntry` |
 | 2 | DSL macros `ruact_action :name do |params| ... end` and `ruact_query :name do ... end` | Story 8.1 + 9.1 | Defining a macro at controller-class load time both registers the symbol and defines the matching method (visibility and CSRF rules per Story 8.2 / 9.4) |
 | 3 | Server-function endpoint (single Rails route mounted by the gem; resolves by symbolic name from registries 1+2; no per-function entries in `routes.rb`) | Story 8.1 | `POST /__ruact/fn/:name` returns the action result; `GET /__ruact/fn/:name?args=...` returns the query result; both reuse `Ruact::Controller` security/CSRF |
 | 4 | `vite-plugin-ruact` extension that emits `app/javascript/.ruact/server-functions.ts` from a Rails-side dump (JSON written by a Railtie initializer) | **Implemented in Story 8.0a** | Generated file present, `tsc --noEmit` green on a freshly-installed playground |
@@ -205,11 +217,12 @@ invariant is preserved.
 | 6 | `bin/rails ruact:server_functions:generate` rake task (manual + CI/production hook) | **Implemented in Story 8.0a** | Task succeeds on a clean checkout; file is byte-identical to dev-mode output |
 | 7 | `rails generate ruact:install` updates: add `app/javascript/.ruact/.gitkeep`, add `app/javascript/.ruact/server-functions.ts` to `.gitignore`, run the generate rake task once | **Implemented in Story 8.0a** (originally tagged Story 8.1; landed early because the codegen surface lives in 8.0a) | Fresh `rails new` + `rails generate ruact:install` results in a working playground that can call a stub action without further setup |
 | 8 | Naming-bridge implementation in #4 (Ruby → JS identifier) | **Implemented in Story 8.0a** | The 6 edge cases enumerated in "Naming bridge" below all behave per spec |
-| 9 | `useQuery(reference)` hook (consumes the named import; integrates with React Suspense) | Story 9.2 | `useQuery(categories)` suspends, then resolves; works inside `<Suspense>` boundary; cache key is the reference's `$$id` |
+| 9 | `useQuery(reference, params?)` hook (consumes the named import) | Story 9.2 | `const { data, loading, error } = useQuery(categories)` works inside any function component; see Decision-log entry "2026-05-13 — Review-patch clarifications" for the supersession of the original Suspense-only sketch |
 
-Every machinery item has a story assignment. The new Story 8.0a (Vite plugin
-extension + naming bridge + dev-reload hook + rake task) is added to
-`epics-phase-2.md` and `sprint-status.yaml` in the same PR that lands this ADR.
+Every machinery item has a story assignment. As of 2026-05-13, rows #1
+(storage layer), #4–#8 are **implemented in Story 8.0a** (`gem` commit
+`862f07c`); rows #2, #3, #9 remain assigned to Stories 8.1 / 9.1 / 9.2.
+Empty registries from row #1 are populated by the DSL macros in row #2.
 
 ## Naming bridge
 
@@ -321,3 +334,51 @@ runtime alias is auto-registered by the Vite plugin's `config` hook against
 the bundled placeholder package. See
 [Story 8.0a](../../../../_bmad-output/implementation-artifacts/8-0a-vite-plugin-server-functions-codegen.md)
 for the full task breakdown and AC mapping.
+
+### 2026-05-13 — Review-patch clarifications (Story 8.0 review pass)
+
+The Story 8.0 code-review surfaced four patch findings that target stale
+sketches in the ADR body. These clarifications are append-only — the body
+sketches stay so the history of the contract is preserved, but the
+following points override them where they disagree:
+
+1. **Runtime/type contract (supersedes `## Decision` sketch lines 35–41).**
+   The codegen emits **runtime** exports, not `export declare function`.
+   Each entry is `export const <jsId>: <signature> = _makeRef("<rubySym>");`.
+   The default signatures are conservative:
+   - Actions: `(args?: Record<string, unknown>) => Promise<unknown>`
+   - Queries: `() => Promise<unknown>`
+   Per-function precision (e.g. `(args: { title: string }) => Promise<{ id: number }>`)
+   is **not** generated from the Ruby DSL in Phase 2 — devs annotate manually
+   if they want stronger types. Evolution to Ruby-side type metadata is
+   reserved for a Phase 3 ADR addendum.
+
+2. **`<form action={fn}>` semantics + FormData → Rails params.** React
+   invokes a server reference passed to `<form action>` with a single
+   `FormData` argument, not the `args: { title, body }` shape the body
+   sketch implies. Story 8.1 owns the controller-side unwrapping
+   (`FormData` → `params`); Story 8.2 owns the React-side path with
+   `useActionState` and the error overlay. The conservative TS signature
+   above (`(args?: Record<string, unknown>) => Promise<unknown>`) is wide
+   enough to accept either the `FormData` invocation path or a hand-shaped
+   POJO call from JS event handlers.
+
+3. **Query transport is POST for everything (supersedes Implementation
+   Surface row #3's `GET /__ruact/fn/:name?args=...`).** Both actions and
+   queries POST to `/__ruact/fn/:name` with params in the request body —
+   CSRF symmetric, no URL-replay, no intermediate caching. Trade-off
+   accepted: queries lose HTTP-level cacheability, which is irrelevant for
+   the internal RPC use case.
+
+4. **`useQuery` shape (supersedes Implementation Surface row #9's "Suspense-
+   only" wording).** Story 9.2's hook signature is
+   `useQuery(reference, params?) → { data, loading, error }`. Suspense-aware
+   queries (`use(promise)` + `<Suspense>` boundaries) are reserved for a
+   Phase 3 ADR addendum once React 19's stable `use()` semantics + adoption
+   signal land.
+
+These clarifications were registered through Story 8.0's Review Findings
+section (the four `[Review][Patch]` items referencing this file). The
+Decision log is append-only — do not rewrite the body sketches above. If a
+future story conflicts with these clarifications, add a new dated entry
+here.
