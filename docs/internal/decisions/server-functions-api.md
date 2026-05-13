@@ -4,8 +4,8 @@
 | --- | --- |
 | Date | 2026-05-12 |
 | Status | Accepted |
-| Story | [8.0 — Server functions API design spike](../../../../_bmad-output/implementation-artifacts/8-0-server-functions-api-design-spike.md) |
-| Inspected | `react@19.2.0`, `next@15.4.0-canary`, `eslint-plugin-react-hooks@v6`, `vite@6.x` |
+| Story | 8.0 — Server functions API design spike (planning artifact in the workspace monorepo at `_bmad-output/implementation-artifacts/8-0-server-functions-api-design-spike.md` — link omitted because this file ships in the published gem and the planning path is workspace-only) |
+| Inspected | `react@19.2.0` (latest 19.x line; gem pins `react ^19.0.0` per Story 8.0 AC1's `react@19.0.0` floor), `next@15.4.0-canary`, `eslint-plugin-react-hooks@v6` (the v5 → v6 bump landed in 2026-05; AC1 specified `5.x` at story-creation time — the upgrade was a no-op for the rule-of-hooks behaviour the spike inspected, but flagged here for honesty), `vite@6.x` |
 | Locks | Stories 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 9.1, 9.2, 9.3, 9.4, 9.5 |
 | Append-only | Yes — see "When to revisit" below |
 
@@ -66,10 +66,17 @@ No prop drilling. The import IS the accessor.
 
 ## Alternatives considered
 
-The full scoring matrix lives in
-[`/tmp/8-0-matrix.md`](../../../../_bmad-output/implementation-artifacts/8-0-server-functions-api-design-spike.md)
-(captured in Task 2 of the spike); the summary is below. Each rejected option
-cites at least one pitfall from the spike's Context Bundle.
+The decision was driven by a scoring matrix built in Task 2 of the spike
+across nine axes: TypeScript support, bundle size, ESLint friction, hook-
+rule compliance, nested-layout future-readiness, regeneration triggers,
+debugging clarity, Rails-dev-learning-React curve, React-dev-learning-
+ruact curve. The matrix lived in a scratch file (`/tmp/8-0-matrix.md`)
+that was not committed to version control — the Task 2 checklist in the
+Story 8.0 spike artifact (workspace-only path `_bmad-output/implementation-artifacts/8-0-server-functions-api-design-spike.md`)
+records the axes; the per-option summary below preserves the qualitative
+outcome. If the decision is ever re-litigated, rebuild the matrix from
+scratch — do not trust a recovered scratch file. Each rejected option
+below cites at least one pitfall from the spike's Context Bundle.
 
 ### Option A — Prop drilling from layout
 
@@ -116,6 +123,25 @@ type safety than C).
 See "Decision" above. Validated end-to-end in `/tmp/8-0-sandbox/` (V1–V4):
 codegen + `tsc --noEmit` + typo-detection + naming-bridge edge cases all pass.
 
+**Pros:** strongest per-function TypeScript surface of any option (each
+export is independently typed; rename triggers `TS2724` with a suggestion
+across every call site); zero hook-rule friction (it's a plain import,
+callable from event handlers, top-level, or anywhere); tree-shakable
+(unused functions are dead-code-eliminated by Vite); jump-to-definition
+works in any TS-aware editor; refactoring a Ruby symbol surfaces at
+typecheck and at module-resolve time (not silently at runtime).
+**Cons:** requires a codegen step (Story 8.0a — Vite plugin + Railtie
+hook + rake task; the implementation surface is non-trivial and adds a
+second source of truth that the Ruby↔JS parity test must keep aligned);
+generated module is build-time state, so it has a regeneration-trigger
+matrix (`config.to_prepare` in dev; rake task in CI/prod) that the spike
+had to design explicitly; introduces a new file path (`app/javascript/.ruact/`)
+that host apps must gitignore.
+**Chosen** citing pitfall #3 (type safety) and pitfall #4 (nested-layout
+future-readiness) — the codegen cost is paid up-front, in one place, by
+the gem maintainer, in exchange for the strongest ergonomic + TS surface
+across all eleven downstream stories.
+
 ### Option D — `useServerFunction("name")`
 
 A single hook keyed by symbolic name.
@@ -142,6 +168,11 @@ ships TS support in Phase 2 (Story 6.1) is to make this kind of shape possible.
 Considered and discarded immediately: pollutes global scope, not tree-shakable,
 no TypeScript surface, conflates accessor with serialization, breaks SSR/test
 isolation. One sentence and out.
+**Rejected** citing pitfall #3 (type safety) and pitfall #4 (the global
+accessor binds to a specific layout/runtime instance, fragmenting if
+Phase 3 introduces nested layouts or per-route shells — same future-
+coupling cost that disqualified Option A, only worse since `window`
+mutations cannot be partitioned per shell).
 
 ## Applied
 
@@ -200,10 +231,27 @@ export function CategoryPicker() {
 }
 ```
 
-The accessor mechanics are identical (one named import, no hook, one type per
-function). Actions integrate with native React `<form action>` + `useActionState`;
-queries integrate with ruact's `useQuery` (Story 9.2). The symmetric-coverage
-invariant is preserved.
+> **Note (2026-05-13, append-only):** the `useQuery(categories)` sketch
+> above is the Suspense-based shape the spike originally drafted. Per
+> the 2026-05-13 Review-patch clarifications (see Decision log), Story
+> 9.2's hook signature is `useQuery(reference, params?) → { data, loading,
+> error }`. The corrected sketch is:
+>
+> ```tsx
+> const { data: items, loading, error } = useQuery(categories);
+> if (loading) return <Spinner />;
+> if (error) return <p>Could not load categories: {error.message}</p>;
+> return <select>{items.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>;
+> ```
+>
+> Suspense-aware queries (`use(promise)` + `<Suspense>` boundaries) are
+> reserved for a Phase 3 ADR addendum once React 19's stable `use()`
+> semantics + adoption signal land.
+
+The accessor mechanics are identical (one named import, no hook on the
+import path, one type per function). Actions integrate with native React
+`<form action>` + `useActionState`; queries integrate with ruact's
+`useQuery` (Story 9.2). The symmetric-coverage invariant is preserved.
 
 ## Implementation surface
 
@@ -257,6 +305,8 @@ load time (boot), not at runtime, not silently.
 | `:foo__bar` | `fooBar` | Consecutive underscores collapse |
 | `:RECALCULATE` | (rejected at boot) | `Ruact::ConfigurationError` — SCREAMING_SNAKE not allowed |
 | `:CreatePost` | (rejected at boot) | `Ruact::ConfigurationError` — must start with lowercase letter or underscore |
+| `:_` / `:__` | (rejected at boot) | `Ruact::ConfigurationError` — underscore-only symbols carry no semantic content (added 2026-05-13 via Story 8.0 review patch) |
+| `:class` / `:export` / `:await` | (rejected at boot) | `Ruact::ConfigurationError` — the translated JS identifier collides with an ES2020+ reserved word (added 2026-05-13 via Story 8.0 review patch). Escape hatch: prefix with underscore (`:_class` → `"_class"`, accepted). |
 
 The "rejected at boot" choice (vs silent normalization) is deliberate: ruby_symbol
 → JS-identifier conversion is one-way, so accepting `:CreatePost` and emitting
@@ -264,6 +314,14 @@ The "rejected at boot" choice (vs silent normalization) is deliberate: ruby_symb
 collision-prone, hard to reverse-engineer in stack traces. The cost of the
 strict rule is one early failure for the 1% of devs who use unusual casing,
 which is the right trade.
+
+The 2026-05-13 reserved-word + underscore-only additions follow the same
+principle: a symbol that would produce JS that fails `tsc --noEmit` or trips
+common ESLint configurations fails LOUDLY at controller-class load time
+instead of silently shipping. The implementation lives in
+`gem/lib/ruact/server_functions/name_bridge.rb` — `RESERVED_JS_IDENTIFIERS`
+is the canonical list (ES2020+ keyword set + strict-mode reserved +
+contextual reserved at module top level: `await`, `async`).
 
 ### Identifier collision
 
@@ -332,7 +390,7 @@ parity"). Empty registries are valid: 8.0a merges them as `[]` and Stories
 the import specifier remains `"ruact/server-functions-runtime"`; the
 runtime alias is auto-registered by the Vite plugin's `config` hook against
 the bundled placeholder package. See
-[Story 8.0a](../../../../_bmad-output/implementation-artifacts/8-0a-vite-plugin-server-functions-codegen.md)
+Story 8.0a (workspace-only path `_bmad-output/implementation-artifacts/8-0a-vite-plugin-server-functions-codegen.md`)
 for the full task breakdown and AC mapping.
 
 ### 2026-05-13 — Review-patch clarifications (Story 8.0 review pass)
