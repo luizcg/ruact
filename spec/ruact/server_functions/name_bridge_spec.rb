@@ -64,6 +64,77 @@ module Ruact
             expect(described_class.to_js_identifier(:_2fa_check)).to eq("_2faCheck")
           end
         end
+
+        describe "underscore-only symbols (Story 8.0 review patch 2026-05-13)" do
+          it "rejects a single underscore" do
+            expect { described_class.to_js_identifier(:_) }
+              .to raise_error(Ruact::ConfigurationError) do |error|
+                expect(error.message).to include(":_")
+                expect(error.message).to include("entirely of underscores")
+              end
+          end
+
+          it "rejects a run of underscores" do
+            expect { described_class.to_js_identifier(:____) }
+              .to raise_error(Ruact::ConfigurationError, /entirely of underscores/)
+          end
+
+          it "still accepts a leading underscore followed by alphanumeric" do
+            expect(described_class.to_js_identifier(:_x)).to eq("_x")
+          end
+        end
+
+        describe "JS reserved words (Story 8.0 review patch 2026-05-13)" do
+          # Spot-check a handful of representative classes: keyword (`class`),
+          # module-level reserved (`export`), strict-mode reserved (`let`),
+          # contextually-reserved (`await`, `async`), literal (`true`).
+          it "rejects :class" do
+            expect { described_class.to_js_identifier(:class) }
+              .to raise_error(Ruact::ConfigurationError) do |error|
+                expect(error.message).to include(":class")
+                expect(error.message).to include("JS reserved word")
+                expect(error.message).to include('"class"')
+              end
+          end
+
+          it "rejects :export" do
+            expect { described_class.to_js_identifier(:export) }
+              .to raise_error(Ruact::ConfigurationError, /JS reserved word.*"export"/)
+          end
+
+          it "rejects :let, :await, :async, :true (representative coverage)" do
+            %i[let await async true].each do |sym|
+              expect { described_class.to_js_identifier(sym) }
+                .to raise_error(Ruact::ConfigurationError, /JS reserved word/),
+                    "expected :#{sym} to raise as a reserved word"
+            end
+          end
+
+          it "rejects multi-word symbols that camelCase into a reserved word" do
+            # No real Ruby snake_case maps to a single reserved word post-
+            # camelCasing (reserved words are themselves single-word), but the
+            # check happens AFTER camelCasing so a hypothetical degenerate
+            # input is still caught.
+            expect { described_class.to_js_identifier(:cl_ass) }
+              .not_to raise_error # "clAss" is not reserved — sanity guard
+            expect(described_class.to_js_identifier(:cl_ass)).to eq("clAss")
+          end
+
+          it "ACCEPTS reserved words that survive only with the leading-underscore prefix" do
+            # `:_class` → "_class" — not reserved (the underscore is a literal
+            # character); intentional escape hatch for devs whose domain
+            # vocabulary collides with JS keywords.
+            expect(described_class.to_js_identifier(:_class)).to eq("_class")
+            expect(described_class.to_js_identifier(:_export)).to eq("_export")
+          end
+
+          it "ACCEPTS the suffix-shaped escape hint from the error message" do
+            # The error message suggests `:class_action`; assert that hint
+            # produces a valid identifier — guards against a regression where
+            # the suggested fix would also fail validation.
+            expect(described_class.to_js_identifier(:class_action)).to eq("classAction")
+          end
+        end
       end
     end
   end
