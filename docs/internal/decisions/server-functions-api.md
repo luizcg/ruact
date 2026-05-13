@@ -5,7 +5,7 @@
 | Date | 2026-05-12 |
 | Status | Accepted |
 | Story | 8.0 — Server functions API design spike (planning artifact in the workspace monorepo at `_bmad-output/implementation-artifacts/8-0-server-functions-api-design-spike.md` — link omitted because this file ships in the published gem and the planning path is workspace-only) |
-| Inspected | `react@19.2.0` (latest 19.x line; gem pins `react ^19.0.0` per Story 8.0 AC1's `react@19.0.0` floor), `next@15.4.0-canary`, `eslint-plugin-react-hooks@v6` (the v5 → v6 bump landed in 2026-05; AC1 specified `5.x` at story-creation time — the upgrade was a no-op for the rule-of-hooks behaviour the spike inspected, but flagged here for honesty), `vite@6.x` |
+| Inspected | `react@19.2.0` (latest 19.x line; gem pins `react ^19.0.0` per Story 8.0 AC1's `react@19.0.0` floor), `next@15.4.0-canary`, `eslint-plugin-react-hooks@v6` (the v5 → v6 bump landed in 2026-05; AC1 specified `5.x` at story-creation time — the upgrade was a no-op for the rule-of-hooks behaviour the spike inspected), `vite@6.x`. **AC1 floor versions (`react@19.0.0`, `hooks@5.x`) were NOT separately re-inspected on a side-by-side basis;** the spike accepts the drift because the inspected behaviour (named-import resolution, rule-of-hooks compliance, `<form action>` semantics) is stable across the 19.0.0 ↔ 19.2.0 patch range and across the hooks v5 ↔ v6 release (per the React + plugin changelogs). Re-inspect if a future regression contradicts this assumption. |
 | Locks | Stories 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 9.1, 9.2, 9.3, 9.4, 9.5 |
 | Append-only | Yes — see "When to revisit" below |
 
@@ -259,7 +259,7 @@ import path, one type per function). Actions integrate with native React
 |---|---|---|---|
 | 1 | `Ruact.action_registry` + `Ruact.query_registry` (Ruby) — empty storage stubs + module-level accessors | **Storage: Implemented in Story 8.0a** (empty `Ruact::ServerFunctions::Registry` instances, `register` / `entries` / `clear!` + collision detection); **Population: Story 8.1 (actions) + Story 9.1 (queries)** — the DSL macros write into the storage 8.0a defined | `Ruact.action_registry # => Ruact::ServerFunctions::Registry` (empty at 8.0a merge); after Story 8.1's `ruact_action` evaluates, `Ruact.action_registry.entries[:create_post]` returns a populated `RegistryEntry` |
 | 2 | DSL macros `ruact_action :name do |params| ... end` and `ruact_query :name do ... end` | Story 8.1 + 9.1 | Defining a macro at controller-class load time both registers the symbol and defines the matching method (visibility and CSRF rules per Story 8.2 / 9.4) |
-| 3 | Server-function endpoint (single Rails route mounted by the gem; resolves by symbolic name from registries 1+2; no per-function entries in `routes.rb`) | Story 8.1 | `POST /__ruact/fn/:name` returns the action result; `GET /__ruact/fn/:name?args=...` returns the query result; both reuse `Ruact::Controller` security/CSRF |
+| 3 | Server-function endpoint (single Rails route mounted by the gem; resolves by symbolic name from registries 1+2; no per-function entries in `routes.rb`) | Story 8.1 | `POST /__ruact/fn/:name` returns the action OR query result (POST-for-everything per 2026-05-13 Decision-log clarification #3 — supersedes the original GET/POST split sketched in this row); both reuse `Ruact::Controller` security/CSRF |
 | 4 | `vite-plugin-ruact` extension that emits `app/javascript/.ruact/server-functions.ts` from a Rails-side dump (JSON written by a Railtie initializer) | **Implemented in Story 8.0a** | Generated file present, `tsc --noEmit` green on a freshly-installed playground |
 | 5 | Rails `config.to_prepare` hook that triggers regeneration of #4 in dev | **Implemented in Story 8.0a** | `bin/rails server`, edit a controller's `ruact_action`, file at `app/javascript/.ruact/server-functions.ts` updates without restart |
 | 6 | `bin/rails ruact:server_functions:generate` rake task (manual + CI/production hook) | **Implemented in Story 8.0a** | Task succeeds on a clean checkout; file is byte-identical to dev-mode output |
@@ -403,9 +403,11 @@ following points override them where they disagree:
 1. **Runtime/type contract (supersedes `## Decision` sketch lines 35–41).**
    The codegen emits **runtime** exports, not `export declare function`.
    Each entry is `export const <jsId>: <signature> = _makeRef("<rubySym>");`.
-   The default signatures are conservative:
+   The default signatures locked by Story 8.0a are:
    - Actions: `(args?: Record<string, unknown>) => Promise<unknown>`
    - Queries: `() => Promise<unknown>`
+   These are the **direct-callable surface** — they describe how the ref
+   appears to JS event handlers and to `await someRef(args)` call sites.
    Per-function precision (e.g. `(args: { title: string }) => Promise<{ id: number }>`)
    is **not** generated from the Ruby DSL in Phase 2 — devs annotate manually
    if they want stronger types. Evolution to Ruby-side type metadata is
@@ -416,10 +418,18 @@ following points override them where they disagree:
    `FormData` argument, not the `args: { title, body }` shape the body
    sketch implies. Story 8.1 owns the controller-side unwrapping
    (`FormData` → `params`); Story 8.2 owns the React-side path with
-   `useActionState` and the error overlay. The conservative TS signature
-   above (`(args?: Record<string, unknown>) => Promise<unknown>`) is wide
-   enough to accept either the `FormData` invocation path or a hand-shaped
-   POJO call from JS event handlers.
+   `useActionState` and the error overlay. **Open design decision deferred
+   to Story 8.2:** the conservative `Record<string, unknown>` signature
+   above is NOT structurally compatible with `FormData` in TypeScript —
+   `<form action={createPost}>` will fail `tsc --noEmit` against the
+   8.0a-emitted module as-is. Story 8.2 decides whether to (a) widen the
+   codegen signature to `(args?: FormData | Record<string, unknown>) =>
+   Promise<unknown>`, (b) export a sibling `.formAction` method on each
+   ref typed `(formData: FormData) => Promise<unknown>`, or (c) require
+   an explicit cast at the form's call site (`<form action={createPost
+   as (fd: FormData) => Promise<unknown>}>`). 8.0a does not pre-commit
+   to one — picking it here would lock the 8.2 design without the
+   implementation context that disambiguates the trade-offs.
 
 3. **Query transport is POST for everything (supersedes Implementation
    Surface row #3's `GET /__ruact/fn/:name?args=...`).** Both actions and
@@ -435,8 +445,26 @@ following points override them where they disagree:
    Phase 3 ADR addendum once React 19's stable `use()` semantics + adoption
    signal land.
 
+5. **Query params contract.** The hook accepts `useQuery(ref, params?)`
+   while the 8.0a-emitted query ref's direct-callable signature is
+   `() => Promise<unknown>` (no params on the callable surface). The two
+   shapes coexist because **the hook does NOT invoke the ref as a
+   function**; it reads the ref's `$$id` metadata and POSTs to
+   `/__ruact/fn/:id` with `params` in the request body itself. The ref
+   stays callable for parity with action refs (so devtools / tooling can
+   treat both uniformly), but for queries the canonical access path is
+   the hook, not the call. **Open design decision deferred to Story 9.2:**
+   whether to (a) keep the no-args callable signature and have `useQuery`
+   read `$$id` (current intent), (b) widen the callable to
+   `(args?: Record<string, unknown>) => Promise<unknown>` and have
+   `useQuery` invoke the ref directly (symmetric with actions, simpler
+   runtime), or (c) introduce a typed `ServerRef<TParams, TResult>`
+   metadata wrapper. 8.0a's codegen does not pre-commit; option (b)
+   would require widening the emitted signature and is the most likely
+   pick if symmetry wins, but 9.2's implementation context will decide.
+
 These clarifications were registered through Story 8.0's Review Findings
-section (the four `[Review][Patch]` items referencing this file). The
-Decision log is append-only — do not rewrite the body sketches above. If a
-future story conflicts with these clarifications, add a new dated entry
-here.
+section (the original four `[Review][Patch]` items + the 2026-05-13 Re-run
+batch). The Decision log is append-only — do not rewrite the body sketches
+above. If a future story conflicts with these clarifications, add a new
+dated entry here.
