@@ -40,6 +40,8 @@ module Ruact
       require_relative "erb_preprocessor_hook"
       ActionView::Base.include(Ruact::ViewHelper)
       ActionView::Template::Handlers::ERB.prepend(Ruact::ErbPreprocessorHook)
+
+      Ruact::Railtie.write_server_functions_snapshot!
     end
 
     # Detect streaming capability at boot and log the active mode (AC#1–3).
@@ -81,6 +83,22 @@ module Ruact
     rescue Errno::ECONNREFUSED, Errno::EHOSTUNREACH
       Rails.logger.warn "[ruact] Vite dev server not detected at localhost:5173 " \
                         "— run npm run dev for HMR"
+    end
+
+    # Writes the server-functions JSON snapshot to tmp/cache/ruact/ on every
+    # config.to_prepare. The write is short-circuited when the registry payload
+    # is unchanged (Story 8.0a — pitfall #1: dev mode fires to_prepare per
+    # request; a naive rewrite would burn IOPS and confuse the Vite plugin's
+    # chokidar watcher).
+    #
+    # @return [Boolean] true if a fresh file was written, false if unchanged.
+    def self.write_server_functions_snapshot!
+      path = Rails.root.join("tmp/cache/ruact/server-functions.json")
+      Ruact::ServerFunctions::Snapshot.generate!(
+        action_registry: Ruact.action_registry,
+        query_registry: Ruact.query_registry,
+        path: path
+      )
     end
 
     # Checks whether the manifest exists and either warns (dev) or raises (prod).

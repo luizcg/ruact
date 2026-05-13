@@ -50,5 +50,10 @@ RSpec.configure do |config|
   config.before do
     Ruact.instance_variable_set(:@config, nil)
     Ruact.instance_variable_set(:@configured_at_least_once, false)
+    # Story 8.0a: both server-function registries are lazy-initialized module
+    # singletons. Wipe them between examples so register/clear specs in one file
+    # cannot bleed entries into another under random order.
+    Ruact.instance_variable_set(:@action_registry, nil)
+    Ruact.instance_variable_set(:@query_registry, nil)
   end
 end

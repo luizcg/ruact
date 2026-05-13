@@ -61,6 +61,38 @@ module Ruact
           File.exist?(destination_root.join("app/javascript/components/.keep"))
       end
 
+      # Story 8.0a — scaffold the directory the codegen writes into and add the
+      # generated artifacts to .gitignore. The TS module is regenerated on every
+      # boot from the action and query registries, so it should never be
+      # version-controlled; same for the bridge JSON under tmp/cache/.
+      def create_server_functions_directory
+        empty_directory "app/javascript/.ruact"
+        create_file "app/javascript/.ruact/.gitkeep" unless
+          File.exist?(destination_root.join("app/javascript/.ruact/.gitkeep"))
+      end
+
+      def append_gitignore_entries
+        gitignore = destination_root.join(".gitignore")
+        return unless gitignore.exist?
+
+        entries = [
+          "app/javascript/.ruact/server-functions.ts",
+          "tmp/cache/ruact/"
+        ]
+        existing = File.read(gitignore)
+        new_entries = entries.reject { |e| existing.include?(e) }
+        return if new_entries.empty?
+
+        append_to_file ".gitignore", "\n# ruact (Story 8.0a — auto-generated server-functions module)\n"
+        new_entries.each { |entry| append_to_file ".gitignore", "#{entry}\n" }
+      end
+
+      def prime_server_functions_codegen
+        rake "ruact:server_functions:generate"
+      rescue StandardError => e
+        say_status "skip", "ruact:server_functions:generate not invocable yet — #{e.message}", :yellow
+      end
+
       def create_vite_config
         vite_config_file = destination_root.join("vite.config.js")
 

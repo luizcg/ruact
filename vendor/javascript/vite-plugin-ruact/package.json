@@ -1,0 +1,15 @@
+{
+  "name": "vite-plugin-ruact",
+  "version": "0.0.0-bundled",
+  "description": "Vite plugin bundled with the ruact Ruby gem. Auto-discovers React client components and emits the Flight wire manifest; Story 8.0a adds server-functions codegen.",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^2.0.0"
+  },
+  "license": "MIT",
+  "private": true
+}

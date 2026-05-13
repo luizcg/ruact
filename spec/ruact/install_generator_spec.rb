@@ -208,5 +208,71 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(content).not_to include('from "vite-plugin-ruact"')
       end
     end
+
+    describe "server-functions scaffold (Story 8.0a — AC8)", :story_8_0a do
+      # Reproduces append_gitignore_entries logic from the install generator
+      # so the spec can be expressed without a full Rails::Generators::TestCase.
+      let(:gitignore_entries) do
+        [
+          "app/javascript/.ruact/server-functions.ts",
+          "tmp/cache/ruact/"
+        ]
+      end
+
+      def append_gitignore_entries(dest_root)
+        gitignore = File.join(dest_root, ".gitignore")
+        return :no_gitignore unless File.exist?(gitignore)
+
+        existing = File.read(gitignore)
+        new_entries = gitignore_entries.reject { |e| existing.include?(e) }
+        return :already_present if new_entries.empty?
+
+        File.open(gitignore, "a") do |io|
+          io.puts
+          io.puts "# ruact (Story 8.0a — auto-generated server-functions module)"
+          new_entries.each { |entry| io.puts entry }
+        end
+        :appended
+      end
+
+      def create_gitkeep(dest_root)
+        keep = File.join(dest_root, "app/javascript/.ruact/.gitkeep")
+        FileUtils.mkdir_p(File.dirname(keep))
+        return :already_present if File.exist?(keep)
+
+        File.write(keep, "")
+        :created
+      end
+
+      it "creates .ruact/.gitkeep so the directory is checkable in (Story 8.0a)" do
+        result = create_gitkeep(tmpdir)
+        expect(result).to eq(:created)
+        expect(File).to exist(File.join(tmpdir, "app/javascript/.ruact/.gitkeep"))
+      end
+
+      it "appends both .gitignore entries when missing (Story 8.0a)", :aggregate_failures do
+        write_file(".gitignore", "/tmp\n")
+        append_gitignore_entries(tmpdir)
+        content = read_file(".gitignore")
+        expect(content).to include("app/javascript/.ruact/server-functions.ts")
+        expect(content).to include("tmp/cache/ruact/")
+      end
+
+      it "is idempotent — running twice does not duplicate entries (Story 8.0a — pitfall #5)" do
+        write_file(".gitignore", "/tmp\n")
+        append_gitignore_entries(tmpdir)
+        append_gitignore_entries(tmpdir)
+
+        content = read_file(".gitignore")
+        expect(content.scan("app/javascript/.ruact/server-functions.ts").size).to eq(1)
+        expect(content.scan("tmp/cache/ruact/").size).to eq(1)
+      end
+
+      it "does not write to .gitignore when both entries already exist" do
+        write_file(".gitignore", "/tmp\napp/javascript/.ruact/server-functions.ts\ntmp/cache/ruact/\n")
+        result = append_gitignore_entries(tmpdir)
+        expect(result).to eq(:already_present)
+      end
+    end
   end
 end

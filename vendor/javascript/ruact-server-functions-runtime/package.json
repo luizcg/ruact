@@ -1,0 +1,12 @@
+{
+  "name": "ruact-server-functions-runtime",
+  "version": "0.0.0-placeholder",
+  "description": "Placeholder server-functions runtime for ruact gem (Story 8.0a). Replaced by the real implementation in Story 8.1.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "license": "MIT",
+  "private": true
+}

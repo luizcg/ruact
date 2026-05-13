@@ -200,11 +200,11 @@ invariant is preserved.
 | 1 | `Ruact.action_registry` + `Ruact.query_registry` (Ruby) | Story 8.1 (actions) + Story 9.1 (queries) | `Ruact.action_registry[:create_post] # => RuactAction(controller:, params:, returns:)` after the Ruby DSL macro evaluates |
 | 2 | DSL macros `ruact_action :name do |params| ... end` and `ruact_query :name do ... end` | Story 8.1 + 9.1 | Defining a macro at controller-class load time both registers the symbol and defines the matching method (visibility and CSRF rules per Story 8.2 / 9.4) |
 | 3 | Server-function endpoint (single Rails route mounted by the gem; resolves by symbolic name from registries 1+2; no per-function entries in `routes.rb`) | Story 8.1 | `POST /__ruact/fn/:name` returns the action result; `GET /__ruact/fn/:name?args=...` returns the query result; both reuse `Ruact::Controller` security/CSRF |
-| 4 | `vite-plugin-ruact` extension that emits `app/javascript/.ruact/server-functions.ts` from a Rails-side dump (JSON written by a Railtie initializer) | **NEW Story 8.0a** (added to backlog by this spike — see Task 5.3) | Generated file present, `tsc --noEmit` green on a freshly-installed playground |
-| 5 | Rails `config.to_prepare` hook that triggers regeneration of #4 in dev | Story 8.0a (rolled into the same plugin story) | `bin/rails server`, edit a controller's `ruact_action`, file at `app/javascript/.ruact/server-functions.ts` updates without restart |
-| 6 | `bin/rails ruact:server_functions:generate` rake task (manual + CI/production hook) | Story 8.0a | Task succeeds on a clean checkout; file is byte-identical to dev-mode output |
-| 7 | `rails generate ruact:install` updates: add `app/javascript/.ruact/.gitkeep`, add `app/javascript/.ruact/server-functions.ts` to `.gitignore`, run the generate rake task once | Story 8.1 (small extension) | Fresh `rails new` + `rails generate ruact:install` results in a working playground that can call a stub action without further setup |
-| 8 | Naming-bridge implementation in #4 (Ruby → JS identifier) | Story 8.0a | The 6 edge cases enumerated in "Naming bridge" below all behave per spec |
+| 4 | `vite-plugin-ruact` extension that emits `app/javascript/.ruact/server-functions.ts` from a Rails-side dump (JSON written by a Railtie initializer) | **Implemented in Story 8.0a** | Generated file present, `tsc --noEmit` green on a freshly-installed playground |
+| 5 | Rails `config.to_prepare` hook that triggers regeneration of #4 in dev | **Implemented in Story 8.0a** | `bin/rails server`, edit a controller's `ruact_action`, file at `app/javascript/.ruact/server-functions.ts` updates without restart |
+| 6 | `bin/rails ruact:server_functions:generate` rake task (manual + CI/production hook) | **Implemented in Story 8.0a** | Task succeeds on a clean checkout; file is byte-identical to dev-mode output |
+| 7 | `rails generate ruact:install` updates: add `app/javascript/.ruact/.gitkeep`, add `app/javascript/.ruact/server-functions.ts` to `.gitignore`, run the generate rake task once | **Implemented in Story 8.0a** (originally tagged Story 8.1; landed early because the codegen surface lives in 8.0a) | Fresh `rails new` + `rails generate ruact:install` results in a working playground that can call a stub action without further setup |
+| 8 | Naming-bridge implementation in #4 (Ruby → JS identifier) | **Implemented in Story 8.0a** | The 6 edge cases enumerated in "Naming bridge" below all behave per spec |
 | 9 | `useQuery(reference)` hook (consumes the named import; integrates with React Suspense) | Story 9.2 | `useQuery(categories)` suspends, then resolves; works inside `<Suspense>` boundary; cache key is the reference's `$$id` |
 
 Every machinery item has a story assignment. The new Story 8.0a (Vite plugin
@@ -296,3 +296,28 @@ all 6 naming-bridge edge cases pass. Implementation surface enumerated; new
 Story 8.0a created for the Vite plugin extension that emits the generated
 module. No deviation from the spike's draft personal-opinion candidate, but
 the matrix scoring is what locked the decision (not the gut feel).
+
+### 2026-05-13 — Implementation (Story 8.0a)
+
+Implementation surface rows #4, #5, #6, and #8 landed (plus #7's install-
+generator extension, which was originally scoped to Story 8.1 but the
+codegen scaffolding belongs alongside the rest of the 8.0a surface).
+Ruby-side modules live under `gem/lib/ruact/server_functions/` (`NameBridge`,
+`Registry`, `RegistryEntry`, `Snapshot`, `SnapshotWriter`, `Codegen`); the
+Vite-plugin sidecar is `gem/vendor/javascript/vite-plugin-ruact/server-functions-codegen.mjs`
+with a vitest harness alongside; the placeholder runtime at
+`gem/vendor/javascript/ruact-server-functions-runtime/` ships an
+intentionally-failing `_makeRef` so absent Story 8.1 wiring fails loudly at
+call time. The JSON bridge lands at `tmp/cache/ruact/server-functions.json`,
+the TS module at `app/javascript/.ruact/server-functions.ts`; both are
+write-if-changed and gitignored. Cross-implementation parity (Ruby ↔ JS
+codegens emit byte-identical output) is enforced by a vitest test that
+shells out to `ruby -Ilib -rruact/server_functions/codegen -e ...` on a
+literal fixture (`server-functions-codegen.test.mjs` → "Story 8.0a — Ruby
+parity"). Empty registries are valid: 8.0a merges them as `[]` and Stories
+8.1 / 9.1 populate them later. **No deviation from the locked contract**:
+the import specifier remains `"ruact/server-functions-runtime"`; the
+runtime alias is auto-registered by the Vite plugin's `config` hook against
+the bundled placeholder package. See
+[Story 8.0a](../../../../_bmad-output/implementation-artifacts/8-0a-vite-plugin-server-functions-codegen.md)
+for the full task breakdown and AC mapping.

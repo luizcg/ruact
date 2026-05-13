@@ -7,3 +7,6 @@
 /spec/reports/
 /tmp/
 *.gem
+
+# Story 8.0a — vitest devDeps (the bundled Vite plugin's only test runtime).
+vendor/javascript/vite-plugin-ruact/node_modules/

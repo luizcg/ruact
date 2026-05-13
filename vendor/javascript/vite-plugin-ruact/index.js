@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { installServerFunctionsHooks } from "./server-functions-codegen.mjs";
 
 /**
  * vite-plugin-ruact
@@ -26,7 +27,7 @@ export default function ruact(options = {}) {
   let root;
   let manifest = {};
 
-  return {
+  return installServerFunctionsHooks({
     name: "vite-plugin-ruact",
 
     configResolved(config) {
@@ -83,7 +84,7 @@ export default function ruact(options = {}) {
         }
       });
     },
-  };
+  }, options);
 }
 
 function buildManifest(componentsDir) {
