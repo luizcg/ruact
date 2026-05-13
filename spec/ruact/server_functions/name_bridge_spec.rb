@@ -122,7 +122,7 @@ module Ruact
             end
           end
 
-          it "rejects multi-word symbols that camelCase into a reserved word" do
+          it "accepts multi-word symbols whose camelCased output is not reserved" do
             # No real Ruby snake_case maps to a single reserved word post-
             # camelCasing (reserved words are themselves single-word), but the
             # check happens AFTER camelCasing so a hypothetical degenerate
