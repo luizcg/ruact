@@ -4,8 +4,9 @@
 // (Task 8.5). The parity test is the load-bearing CI guard against the two
 // codegen implementations drifting apart.
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -223,9 +224,15 @@ describe("Story 8.0a — generateOnce()", () => {
 });
 
 describe("Story 8.0a — buildConfigContribution() (AC6 — @ alias)", () => {
-  it("registers @ alias when host config does not define it", () => {
+  it("registers @ alias as <root>/app/javascript when host config does not define it " +
+    "(Chunk 2 patch 2026-05-13 — no placeholder, AC6 shape)", () => {
+    const contribution = buildConfigContribution({ root: "/my/app" });
+    expect(contribution.resolve.alias["@"]).toBe(path.resolve("/my/app", "app/javascript"));
+  });
+
+  it("falls back to process.cwd() when userConfig.root is absent", () => {
     const contribution = buildConfigContribution({});
-    expect(contribution.resolve.alias["@"]).toBe("@PROJECT_APP_JAVASCRIPT@");
+    expect(contribution.resolve.alias["@"]).toBe(path.resolve(process.cwd(), "app/javascript"));
   });
 
   it("leaves @ alias intact when host pre-defines it", () => {
@@ -249,7 +256,7 @@ describe("Story 8.0a — buildConfigContribution() (AC6 — @ alias)", () => {
 });
 
 describe("Story 8.0a — installServerFunctionsHooks() composition", () => {
-  it("preserves the host plugin's existing hooks", () => {
+  it("preserves the host plugin's existing hooks", async () => {
     const calls = [];
     const plugin = {
       name: "vite-plugin-ruact",
@@ -262,19 +269,264 @@ describe("Story 8.0a — installServerFunctionsHooks() composition", () => {
     };
     installServerFunctionsHooks(plugin);
 
-    plugin.configResolved({ root: tmpdir });
-    plugin.buildStart();
+    await plugin.configResolved({ root: tmpdir });
+    await plugin.buildStart();
 
     expect(calls).toEqual(["configResolved", "buildStart"]);
   });
 
-  it("resolves the @ alias placeholder against the actual root in configResolved", () => {
+  it("config() returns the resolved @ alias inline (Chunk 2 H1 — drop placeholder + " +
+    "configResolved rewrite)", async () => {
     const plugin = { name: "vite-plugin-ruact" };
     installServerFunctionsHooks(plugin);
 
-    const aliases = { "@": "@PROJECT_APP_JAVASCRIPT@" };
-    plugin.configResolved({ root: "/my/app", resolve: { alias: aliases } });
-    expect(aliases["@"]).toBe(path.resolve("/my/app", "app/javascript"));
+    const merged = await plugin.config({ root: "/my/app" }, { mode: "development" });
+    expect(merged.resolve.alias["@"]).toBe(path.resolve("/my/app", "app/javascript"));
+  });
+
+  it("config() awaits an async upstream handler (Chunk 2 M2 — async hook support)", async () => {
+    const calls = [];
+    const plugin = {
+      name: "vite-plugin-ruact",
+      async config() {
+        await new Promise((r) => setTimeout(r, 5));
+        calls.push("upstream-resolved");
+        return { server: { port: 5173 } };
+      },
+    };
+    installServerFunctionsHooks(plugin);
+
+    const merged = await plugin.config({ root: tmpdir }, { mode: "development" });
+    expect(calls).toEqual(["upstream-resolved"]);
+    // upstream survives merge
+    expect(merged.server.port).toBe(5173);
+    // sidecar contribution wins on resolve.alias
+    expect(merged.resolve.alias[RUNTIME_IMPORT_SPECIFIER]).toBe(runtimePackagePath());
+  });
+
+  it("config() preserves upstream's array-form resolve.alias instead of corrupting it " +
+    "into numeric-keyed object (Chunk 2 M2 — alias-array safety)", async () => {
+    const plugin = {
+      name: "vite-plugin-ruact",
+      config() {
+        return {
+          resolve: {
+            alias: [
+              { find: "~components", replacement: "/host/components" },
+              { find: "~lib", replacement: "/host/lib" },
+            ],
+          },
+        };
+      },
+    };
+    installServerFunctionsHooks(plugin);
+
+    const merged = await plugin.config({ root: "/my/app" }, { mode: "development" });
+    // After the patch, merged alias is still array-form (host's shape preserved)
+    expect(Array.isArray(merged.resolve.alias)).toBe(true);
+    // Sidecar entries prepended (so they take precedence in Vite's top-down order)
+    const finds = merged.resolve.alias.map((e) => e.find);
+    expect(finds).toContain("~components");
+    expect(finds).toContain("~lib");
+    expect(finds).toContain("@");
+    expect(finds).toContain(RUNTIME_IMPORT_SPECIFIER);
+  });
+
+  it("buildStart() awaits async upstream before running codegen (Chunk 2 M2)", async () => {
+    const order = [];
+    const plugin = {
+      name: "vite-plugin-ruact",
+      async buildStart() {
+        await new Promise((r) => setTimeout(r, 5));
+        order.push("upstream");
+      },
+    };
+    const snapshotJson = path.join(tmpdir, "snap.json");
+    const generatedTs = path.join(tmpdir, "out.ts");
+    fs.writeFileSync(snapshotJson, JSON.stringify(baseSnapshot()));
+
+    installServerFunctionsHooks(plugin, { snapshotJson, generatedTs });
+    await plugin.configResolved({ root: tmpdir });
+    await plugin.buildStart();
+    order.push("after-buildStart");
+
+    // If upstream weren't awaited, "after-buildStart" would precede "upstream"
+    expect(order).toEqual(["upstream", "after-buildStart"]);
+    expect(fs.existsSync(generatedTs)).toBe(true);
+  });
+});
+
+describe("Story 8.0a — snapshot validation (Chunk 2 M1 — trust-boundary guards)", () => {
+  it("rejects snapshot whose version contains a newline (would break out of comment)", () => {
+    const evil = baseSnapshot({ version: "1\n// injected" });
+    expect(() => render(evil)).toThrow(/version.*line break|line break.*version/i);
+  });
+
+  it("rejects snapshot whose generated_at contains a newline", () => {
+    const evil = baseSnapshot({ generated_at: "2026-05-13\n// injected" });
+    expect(() => render(evil)).toThrow(/generated_at.*line break|line break.*generated_at/i);
+  });
+
+  it("rejects snapshot whose functions field is not an array", () => {
+    const evil = baseSnapshot({ functions: "oops" });
+    expect(() => render(evil)).toThrow(/functions.*array/);
+  });
+
+  it("rejects snapshot entry with unknown kind", () => {
+    const evil = baseSnapshot({
+      functions: [{ ruby_symbol: "foo", js_identifier: "foo", kind: "mutation" }],
+    });
+    expect(() => render(evil)).toThrow(/invalid kind/);
+  });
+
+  it("rejects snapshot with duplicate js_identifier entries", () => {
+    const evil = baseSnapshot({
+      functions: [
+        { ruby_symbol: "foo", js_identifier: "foo", kind: "action" },
+        { ruby_symbol: "bar", js_identifier: "foo", kind: "query" },
+      ],
+    });
+    expect(() => render(evil)).toThrow(/duplicate js_identifier "foo"/);
+  });
+
+  it("rejects snapshot entry whose js_identifier is a JS reserved word", () => {
+    const evil = baseSnapshot({
+      functions: [{ ruby_symbol: "delete", js_identifier: "delete", kind: "action" }],
+    });
+    expect(() => render(evil)).toThrow(/reserved JS word/);
+  });
+});
+
+describe("Story 8.0a — readSnapshot() (Chunk 2 M3 — log malformed JSON)", () => {
+  it("logs an error and returns null when JSON is malformed", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    delete process.env.RUACT_SILENCE_LOG;
+    try {
+      const snap = path.join(tmpdir, "bad.json");
+      fs.writeFileSync(snap, "{ not json");
+      const result = readSnapshot(snap);
+      expect(result).toBeNull();
+      expect(errSpy).toHaveBeenCalledTimes(1);
+      expect(errSpy.mock.calls[0][0]).toMatch(/failed to parse server-functions bridge JSON/);
+    } finally {
+      errSpy.mockRestore();
+      process.env.RUACT_SILENCE_LOG = "1";
+    }
+  });
+
+  it("returns null silently (no error log) when file is simply absent", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    delete process.env.RUACT_SILENCE_LOG;
+    try {
+      expect(readSnapshot(path.join(tmpdir, "missing.json"))).toBeNull();
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+      process.env.RUACT_SILENCE_LOG = "1";
+    }
+  });
+});
+
+describe("Story 8.0a — configureServer watcher (Chunk 2 m1 + m2)", () => {
+  function buildMockServer() {
+    const watcher = new EventEmitter();
+    watcher.add = vi.fn();
+    return { watcher };
+  }
+
+  it("registers the canonical snapshot path with chokidar (AC9)", async () => {
+    const plugin = { name: "vite-plugin-ruact" };
+    const snapshotJson = path.join(tmpdir, "snap.json");
+    const generatedTs = path.join(tmpdir, "out.ts");
+    installServerFunctionsHooks(plugin, { snapshotJson, generatedTs });
+
+    await plugin.configResolved({ root: tmpdir });
+    const server = buildMockServer();
+    await plugin.configureServer(server);
+
+    expect(server.watcher.add).toHaveBeenCalledWith(path.resolve(snapshotJson));
+  });
+
+  it("re-runs codegen when the watcher emits 'change' for the snapshot path", async () => {
+    const plugin = { name: "vite-plugin-ruact" };
+    const snapshotJson = path.join(tmpdir, "snap.json");
+    const generatedTs = path.join(tmpdir, "out.ts");
+    fs.writeFileSync(snapshotJson, JSON.stringify(baseSnapshot()));
+    installServerFunctionsHooks(plugin, { snapshotJson, generatedTs });
+
+    await plugin.configResolved({ root: tmpdir });
+    const server = buildMockServer();
+    await plugin.configureServer(server);
+
+    fs.writeFileSync(
+      snapshotJson,
+      JSON.stringify(
+        baseSnapshot({
+          functions: [{ ruby_symbol: "demo_ping", js_identifier: "demoPing", kind: "action" }],
+        }),
+      ),
+    );
+    server.watcher.emit("change", snapshotJson);
+
+    expect(fs.readFileSync(generatedTs, "utf8")).toContain("export const demoPing");
+  });
+
+  it("re-runs codegen when the watcher emits 'add' for the snapshot path", async () => {
+    const plugin = { name: "vite-plugin-ruact" };
+    const snapshotJson = path.join(tmpdir, "snap.json");
+    const generatedTs = path.join(tmpdir, "out.ts");
+    installServerFunctionsHooks(plugin, { snapshotJson, generatedTs });
+
+    await plugin.configResolved({ root: tmpdir });
+    const server = buildMockServer();
+    await plugin.configureServer(server);
+
+    fs.writeFileSync(snapshotJson, JSON.stringify(baseSnapshot()));
+    server.watcher.emit("add", snapshotJson);
+
+    expect(fs.existsSync(generatedTs)).toBe(true);
+    expect(fs.readFileSync(generatedTs, "utf8")).toContain("AUTO-GENERATED");
+  });
+
+  it("ignores events for unrelated files", async () => {
+    const plugin = { name: "vite-plugin-ruact" };
+    const snapshotJson = path.join(tmpdir, "snap.json");
+    const generatedTs = path.join(tmpdir, "out.ts");
+    installServerFunctionsHooks(plugin, { snapshotJson, generatedTs });
+
+    await plugin.configResolved({ root: tmpdir });
+    const server = buildMockServer();
+    await plugin.configureServer(server);
+
+    server.watcher.emit("change", path.join(tmpdir, "other.json"));
+    expect(fs.existsSync(generatedTs)).toBe(false);
+  });
+
+  it("matches non-canonical event paths against the snapshot path (Chunk 2 m1 — " +
+    "path.resolve canonicalization)", async () => {
+    const plugin = { name: "vite-plugin-ruact" };
+    const snapshotJson = path.join(tmpdir, "snap.json");
+    const generatedTs = path.join(tmpdir, "out.ts");
+    fs.writeFileSync(snapshotJson, JSON.stringify(baseSnapshot()));
+    installServerFunctionsHooks(plugin, { snapshotJson, generatedTs });
+
+    await plugin.configResolved({ root: tmpdir });
+    const server = buildMockServer();
+    await plugin.configureServer(server);
+
+    fs.writeFileSync(
+      snapshotJson,
+      JSON.stringify(
+        baseSnapshot({
+          functions: [{ ruby_symbol: "categories", js_identifier: "categories", kind: "query" }],
+        }),
+      ),
+    );
+    // Emit a path that's logically the same file but with `./` inserted
+    const noncanonical = path.join(path.dirname(snapshotJson), ".", path.basename(snapshotJson));
+    server.watcher.emit("change", noncanonical);
+
+    expect(fs.readFileSync(generatedTs, "utf8")).toContain("export const categories");
   });
 });
 

@@ -4,8 +4,12 @@
   "description": "Placeholder server-functions runtime for ruact gem (Story 8.0a). Replaced by the real implementation in Story 8.1.",
   "type": "module",
   "main": "index.js",
+  "types": "./index.d.ts",
   "exports": {
-    ".": "./index.js"
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
   },
   "license": "MIT",
   "private": true

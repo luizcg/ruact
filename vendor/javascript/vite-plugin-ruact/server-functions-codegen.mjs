@@ -24,6 +24,20 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 export const RUNTIME_IMPORT_SPECIFIER = "ruact/server-functions-runtime";
 
+export const VALID_JS_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+// Mirror of Ruby `NameBridge::RESERVED_JS_IDENTIFIERS`. The Ruby side enforces
+// this at controller load time (Story 8.1 / 9.1). The JS side re-enforces
+// because the JSON bridge is an independent trust boundary — a hand-edited
+// snapshot bypasses the Ruby check.
+const RESERVED_JS_IDENTIFIERS = new Set([
+  "arguments", "async", "await", "break", "case", "catch", "class", "const", "continue",
+  "debugger", "default", "delete", "do", "else", "enum", "eval", "export", "extends", "false",
+  "finally", "for", "function", "if", "implements", "import", "in", "instanceof", "interface",
+  "let", "new", "null", "package", "private", "protected", "public", "return", "static", "super",
+  "switch", "this", "throw", "true", "try", "typeof", "var", "void", "while", "with", "yield",
+]);
+
 /**
  * Absolute path to the placeholder runtime bundled inside the gem. Used as the
  * target of the `ruact/server-functions-runtime` Vite alias so host apps
@@ -36,6 +50,101 @@ export function runtimePackagePath() {
 }
 
 /**
+ * Validates the snapshot shape before rendering. The bridge JSON is a trust
+ * boundary — a corrupted or hand-edited snapshot must fail loudly rather than
+ * silently emit invalid TS. Mirrors the Ruby-side guarantees (kind allowlist,
+ * reserved-word ban, duplicate js_identifier detection) so this side stays
+ * safe when consumed standalone (e.g., `vite build` without the rake task).
+ *
+ * @param {unknown} snapshot
+ */
+function validateSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") {
+    throw new Error(
+      "ruact server-function codegen: snapshot is not an object — " +
+        "the bridge JSON is corrupted; regenerate via " +
+        "`bin/rails ruact:server_functions:generate`.",
+    );
+  }
+
+  const { version, generated_at, functions } = snapshot;
+
+  if (typeof version !== "number" && typeof version !== "string") {
+    throw new Error(
+      `ruact server-function codegen: snapshot.version must be a number or string, got ${typeof version}`,
+    );
+  }
+  const versionStr = String(version);
+  if (versionStr.includes("\n") || versionStr.includes("\r")) {
+    throw new Error(
+      "ruact server-function codegen: snapshot.version contains a line break — " +
+        "would break out of the header comment; snapshot JSON is corrupted.",
+    );
+  }
+
+  if (typeof generated_at !== "string") {
+    throw new Error(
+      `ruact server-function codegen: snapshot.generated_at must be a string, got ${typeof generated_at}`,
+    );
+  }
+  if (generated_at.includes("\n") || generated_at.includes("\r")) {
+    throw new Error(
+      "ruact server-function codegen: snapshot.generated_at contains a line break — " +
+        "would break out of the header comment; snapshot JSON is corrupted.",
+    );
+  }
+
+  if (!Array.isArray(functions)) {
+    throw new Error(
+      `ruact server-function codegen: snapshot.functions must be an array, got ${typeof functions}`,
+    );
+  }
+
+  const seen = new Set();
+  for (const fn of functions) {
+    if (!fn || typeof fn !== "object") {
+      throw new Error(
+        `ruact server-function codegen: snapshot.functions entry is not an object: ${JSON.stringify(fn)}`,
+      );
+    }
+    if (fn.kind !== "action" && fn.kind !== "query") {
+      throw new Error(
+        "ruact server-function codegen: snapshot.functions entry has invalid kind " +
+          `${JSON.stringify(fn.kind)} (must be "action" or "query") for ` +
+          `ruby_symbol=${JSON.stringify(fn.ruby_symbol)}`,
+      );
+    }
+    if (typeof fn.js_identifier !== "string" || !VALID_JS_IDENTIFIER.test(fn.js_identifier)) {
+      throw new Error(
+        "ruact server-function codegen rejected a snapshot entry: " +
+          `ruby_symbol=${JSON.stringify(fn.ruby_symbol)} ` +
+          `js_identifier=${JSON.stringify(fn.js_identifier)} is not a valid JS identifier ` +
+          "(must match /^[A-Za-z_$][A-Za-z0-9_$]*$/). The snapshot JSON is " +
+          "corrupted or was hand-edited — regenerate via " +
+          "`bin/rails ruact:server_functions:generate`.",
+      );
+    }
+    if (RESERVED_JS_IDENTIFIERS.has(fn.js_identifier)) {
+      throw new Error(
+        `ruact server-function codegen: js_identifier "${fn.js_identifier}" is a reserved ` +
+          `JS word — ruby_symbol=${JSON.stringify(fn.ruby_symbol)} would emit an invalid ` +
+          "TS module. Ruby NameBridge should have rejected this; regenerate via " +
+          "`bin/rails ruact:server_functions:generate`.",
+      );
+    }
+    if (seen.has(fn.js_identifier)) {
+      throw new Error(
+        `ruact server-function codegen: duplicate js_identifier "${fn.js_identifier}" in ` +
+          "snapshot — two entries would emit conflicting `export const` declarations. " +
+          "The snapshot JSON is corrupted or was hand-edited — regenerate via " +
+          "`bin/rails ruact:server_functions:generate`.",
+      );
+    }
+    seen.add(fn.js_identifier);
+  }
+}
+
+/**
  * Renders the snapshot Hash into the TS module text. MUST stay byte-identical
  * to {Ruact::ServerFunctions::Codegen.render}.
  *
@@ -44,9 +153,8 @@ export function runtimePackagePath() {
  * }> }} snapshot
  * @returns {string}
  */
-export const VALID_JS_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
-
 export function render(snapshot) {
+  validateSnapshot(snapshot);
   const { version, generated_at, functions } = snapshot;
   let out = "";
   out += "// AUTO-GENERATED by vite-plugin-ruact (Story 8.0a). DO NOT EDIT.\n";
@@ -54,7 +162,7 @@ export function render(snapshot) {
   out += `// Generated at: ${generated_at}\n`;
   out += `import { _makeRef } from "${RUNTIME_IMPORT_SPECIFIER}";\n`;
 
-  if (!functions || functions.length === 0) {
+  if (functions.length === 0) {
     out += "\n// (no server functions registered yet — Stories 8.1 / 9.1 populate)\n";
     // `noUnusedLocals` would otherwise flag the `_makeRef` import. The `void`
     // discard pattern keeps the import alive at zero runtime cost; once an
@@ -71,7 +179,6 @@ export function render(snapshot) {
 }
 
 function renderExport(fn) {
-  validateJsIdentifier(fn.js_identifier, fn.ruby_symbol);
   const signature =
     fn.kind === "query"
       ? "() => Promise<unknown>"
@@ -84,18 +191,6 @@ function renderExport(fn) {
   return (
     `export const ${fn.js_identifier}: ${signature} =\n` +
     `  _makeRef(${rubySymLiteral});\n`
-  );
-}
-
-function validateJsIdentifier(jsId, rubySym) {
-  if (typeof jsId === "string" && VALID_JS_IDENTIFIER.test(jsId)) return;
-  throw new Error(
-    "ruact server-function codegen rejected a snapshot entry: " +
-      `ruby_symbol=${JSON.stringify(rubySym)} ` +
-      `js_identifier=${JSON.stringify(jsId)} is not a valid JS identifier ` +
-      "(must match /^[A-Za-z_$][A-Za-z0-9_$]*$/). The snapshot JSON is " +
-      "corrupted or was hand-edited — regenerate via " +
-      "`bin/rails ruact:server_functions:generate`.",
   );
 }
 
@@ -122,7 +217,9 @@ export function writeIfChanged(outputPath, content) {
 
 /**
  * Reads and parses the bridge JSON. Returns null when the file is missing or
- * malformed so the caller can keep the last-known-good output in place.
+ * malformed so the caller can keep the last-known-good output in place. On
+ * malformed JSON (vs. simple absence), logs to stderr per AC9 so the developer
+ * gets a signal — the silent-swallow case was flagged in Chunk 2 review.
  *
  * @param {string} jsonPath
  * @returns {object|null}
@@ -131,7 +228,12 @@ export function readSnapshot(jsonPath) {
   if (!fs.existsSync(jsonPath)) return null;
   try {
     return JSON.parse(fs.readFileSync(jsonPath, "utf8"));
-  } catch (_err) {
+  } catch (err) {
+    logError(
+      `[ruact] failed to parse server-functions bridge JSON at ${jsonPath}: ` +
+        `${err?.message ?? err}. The last-good generated module is left intact — ` +
+        "re-run `bin/rails ruact:server_functions:generate` to regenerate the snapshot.",
+    );
     return null;
   }
 }
@@ -172,24 +274,32 @@ export function generateOnce(root, opts = {}) {
 }
 
 /**
- * Builds the partial Vite config the sidecar contributes. Currently sets two
+ * Builds the partial Vite config the sidecar contributes. Sets two
  * `resolve.alias` entries (Story 8.0a AC6 + runtime import path):
  *
  *   - `"@"` → `<root>/app/javascript` (only if the host hasn't set it)
  *   - `"ruact/server-functions-runtime"` → bundled placeholder package
  *
- * Returns an object suitable as a return value from the Vite `config` hook;
+ * Returns an object suitable as a return value from the Vite `config` hook.
  * Vite merges this with the user-supplied config, so existing aliases survive.
+ *
+ * The `@` alias is resolved to its final absolute path **at this point** —
+ * earlier versions used a `@PROJECT_APP_JAVASCRIPT@` sentinel rewritten in
+ * `configResolved`, which (a) violated AC6's "the config hook returns the AC
+ * shape" contract and (b) meant the alias would be wrong if `configResolved`
+ * never ran (e.g., transitively-imported in another tool's config). Now the
+ * root is computed inline from `userConfig.root || process.cwd()`.
  *
  * @param {object} userConfig
  * @returns {object}
  */
 export function buildConfigContribution(userConfig) {
+  const root = path.resolve(userConfig?.root || process.cwd());
   const hostAliases = readUserAliasMap(userConfig);
   const aliases = {};
 
   if (hostAliases["@"] === undefined) {
-    aliases["@"] = "@PROJECT_APP_JAVASCRIPT@"; // resolved in `configResolved`
+    aliases["@"] = path.resolve(root, "app/javascript");
     log(
       '[ruact] registered Vite alias "@" → app/javascript ' +
         '(override by setting resolve.alias["@"] in vite.config.js)',
@@ -225,6 +335,10 @@ function readUserAliasMap(userConfig) {
  * `configureServer` so the existing react-client-manifest behaviour stays
  * intact while the sidecar's behaviour piggybacks.
  *
+ * Each wrapper awaits its upstream handler — Vite hooks may legitimately
+ * return Promises, and dropping the await would race the sidecar's behaviour
+ * with the host plugin's.
+ *
  * @param {object} plugin — the host plugin (mutated in place).
  * @param {object} [options]
  * @returns {object} same plugin, fluent return.
@@ -233,50 +347,52 @@ export function installServerFunctionsHooks(plugin, options = {}) {
   let rootDir;
 
   const originalConfig = plugin.config;
-  plugin.config = function (userConfig, env) {
+  plugin.config = async function (userConfig, env) {
     const upstream =
       typeof originalConfig === "function"
-        ? originalConfig.call(this, userConfig, env)
+        ? await originalConfig.call(this, userConfig, env)
         : undefined;
     return mergeConfigs(upstream, buildConfigContribution(userConfig));
   };
 
   const originalConfigResolved = plugin.configResolved;
-  plugin.configResolved = function (config) {
+  plugin.configResolved = async function (config) {
     rootDir = config.root;
-    rewriteAtSymbolAlias(config, rootDir);
     if (typeof originalConfigResolved === "function") {
-      return originalConfigResolved.call(this, config);
+      return await originalConfigResolved.call(this, config);
     }
     return undefined;
   };
 
   const originalBuildStart = plugin.buildStart;
-  plugin.buildStart = function (opts) {
+  plugin.buildStart = async function (opts) {
     let result;
     if (typeof originalBuildStart === "function") {
-      result = originalBuildStart.call(this, opts);
+      result = await originalBuildStart.call(this, opts);
     }
     generateOnce(rootDir, options);
     return result;
   };
 
   const originalConfigureServer = plugin.configureServer;
-  plugin.configureServer = function (server) {
+  plugin.configureServer = async function (server) {
     let result;
     if (typeof originalConfigureServer === "function") {
-      result = originalConfigureServer.call(this, server);
+      result = await originalConfigureServer.call(this, server);
     }
     const { snapshotJson, generatedTs } = resolvePaths(rootDir, options);
-    server.watcher.add(snapshotJson);
-    server.watcher.on("change", (file) => {
-      if (file !== snapshotJson) return;
+    const canonicalSnapshot = path.resolve(snapshotJson);
+    server.watcher.add(canonicalSnapshot);
+    const onEvent = (file) => {
+      // Canonicalize the event path before comparison — chokidar may emit
+      // relative, normalized, or platform-specific path forms depending on
+      // how the watch was registered. Without resolving both sides we miss
+      // legitimate snapshot changes and skip dev regeneration.
+      if (path.resolve(file) !== canonicalSnapshot) return;
       generateOnce(rootDir, { ...options, snapshotJson, generatedTs });
-    });
-    server.watcher.on("add", (file) => {
-      if (file !== snapshotJson) return;
-      generateOnce(rootDir, { ...options, snapshotJson, generatedTs });
-    });
+    };
+    server.watcher.on("change", onEvent);
+    server.watcher.on("add", onEvent);
     return result;
   };
 
@@ -292,27 +408,41 @@ function mergeConfigs(a, b) {
     resolve: {
       ...(a.resolve || {}),
       ...(b.resolve || {}),
-      alias: { ...((a.resolve || {}).alias || {}), ...((b.resolve || {}).alias || {}) },
+      alias: mergeAliases((a.resolve || {}).alias, (b.resolve || {}).alias),
     },
   };
 }
 
-function rewriteAtSymbolAlias(config, rootDir) {
-  const alias = config?.resolve?.alias;
-  if (!alias) return;
-  if (Array.isArray(alias)) {
-    for (const entry of alias) {
-      if (entry?.find === "@" && entry.replacement === "@PROJECT_APP_JAVASCRIPT@") {
-        entry.replacement = path.resolve(rootDir, "app/javascript");
-      }
-    }
-  } else if (alias["@"] === "@PROJECT_APP_JAVASCRIPT@") {
-    alias["@"] = path.resolve(rootDir, "app/javascript");
+/**
+ * Merges two `resolve.alias` values, preserving array form when either side
+ * uses it. Earlier versions object-spread both sides, which corrupted upstream
+ * array-form aliases into numeric-keyed objects (`{0: entry, 1: entry, ...}`)
+ * — Vite then treated them as nothing and silently dropped the aliases.
+ */
+function mergeAliases(a, b) {
+  if (a == null) return b;
+  if (b == null) return a;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    const toEntries = (alias) => {
+      if (Array.isArray(alias)) return [...alias];
+      return Object.entries(alias).map(([find, replacement]) => ({ find, replacement }));
+    };
+    // Vite resolves array-form aliases top-down (first match wins). Our
+    // contribution (b) is prepended so it takes precedence — matching the
+    // object-merge semantics where `{...a, ...b}` lets b override.
+    return [...toEntries(b), ...toEntries(a)];
   }
+  return { ...a, ...b };
 }
 
 function log(message) {
   if (process.env.RUACT_SILENCE_LOG === "1") return;
   // eslint-disable-next-line no-console
   console.log(message);
+}
+
+function logError(message) {
+  if (process.env.RUACT_SILENCE_LOG === "1") return;
+  // eslint-disable-next-line no-console
+  console.error(message);
 }
