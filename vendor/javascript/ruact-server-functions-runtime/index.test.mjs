@@ -139,6 +139,25 @@ describe("Story 8.1 — JSON body branch", () => {
     const result = await _makeRef("noop")({});
     expect(result).toBeNull();
   });
+
+  it("resolves with null for 204 No Content even when Content-Type says application/json " +
+    "(review-batch 4 — order 204 check before JSON branch)", async () => {
+    const r = {
+      ok: true,
+      status: 204,
+      // Rails sends `head :no_content` with Content-Type: application/json
+      // when the controller is in a JSON-context. The 204 still has no body.
+      headers: { get: (n) => (n.toLowerCase() === "content-type" ? "application/json" : null) },
+      text: vi.fn(),
+      json: vi.fn().mockRejectedValue(new SyntaxError("Unexpected end of JSON input")),
+    };
+    globalThis.fetch = vi.fn().mockResolvedValue(r);
+    mockMetaTag(null);
+
+    const result = await _makeRef("noop")({});
+    expect(result).toBeNull();
+    expect(r.json).not.toHaveBeenCalled();
+  });
 });
 
 describe("Story 8.1 — FormData branch", () => {

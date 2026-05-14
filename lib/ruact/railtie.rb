@@ -76,6 +76,16 @@ module Ruact
       ActionView::Base.include(Ruact::ViewHelper)
       ActionView::Template::Handlers::ERB.prepend(Ruact::ErbPreprocessorHook)
 
+      # Story 8.1 review-batch 3 (2026-05-14) — force-load all controller
+      # files BEFORE writing the snapshot so the registry sees every
+      # `ruact_action` declaration. Without this, lazy autoload (Rails dev's
+      # default for `eager_load = false`) means a controller that hasn't
+      # been requested yet isn't loaded, so its `ruact_action` calls don't
+      # populate the registry — the codegen would then emit a stale TS
+      # module missing those exports until the controller is hit at least
+      # once. The endpoint controller would also 404 those names.
+      Ruact::Railtie.force_load_controllers!
+
       Ruact::Railtie.write_server_functions_snapshot!
     end
 
@@ -118,6 +128,48 @@ module Ruact
     rescue Errno::ECONNREFUSED, Errno::EHOSTUNREACH
       Rails.logger.warn "[ruact] Vite dev server not detected at localhost:5173 " \
                         "— run npm run dev for HMR"
+    end
+
+    # Story 8.1 review-batch 3 (2026-05-14) — force-loads every controller
+    # file under `Rails.application.config.paths["app/controllers"]` so the
+    # `ruact_action` registrations populate the registry on a clean boot.
+    #
+    # Without this, Rails' dev-mode lazy autoload only loads a controller
+    # when it's first referenced (typically the first request that routes
+    # to it). That means the codegen snapshot in `to_prepare` would miss
+    # any controller not yet touched.
+    #
+    # Implementation: glob the `app/controllers` directories listed in the
+    # Rails paths configuration and `require_dependency` each
+    # `*_controller.rb` file. `require_dependency` works in both Zeitwerk
+    # (Rails 7+) and the classic autoloader. On Zeitwerk it is implemented
+    # as `Rails.autoloaders.main.load_file(path)` under the hood.
+    #
+    # Errors are surfaced as `Ruact::Error` with a controller hint so the
+    # developer sees a meaningful boot failure instead of a silent skip.
+    #
+    # @return [Integer] number of controller files loaded.
+    def self.force_load_controllers!
+      paths = Rails.application.config.paths["app/controllers"]
+      return 0 unless paths.respond_to?(:existent)
+
+      loaded = 0
+      paths.existent.each do |dir|
+        Dir.glob("#{dir}/**/*_controller.rb").each do |file|
+          # `require_dependency` is the cross-autoloader-compatible API; it
+          # tells the autoloader to load the file AND track it for reload.
+          # In Rails 7+/Zeitwerk this delegates to Zeitwerk's autoloader.
+          require_dependency(file)
+          loaded += 1
+        end
+      end
+      loaded
+    rescue LoadError, NameError => e
+      raise Ruact::Error,
+            "ruact: failed to force-load a controller while populating " \
+            "Ruact.action_registry: #{e.class}: #{e.message}. The gem " \
+            "force-loads `app/controllers/**/*_controller.rb` at " \
+            "`config.to_prepare` so registries are complete on first boot."
     end
 
     # Writes the server-functions JSON snapshot to tmp/cache/ruact/ on every

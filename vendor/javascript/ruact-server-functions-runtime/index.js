@@ -101,11 +101,17 @@ function resolveCsrfToken() {
 }
 
 async function parseResponse(response) {
+  // Review-batch 4 (2026-05-14) — 204 No Content is always null, regardless
+  // of any `Content-Type` header the server may have set. The previous
+  // order (JSON branch first) would attempt to parse an empty body when
+  // Rails sent `204 No Content` with `Content-Type: application/json` (the
+  // default for a `render head: :no_content` in a JSON-context controller),
+  // throwing a SyntaxError instead of resolving null.
+  if (response.status === 204) return null;
   const contentType = response.headers.get("Content-Type") || "";
   if (contentType.includes("application/json")) {
     return response.json();
   }
-  if (response.status === 204) return null;
   return response.text();
 }
 

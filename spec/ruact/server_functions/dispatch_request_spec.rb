@@ -68,6 +68,15 @@ module DispatchRequestSpecSupport
     end
   end
 
+  # Stand-in for `ActiveRecord::RecordInvalid` — same call shape; no AR dep.
+  class StubRecordInvalid < StandardError
+    attr_reader :record
+    def initialize(message = "validation failed", record: nil)
+      super(message)
+      @record = record
+    end
+  end
+
   class TestController < ActionController::Base
     include Ruact::Controller
 
@@ -75,7 +84,14 @@ module DispatchRequestSpecSupport
       render(json: { error: error.message, error_class: error.class.name }, status: :unprocessable_entity)
     end
 
-    before_action :require_token, only: %i[__ruact_action_authed_action]
+    rescue_from StubRecordInvalid do |error|
+      render(
+        json: { error: error.message, error_class: error.class.name, validation: true },
+        status: :unprocessable_entity
+      )
+    end
+
+    before_action :require_token, only: %i[authed_action]
 
     # spec_helper wipes the registries between examples (lazy-init singletons
     # reset to fresh instances), so the controller's class-body `ruact_action`
@@ -99,6 +115,12 @@ module DispatchRequestSpecSupport
       ruact_action(:strong_params_demo) do |params|
         permitted = params.require(:post).permit(:title, :body)
         { "permitted" => permitted.to_h }
+      end
+
+      ruact_action(:nil_return) { |_p| nil }
+
+      ruact_action(:invalid_record) do |_p|
+        raise DispatchRequestSpecSupport::StubRecordInvalid, "Title can't be blank"
       end
     end
 
@@ -155,6 +177,30 @@ RSpec.describe "Story 8.1: POST /__ruact/fn/:name dispatch", :story_8_1 do
       expect(last_response.status).to eq(200)
       expect(JSON.parse(last_response.body)).to eq("echoed" => {})
     end
+
+    it "preserves form-encoded body fields named `name`, `action`, `controller` " \
+       "(review-batch 2 — drop spurious `.except`)" do
+      post "/__ruact/fn/echo", { "name" => "alice", "action" => "submit", "controller" => "foo" }
+      expect(last_response.status).to eq(200)
+      body = JSON.parse(last_response.body)
+      expect(body.fetch("echoed")).to include(
+        "name" => "alice",
+        "action" => "submit",
+        "controller" => "foo"
+      )
+    end
+
+    it "raises on malformed JSON instead of silently treating it as {} " \
+       "(review-batch 2 — fail loud on corrupted request bodies)" do
+      # Rails' own body parser middleware raises ParseError before our
+      # action handler runs — same fail-loud behaviour, slightly different
+      # error class. The point is: corrupted JSON is NOT silently coerced
+      # to an empty action-call. Pre-batch-2 our `ruact_action_raw_args`
+      # rescued JSON::ParserError and returned `{}`; that mask is removed.
+      expect do
+        post "/__ruact/fn/echo", "{ not json", { "CONTENT_TYPE" => "application/json" }
+      end.to raise_error(ActionDispatch::Http::Parameters::ParseError)
+    end
   end
 
   describe "AC3 — before_action chain runs before the block" do
@@ -193,6 +239,56 @@ RSpec.describe "Story 8.1: POST /__ruact/fn/:name dispatch", :story_8_1 do
       expect(last_response.status).to eq(422)
       body = JSON.parse(last_response.body)
       expect(body).to eq("error" => "intentional failure", "error_class" => "RuntimeError")
+    end
+  end
+
+  describe "AC2 — 204 No Content for nil block return (review-batch 1 2026-05-14)" do
+    it "renders 204 with empty body when the block returns nil" do
+      post "/__ruact/fn/nil_return", "{}", { "CONTENT_TYPE" => "application/json" }
+      expect(last_response.status).to eq(204)
+      expect(last_response.body).to eq("")
+    end
+  end
+
+  describe "AC8 — CSRF contract (review-batch 5 2026-05-14)" do
+    # The gem-level endpoint MUST skip forgery protection itself — otherwise
+    # the route would reject requests before reaching the host controller
+    # that's supposed to be the source of truth for CSRF. The host's
+    # `protect_from_forgery` then enforces (or doesn't, in API mode).
+    it "EndpointController has removed verify_authenticity_token from its callback chain " \
+       "(skip_forgery_protection was applied)" do
+      callbacks = Ruact::ServerFunctions::EndpointController._process_action_callbacks
+      filter_names = callbacks.map(&:filter)
+      expect(filter_names).not_to include(:verify_authenticity_token)
+    end
+
+    it "EndpointController inherits from ActionController::Base — runs the full CSRF middleware stack " \
+       "on dispatch (allowing the host's protect_from_forgery to take effect)" do
+      expect(Ruact::ServerFunctions::EndpointController.ancestors).to include(ActionController::Base)
+    end
+
+    # End-to-end CSRF behavior — a host controller with protect_from_forgery
+    # rejecting an invalid token — is a Rails-stack integration concern
+    # that requires session middleware + a real Rails request cycle with
+    # `config.action_controller.allow_forgery_protection = true`. The
+    # contract is preserved by virtue of (a) the gem skipping forgery on
+    # ITS endpoint and (b) delegating to `host_class.dispatch` which runs
+    # the host's own `verify_authenticity_token` filter. Pre-batch-5
+    # versions of the story file flagged this as deferred to Story 8.2's
+    # `<form action={fn}>` integration where CSRF is the user-visible path.
+  end
+
+  describe "AC9 — ActiveRecord-style validation errors (review-batch 5 2026-05-14)" do
+    it "wraps a validation-style error (RecordInvalid-shaped) into a structured 422 " \
+       "via the host's rescue_from" do
+      post "/__ruact/fn/invalid_record", "{}", { "CONTENT_TYPE" => "application/json" }
+      expect(last_response.status).to eq(422)
+      body = JSON.parse(last_response.body)
+      expect(body).to eq(
+        "error" => "Title can't be blank",
+        "error_class" => "DispatchRequestSpecSupport::StubRecordInvalid",
+        "validation" => true
+      )
     end
   end
 

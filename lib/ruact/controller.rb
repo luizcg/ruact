@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "json"
+require "set"
 require "socket"
 require "uri"
 
@@ -16,6 +17,25 @@ module Ruact
   # - Respond to text/html requests with an HTML shell + inline Flight payload
   module Controller
     extend ActiveSupport::Concern
+
+    # Story 8.1 review-batch 1 (2026-05-14) — symbols a host MUST NOT use
+    # as `ruact_action` / `ruact_query` names because overriding them
+    # would corrupt request handling. Keep sorted; documented per name:
+    # `:params`, `:request`, `:response`, `:headers`, `:session`, `:flash`,
+    # `:cookies` — request/response accessors; overriding breaks reads
+    # `:render`, `:redirect_to`, `:head`, `:send_file`, `:send_data` —
+    #   response producers; overriding breaks the response path
+    # `:action_name`, `:controller_name`, `:controller_path` — routing
+    #   identification; overriding breaks `before_action :foo, only:` matching
+    # `:url_for`, `:url_options` — URL generation
+    # `:dispatch`, `:process`, `:process_action` — Rails dispatch internals
+    # `:form_authenticity_token`, `:verified_request?` — CSRF plumbing
+    FRAMEWORK_RESERVED_METHODS = %i[
+      action_name controller_name controller_path cookies dispatch flash
+      form_authenticity_token head headers params process process_action
+      redirect_to render request response send_data send_file session
+      url_for url_options verified_request?
+    ].to_set.freeze
 
     # Story 8.1 — class-level DSL surface. The `ruact_action` macro registers
     # a server-callable symbol with `Ruact.action_registry` (so the Vite-plugin
@@ -46,32 +66,69 @@ module Ruact
                 "implementation with `ruact_action :#{symbol} do |params| ... end`"
         end
 
-        Ruact.action_registry.register(symbol, kind: :action, controller: self, &block)
-        define_method(symbol, &block)
-        private(symbol)
+        # Review-batch 1 (2026-05-14) — arity guard. The block's first
+        # parameter is the action-call args shadow; a zero-arity block would
+        # crash at dispatch time because the macro passes one argument.
+        unless block.arity == 1 || block.arity.negative?
+          raise ArgumentError,
+                "ruact_action :#{symbol} block must accept exactly one " \
+                "parameter (got arity=#{block.arity}). Use " \
+                "`ruact_action :#{symbol} do |params| ... end`."
+        end
 
-        # Dispatcher entry point. `Ruact::ServerFunctions::EndpointController`
-        # delegates to `host_controller.dispatch("__ruact_action_<name>",
-        # request, response)`; that runs the full ActionController callback
-        # chain (before_action, around_action, etc.) and ends here. The wrapper
-        # reads the action-call args from the request body (shadowing the
-        # request's own `params`) and renders the block's return value as
-        # JSON unless the block / a before_action already rendered.
+        # Review-batch 1 (2026-05-14) — framework-method-clobber guard.
+        # Refuse to define if the symbol matches one of the well-known
+        # ActionController instance methods that would corrupt request
+        # handling if overridden (the `:params`, `:render`, `:session`,
+        # `:redirect_to`, `:dispatch`, etc. footgun). The hardcoded list
+        # is the canonical set documented in the Rails Guides; it's used
+        # in place of a dynamic `ActionController::Base.method_defined?`
+        # check because (a) the gem can be loaded before ActionController
+        # (e.g., in a non-Rails context) and (b) the dynamic list would
+        # include too many low-risk inherited methods (`:object_id`,
+        # `:respond_to?`) and produce confusing error messages.
+        if FRAMEWORK_RESERVED_METHODS.include?(symbol)
+          raise Ruact::ConfigurationError,
+                "ruact_action :#{symbol} would clobber a framework method — " \
+                "#{symbol.inspect} is a reserved ActionController instance " \
+                "method. Pick a different symbol (e.g. :#{symbol}_action) so " \
+                "the host's CSRF / params / render plumbing remains intact."
+        end
+
+        Ruact.action_registry.register(symbol, kind: :action, controller: self, &block)
+
+        # Review-batch 1 (2026-05-14) — define `<symbol>` directly (no
+        # separate `__ruact_action_*` wrapper). This makes `before_action
+        # :foo, only: :create_post` match the actual action name. The
+        # method is public so `ActionController#process` dispatches to it
+        # through the standard callback chain.
         #
-        # The wrapper is PUBLIC because `ActionController#process` only
-        # dispatches to methods present in `action_methods` (the controller's
-        # public-method set minus a few framework methods). Devs are not
-        # expected to call `__ruact_action_<name>` directly; the
-        # double-underscore prefix is the social contract.
-        wrapper_name = "__ruact_action_#{symbol}"
-        define_method(wrapper_name) do
+        # Defense in depth: the method body raises unless invoked under the
+        # gem's endpoint dispatch path (a thread-local sentinel set by
+        # `Ruact::ServerFunctions::EndpointController#dispatch_action`).
+        # Without the sentinel, a wildcard route like `get ":controller/
+        # :action"` could otherwise reach `create_post` as a GET (no CSRF).
+        define_method(symbol) do
+          unless Thread.current[:__ruact_dispatching] == symbol
+            raise Ruact::Error,
+                  "ruact action :#{symbol} can only be invoked through " \
+                  "POST /__ruact/fn/:name. Direct method calls or wildcard " \
+                  "routes are rejected for security reasons."
+          end
           args = ruact_action_params
-          result = __send__(symbol, args)
-          render(json: result) unless performed?
+          result = instance_exec(args, &block)
+          return if performed?
+          # AC2: a nil block return renders 204 No Content (no body). A non-nil
+          # return renders 200 + JSON.
+          if result.nil?
+            head(:no_content)
+          else
+            render(json: result)
+          end
         end
 
         # ActionController caches `action_methods` lazily; clear the cache so
-        # the newly-defined wrapper is dispatchable in the same boot cycle
+        # the newly-defined action is dispatchable in the same boot cycle
         # (matters in tests and in dev where `ruact_action` declarations
         # accumulate after the controller class first loads).
         clear_action_methods! if respond_to?(:clear_action_methods!, true)
@@ -104,15 +161,24 @@ module Ruact
         body = request.body.read
         request.body.rewind if request.body.respond_to?(:rewind)
         return {} if body.nil? || body.empty?
+        # Review-batch 2 (2026-05-14) — raise on malformed JSON instead of
+        # silently coercing to {}. A request with `Content-Type:
+        # application/json` and an unparseable body is corrupted; running
+        # the action on `{}` would mask real client bugs. Rails' standard
+        # 400 handler surfaces this as a clean error response.
         parsed = JSON.parse(body)
         parsed.is_a?(Hash) ? parsed : { "_value" => parsed }
       when "multipart/form-data", "application/x-www-form-urlencoded"
-        request.request_parameters.except(:name, :action, :controller)
+        # Review-batch 2 (2026-05-14) — `request.request_parameters` is the
+        # POST body ONLY (routing params like `:name`, `:action`,
+        # `:controller` live in `request.path_parameters`, NOT here). The
+        # earlier `.except(:name, :action, :controller)` was a bug — it
+        # would silently drop legitimate body fields named `name`,
+        # `action`, or `controller` from forms.
+        request.request_parameters
       else
         {}
       end
-    rescue JSON::ParserError
-      {}
     end
 
     # Returns the boot-time cached manifest (set by Railtie#config.to_prepare).

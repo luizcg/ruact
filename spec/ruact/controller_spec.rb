@@ -233,7 +233,8 @@ module Ruact
         expect(entry.block).to be_a(Proc)
       end
 
-      it "defines a private instance method matching the action symbol" do
+      it "defines the action symbol as a PUBLIC method (Rails action dispatch requires public) " \
+         "with a thread-local guard that rejects non-endpoint invocations (review-batch 1 2026-05-14)" do
         klass = Class.new do
           def self.name = "ExampleController"
           include Ruact::Controller
@@ -241,9 +242,13 @@ module Ruact
         end
 
         instance = klass.allocate
-        expect(instance.respond_to?(:create_post)).to be(false)
-        expect(instance.respond_to?(:create_post, true)).to be(true)
-        expect(instance.send(:create_post, { title: "Hi" })).to eq("echo Hi")
+        # Public (so ActionController#process can dispatch it through the
+        # before_action chain when scoped `only: :create_post`).
+        expect(instance.respond_to?(:create_post)).to be(true)
+        # Direct call without the thread-local sentinel raises — closes the
+        # wildcard-route exposure where a host's `get ":controller/:action"`
+        # could otherwise reach the action via GET.
+        expect { instance.send(:create_post) }.to raise_error(Ruact::Error, /can only be invoked through POST/)
       end
 
       it "raises ArgumentError when no block is given" do
@@ -285,6 +290,39 @@ module Ruact
             ruact_action(:delete) { |_p| nil }
           end
         end.to raise_error(Ruact::ConfigurationError, /reserved/)
+      end
+
+      it "raises Ruact::ConfigurationError when the symbol clobbers a framework method " \
+         "(review-batch 1 2026-05-14)" do
+        # `:params` is defined on ActionController::Base via Metal — declaring
+        # `ruact_action :params` would override the request-params accessor.
+        expect do
+          Class.new do
+            def self.name = "BadController"
+            include Ruact::Controller
+            ruact_action(:params) { |_p| nil }
+          end
+        end.to raise_error(Ruact::ConfigurationError, /would clobber a framework method/)
+      end
+
+      it "raises ArgumentError on a zero-arity block (review-batch 1 2026-05-14)" do
+        expect do
+          Class.new do
+            def self.name = "ExampleController"
+            include Ruact::Controller
+            ruact_action(:no_args) { "pong" }
+          end
+        end.to raise_error(ArgumentError, /must accept exactly one parameter/)
+      end
+
+      it "accepts a splat-arity block (do |*args|) since it tolerates one positional arg" do
+        expect do
+          Class.new do
+            def self.name = "ExampleController"
+            include Ruact::Controller
+            ruact_action(:splat_args) { |*args| args.first }
+          end
+        end.not_to raise_error
       end
     end
   end

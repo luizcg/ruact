@@ -51,13 +51,18 @@ module Ruact
         end
 
         # Run the host controller through Rails' normal dispatch path so
-        # before_action / around_action / rescue_from / authorization
-        # callbacks all execute. The wrapper method
-        # (`__ruact_action_<name>`) defined by `ruact_action` reads the
-        # call-args from the request body and renders the block's return
-        # value as JSON.
-        wrapper = "__ruact_action_#{name_sym}"
-        host_class.dispatch(wrapper, request, response)
+        # `before_action :foo, only: :create_post` callbacks match the
+        # action name. The dispatched method IS the user's symbol — see
+        # `Ruact::Controller#ruact_action` for the body that reads action
+        # args + instance_exec's the block.
+        #
+        # The thread-local sentinel ensures the public action method can
+        # only be invoked here, not from a wildcard route the host may
+        # have set up — see the guard inside the defined method.
+        Thread.current[:__ruact_dispatching] = name_sym
+        host_class.dispatch(name_sym.to_s, request, response)
+      ensure
+        Thread.current[:__ruact_dispatching] = nil
       end
 
       private
