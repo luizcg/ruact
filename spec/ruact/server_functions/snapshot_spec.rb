@@ -55,13 +55,16 @@ module Ruact
       end
 
       describe ".functions_payload — cross-registry collision (Chunk1 Blocker 2026-05-13)" do
-        it "raises Ruact::ConfigurationError when an action and a query share a JS identifier",
+        it "raises Ruact::ConfigurationError shaped per AC7 when an action and a query " \
+           "share a JS identifier (Re-run patch 2026-05-14 — message prefix aligned with " \
+           "within-registry collision)",
            :aggregate_failures do
           actions.register(:foo, kind: :action, controller: posts_controller)
           queries.register(:foo, kind: :query, controller: cats_controller)
           expect { described_class.functions_payload(actions, queries) }
             .to raise_error(Ruact::ConfigurationError) do |error|
-              expect(error.message).to include("cross-registry collision")
+              # AC7 prefix: rake wraps to "[ruact] error: server-function naming collision: ..."
+              expect(error.message).to start_with("server-function naming collision:")
               expect(error.message).to include(":foo")
               expect(error.message).to include(":action")
               expect(error.message).to include(":query")
@@ -76,25 +79,15 @@ module Ruact
           actions.register(:foo_bar, kind: :action, controller: posts_controller)
           queries.register(:foo__bar, kind: :query, controller: cats_controller)
           expect { described_class.functions_payload(actions, queries) }
-            .to raise_error(Ruact::ConfigurationError, /cross-registry collision.*"fooBar"/m)
+            .to raise_error(Ruact::ConfigurationError, /server-function naming collision.*"fooBar"/m)
         end
 
-        it "does NOT raise when both registries contain the same Ruby symbol but with " \
-           "matching js_identifier (this is a normal cross-registry symbol)" do
-          # This is the within-symbol scenario: a project might want :categories
-          # registered as both action AND query (unusual but technically allowed
-          # by Registry#register). The blocker rule fires only on different
-          # symbols colliding via camelCase, OR on identical js_identifier
-          # across different kinds — wait, both same kind here? Let me re-think:
-          # this test asserts no false positive when same symbol is in both
-          # registries. The cross-registry rule fires on different KINDS sharing
-          # a js_id; here both rows are different kinds and the js_id matches,
-          # so the rule actually SHOULD fire (the design intent is one
-          # js_identifier per emitted export). Re-spec to assert it raises.
+        it "raises when both registries contain the same Ruby symbol with matching " \
+           "js_identifier (one js_identifier per emitted export is the design intent)" do
           actions.register(:categories, kind: :action, controller: posts_controller)
           queries.register(:categories, kind: :query, controller: cats_controller)
           expect { described_class.functions_payload(actions, queries) }
-            .to raise_error(Ruact::ConfigurationError, /cross-registry collision/)
+            .to raise_error(Ruact::ConfigurationError, /server-function naming collision/)
         end
       end
 

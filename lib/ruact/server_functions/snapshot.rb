@@ -113,8 +113,13 @@ module Ruact
           parts = group.map do |entry|
             ":#{entry.ruby_symbol} (kind: :#{entry.kind}, in #{describe_controller(entry.controller)})"
           end
+          # AC7 shape: "[ruact] error: server-function naming collision: ..."
+          # The rake task wraps the bare message with "[ruact] error: " — keep
+          # the prefix in sync with the within-registry message in
+          # Registry#detect_collision! so the rake stdout reads identically
+          # for both kinds of collision.
           raise Ruact::ConfigurationError,
-                "ruact server-function cross-registry collision: " \
+                "server-function naming collision: " \
                 "#{parts.join(' and ')} both map to JS identifier \"#{js_id}\""
         end
 

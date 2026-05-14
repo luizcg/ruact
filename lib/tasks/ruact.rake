@@ -41,12 +41,27 @@ namespace :ruact do
           query_registry: Ruact.query_registry,
           path: json_path
         )
-        snapshot = JSON.parse(File.read(json_path)).transform_keys(&:to_sym)
+        # Re-run patch 2026-05-14 — the JSON can disappear between
+        # `generate!` and `File.read` (a concurrent rake invocation, a tmpdir
+        # wipe by Spring, an externally-managed `tmp/cache` cleaner). Re-run
+        # `generate!` once with the same registries; if it still ENOENTs we
+        # surface the error with a clear "[ruact] error" envelope so the
+        # caller sees a real failure rather than an unwrapped Errno backtrace.
+        snapshot = begin
+          JSON.parse(File.read(json_path)).transform_keys(&:to_sym)
+        rescue Errno::ENOENT
+          Ruact::ServerFunctions::Snapshot.generate!(
+            action_registry: Ruact.action_registry,
+            query_registry: Ruact.query_registry,
+            path: json_path
+          )
+          JSON.parse(File.read(json_path)).transform_keys(&:to_sym)
+        end
         Ruact::ServerFunctions::Codegen.generate_ts!(
           snapshot: snapshot,
           output_path: ts_path
         )
-      rescue Ruact::ConfigurationError => e
+      rescue Ruact::ConfigurationError, Errno::ENOENT => e
         warn "[ruact] error: #{e.message}"
         exit 1
       end

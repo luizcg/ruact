@@ -166,6 +166,63 @@ module Ruact
         end
       end
 
+      describe ".render — snapshot trust-boundary guards (Re-run patch 2026-05-14)" do
+        # The Ruby renderer reads the same on-disk JSON bridge as the JS-side
+        # renderer (rake task path + Railtie path), so the same guards must
+        # apply on both sides. Mirrors the JS-side `validateSnapshot`.
+
+        it "rejects a snapshot whose version contains a line break" do
+          evil = base_snapshot.merge(version: "1\n// injected")
+          expect { described_class.render(evil) }
+            .to raise_error(Ruact::ConfigurationError, /version.*line break/)
+        end
+
+        it "rejects a snapshot whose generated_at contains a line break" do
+          evil = base_snapshot.merge(generated_at: "2026-05-14\n// injected")
+          expect { described_class.render(evil) }
+            .to raise_error(Ruact::ConfigurationError, /generated_at.*line break/)
+        end
+
+        it "rejects a snapshot whose functions field is not an Array" do
+          evil = base_snapshot.merge(functions: "oops")
+          expect { described_class.render(evil) }
+            .to raise_error(Ruact::ConfigurationError, /functions must be an Array/)
+        end
+
+        it "rejects a snapshot entry whose kind is not in the allowlist" do
+          evil = base_snapshot.merge(functions: [
+                                       { "ruby_symbol" => "foo",
+                                         "js_identifier" => "foo",
+                                         "kind" => "mutation" }
+                                     ])
+          expect { described_class.render(evil) }
+            .to raise_error(Ruact::ConfigurationError, /invalid kind/)
+        end
+
+        it "rejects a snapshot whose entries duplicate a js_identifier" do
+          evil = base_snapshot.merge(functions: [
+                                       { "ruby_symbol" => "foo",
+                                         "js_identifier" => "foo",
+                                         "kind" => "action" },
+                                       { "ruby_symbol" => "bar",
+                                         "js_identifier" => "foo",
+                                         "kind" => "query" }
+                                     ])
+          expect { described_class.render(evil) }
+            .to raise_error(Ruact::ConfigurationError, /duplicate js_identifier "foo"/)
+        end
+
+        it "rejects a snapshot whose js_identifier is a JS reserved word" do
+          evil = base_snapshot.merge(functions: [
+                                       { "ruby_symbol" => "delete",
+                                         "js_identifier" => "delete",
+                                         "kind" => "action" }
+                                     ])
+          expect { described_class.render(evil) }
+            .to raise_error(Ruact::ConfigurationError, /reserved JS word/)
+        end
+      end
+
       describe ".generate_ts! (Story 8.0a — write-if-changed wrapper)" do
         around do |example|
           Dir.mktmpdir do |dir|

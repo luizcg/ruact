@@ -283,23 +283,32 @@ export function generateOnce(root, opts = {}) {
  * Returns an object suitable as a return value from the Vite `config` hook.
  * Vite merges this with the user-supplied config, so existing aliases survive.
  *
- * The `@` alias is resolved to its final absolute path **at this point** —
- * earlier versions used a `@PROJECT_APP_JAVASCRIPT@` sentinel rewritten in
- * `configResolved`, which (a) violated AC6's "the config hook returns the AC
- * shape" contract and (b) meant the alias would be wrong if `configResolved`
- * never ran (e.g., transitively-imported in another tool's config). Now the
- * root is computed inline from `userConfig.root || process.cwd()`.
+ * The `@` alias value is **best effort** here — `config()` runs before Vite
+ * has resolved its root, so the only roots we can read are `userConfig.root`
+ * (if the user set one) or `process.cwd()`. When the actual `config.root`
+ * differs from both (e.g., Vite launched from a sibling directory with the
+ * root passed as a CLI flag merged after `config()` returns), the alias is
+ * re-canonicalized against `config.root` in `configResolved` (Re-run patch
+ * 2026-05-14). The earlier `@PROJECT_APP_JAVASCRIPT@` sentinel approach
+ * violated AC6's "config hook returns the AC shape"; the inline-only
+ * approach broke when cwd ≠ Vite root. The two-stage approach satisfies both.
  *
  * @param {object} userConfig
  * @returns {object}
  */
 export function buildConfigContribution(userConfig) {
-  const root = path.resolve(userConfig?.root || process.cwd());
+  return buildContributionInternal(userConfig).contribution;
+}
+
+function buildContributionInternal(userConfig) {
+  const bestRoot = path.resolve(userConfig?.root || process.cwd());
   const hostAliases = readUserAliasMap(userConfig);
   const aliases = {};
+  let bestEffortAtAlias = null;
 
   if (hostAliases["@"] === undefined) {
-    aliases["@"] = path.resolve(root, "app/javascript");
+    bestEffortAtAlias = path.resolve(bestRoot, "app/javascript");
+    aliases["@"] = bestEffortAtAlias;
     log(
       '[ruact] registered Vite alias "@" → app/javascript ' +
         '(override by setting resolve.alias["@"] in vite.config.js)',
@@ -313,7 +322,33 @@ export function buildConfigContribution(userConfig) {
 
   aliases[RUNTIME_IMPORT_SPECIFIER] = runtimePackagePath();
 
-  return { resolve: { alias: aliases } };
+  return {
+    contribution: { resolve: { alias: aliases } },
+    bestEffortAtAlias,
+  };
+}
+
+// Re-run patch 2026-05-14 — when `config.root` differs from the
+// best-effort root we used in `config()`, replace our placeholder with
+// the canonical path. Only touches entries that match what WE wrote, so
+// host-defined aliases are never overwritten.
+function canonicalizeAtAlias(config, bestEffortAtAlias, rootDir) {
+  if (bestEffortAtAlias == null) return;
+  const canonical = path.resolve(rootDir, "app/javascript");
+  if (canonical === bestEffortAtAlias) return;
+
+  const alias = config?.resolve?.alias;
+  if (!alias) return;
+  if (Array.isArray(alias)) {
+    for (const entry of alias) {
+      if (entry?.find === "@" && entry.replacement === bestEffortAtAlias) {
+        entry.replacement = canonical;
+        return;
+      }
+    }
+  } else if (alias["@"] === bestEffortAtAlias) {
+    alias["@"] = canonical;
+  }
 }
 
 function readUserAliasMap(userConfig) {
@@ -345,6 +380,7 @@ function readUserAliasMap(userConfig) {
  */
 export function installServerFunctionsHooks(plugin, options = {}) {
   let rootDir;
+  let bestEffortAtAlias = null;
 
   const originalConfig = plugin.config;
   plugin.config = async function (userConfig, env) {
@@ -352,12 +388,18 @@ export function installServerFunctionsHooks(plugin, options = {}) {
       typeof originalConfig === "function"
         ? await originalConfig.call(this, userConfig, env)
         : undefined;
-    return mergeConfigs(upstream, buildConfigContribution(userConfig));
+    const { contribution, bestEffortAtAlias: at } = buildContributionInternal(userConfig);
+    bestEffortAtAlias = at;
+    return mergeConfigs(upstream, contribution);
   };
 
   const originalConfigResolved = plugin.configResolved;
   plugin.configResolved = async function (config) {
     rootDir = config.root;
+    // Re-canonicalize the @ alias against the FINAL Vite root; the value
+    // we wrote in config() was best effort (userConfig.root || cwd) which
+    // can differ from the actual config.root.
+    canonicalizeAtAlias(config, bestEffortAtAlias, rootDir);
     if (typeof originalConfigResolved === "function") {
       return await originalConfigResolved.call(this, config);
     }
@@ -386,9 +428,10 @@ export function installServerFunctionsHooks(plugin, options = {}) {
     const onEvent = (file) => {
       // Canonicalize the event path before comparison — chokidar may emit
       // relative, normalized, or platform-specific path forms depending on
-      // how the watch was registered. Without resolving both sides we miss
-      // legitimate snapshot changes and skip dev regeneration.
-      if (path.resolve(file) !== canonicalSnapshot) return;
+      // how the watch was registered. Relative paths are resolved against
+      // `rootDir` (the Vite root) rather than `process.cwd()` so the match
+      // still works when the CLI was launched from elsewhere.
+      if (path.resolve(rootDir, file) !== canonicalSnapshot) return;
       generateOnce(rootDir, { ...options, snapshotJson, generatedTs });
     };
     server.watcher.on("change", onEvent);

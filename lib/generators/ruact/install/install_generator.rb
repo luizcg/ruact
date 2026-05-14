@@ -2,6 +2,7 @@
 
 require "rails/generators"
 require "ruact"
+require "set"
 
 module Ruact
   module Generators

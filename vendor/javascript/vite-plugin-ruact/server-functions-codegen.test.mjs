@@ -284,6 +284,41 @@ describe("Story 8.0a — installServerFunctionsHooks() composition", () => {
     expect(merged.resolve.alias["@"]).toBe(path.resolve("/my/app", "app/javascript"));
   });
 
+  it("configResolved() re-canonicalizes @ when actual config.root differs from " +
+    "userConfig.root (Re-run 2026-05-14)", async () => {
+    const plugin = { name: "vite-plugin-ruact" };
+    installServerFunctionsHooks(plugin);
+
+    // config() runs with userConfig.root=/cwd-guess (best effort)
+    const merged = await plugin.config({ root: "/cwd-guess" }, { mode: "development" });
+    expect(merged.resolve.alias["@"]).toBe(path.resolve("/cwd-guess", "app/javascript"));
+
+    // Vite then merges in the actual root from elsewhere (e.g., CLI flag) and
+    // hands us a resolved config — we must rewrite our best-effort placeholder.
+    const resolved = { root: "/real-root", resolve: { alias: { ...merged.resolve.alias } } };
+    await plugin.configResolved(resolved);
+    expect(resolved.resolve.alias["@"]).toBe(path.resolve("/real-root", "app/javascript"));
+  });
+
+  it("configResolved() leaves a host-defined @ alias alone even when canonical " +
+    "would differ (Re-run 2026-05-14)", async () => {
+    const plugin = { name: "vite-plugin-ruact" };
+    installServerFunctionsHooks(plugin);
+
+    await plugin.config(
+      { root: "/cwd-guess", resolve: { alias: { "@": "/host/elsewhere" } } },
+      { mode: "development" },
+    );
+
+    const resolved = {
+      root: "/real-root",
+      resolve: { alias: { "@": "/host/elsewhere" } },
+    };
+    await plugin.configResolved(resolved);
+    // Host's value must survive the canonicalization step
+    expect(resolved.resolve.alias["@"]).toBe("/host/elsewhere");
+  });
+
   it("config() awaits an async upstream handler (Chunk 2 M2 — async hook support)", async () => {
     const calls = [];
     const plugin = {
@@ -527,6 +562,37 @@ describe("Story 8.0a — configureServer watcher (Chunk 2 m1 + m2)", () => {
     server.watcher.emit("change", noncanonical);
 
     expect(fs.readFileSync(generatedTs, "utf8")).toContain("export const categories");
+  });
+
+  it("resolves relative event paths against rootDir, not process.cwd() " +
+    "(Re-run m4 2026-05-14)", async () => {
+    const plugin = { name: "vite-plugin-ruact" };
+    const snapshotJson = path.join(tmpdir, "snap.json");
+    const generatedTs = path.join(tmpdir, "out.ts");
+    fs.writeFileSync(snapshotJson, JSON.stringify(baseSnapshot()));
+    installServerFunctionsHooks(plugin, { snapshotJson, generatedTs });
+
+    // rootDir is tmpdir; cwd is the test runner's cwd (NOT tmpdir).
+    await plugin.configResolved({ root: tmpdir });
+    const server = buildMockServer();
+    await plugin.configureServer(server);
+
+    fs.writeFileSync(
+      snapshotJson,
+      JSON.stringify(
+        baseSnapshot({
+          functions: [{ ruby_symbol: "demo_ping", js_identifier: "demoPing", kind: "action" }],
+        }),
+      ),
+    );
+
+    // Chokidar can emit a path relative to the watched root (not cwd).
+    // path.relative(rootDir, snapshotJson) is "snap.json" — when watcher
+    // emits that bare name, we must resolve it against rootDir.
+    const relative = path.relative(tmpdir, snapshotJson);
+    server.watcher.emit("change", relative);
+
+    expect(fs.readFileSync(generatedTs, "utf8")).toContain("export const demoPing");
   });
 });
 

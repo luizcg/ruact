@@ -3,6 +3,7 @@
 require "spec_helper"
 require "tmpdir"
 require "fileutils"
+require "set"
 require "ruact"
 
 RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
@@ -219,12 +220,18 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         ]
       end
 
+      # Mirror of the real generator's append_gitignore_entries logic
+      # (gem/lib/generators/ruact/install/install_generator.rb). Kept in sync
+      # at line-set membership granularity — the previous substring-based
+      # version drifted from the real generator after the Chunk 1 review's
+      # line-set fix and the Re-run 2026-05-14 patch brings this helper
+      # back into parity.
       def append_gitignore_entries(dest_root)
         gitignore = File.join(dest_root, ".gitignore")
         return :no_gitignore unless File.exist?(gitignore)
 
-        existing = File.read(gitignore)
-        new_entries = gitignore_entries.reject { |e| existing.include?(e) }
+        existing_lines = File.read(gitignore).each_line.to_set { |line| line.chomp.strip }
+        new_entries = gitignore_entries.reject { |e| existing_lines.include?(e) }
         return :already_present if new_entries.empty?
 
         File.open(gitignore, "a") do |io|
@@ -272,6 +279,23 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         write_file(".gitignore", "/tmp\napp/javascript/.ruact/server-functions.ts\ntmp/cache/ruact/\n")
         result = append_gitignore_entries(tmpdir)
         expect(result).to eq(:already_present)
+      end
+
+      it "still appends 'tmp/cache/ruact/' when only a longer prefix-matching path is present " \
+         "(Re-run 2026-05-14 — line-set semantics, not substring)", :aggregate_failures do
+        # The Chunk 1 review's line-set fix makes the real generator append
+        # `tmp/cache/ruact/` even when the file already contains a deeper
+        # path like `tmp/cache/ruact/some-cache.bin`. The helper used to
+        # use substring matching, which would skip the entry — a silent
+        # drift between helper and generator. This test pins the helper
+        # to the same semantics.
+        write_file(".gitignore", "/tmp\ntmp/cache/ruact/some-cache.bin\n")
+        append_gitignore_entries(tmpdir)
+        content = read_file(".gitignore")
+        # Exact-line match: a new "tmp/cache/ruact/" line is appended even
+        # though the file already contains "tmp/cache/ruact/some-cache.bin"
+        expect(content.each_line.to_a).to include("tmp/cache/ruact/\n")
+        expect(content).to include("app/javascript/.ruact/server-functions.ts")
       end
     end
   end
