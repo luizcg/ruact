@@ -110,8 +110,11 @@ module Ruact
           return unless cross
 
           js_id, group = cross
+          # AC7 exact shape: `:foo_bar (in FooController) and :foo__bar (in BarController)`
+          # — no `kind:` annotation. The kind differentiation is implicit in
+          # the cross-registry collision being detected at all.
           parts = group.map do |entry|
-            ":#{entry.ruby_symbol} (kind: :#{entry.kind}, in #{describe_controller(entry.controller)})"
+            ":#{entry.ruby_symbol} (in #{describe_controller(entry.controller)})"
           end
           # AC7 shape: "[ruact] error: server-function naming collision: ..."
           # The rake task wraps the bare message with "[ruact] error: " — keep

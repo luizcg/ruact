@@ -41,15 +41,18 @@ namespace :ruact do
           query_registry: Ruact.query_registry,
           path: json_path
         )
-        # Re-run patch 2026-05-14 — the JSON can disappear between
-        # `generate!` and `File.read` (a concurrent rake invocation, a tmpdir
-        # wipe by Spring, an externally-managed `tmp/cache` cleaner). Re-run
-        # `generate!` once with the same registries; if it still ENOENTs we
-        # surface the error with a clear "[ruact] error" envelope so the
-        # caller sees a real failure rather than an unwrapped Errno backtrace.
+        # Pass-2 patch 2026-05-14 — the JSON can disappear OR be partially
+        # written between `generate!` and `File.read` (a concurrent rake
+        # invocation flushing mid-write, a tmpdir wipe by Spring, an
+        # externally-managed `tmp/cache` cleaner). Both `Errno::ENOENT` AND
+        # `JSON::ParserError` indicate the same TOCTOU window — re-invoke
+        # `generate!` once with the same registries; if the second read
+        # still fails we surface the error with a clear "[ruact] error"
+        # envelope so the caller sees a real failure rather than an
+        # unwrapped Errno / parser backtrace.
         snapshot = begin
           JSON.parse(File.read(json_path)).transform_keys(&:to_sym)
-        rescue Errno::ENOENT
+        rescue Errno::ENOENT, JSON::ParserError
           Ruact::ServerFunctions::Snapshot.generate!(
             action_registry: Ruact.action_registry,
             query_registry: Ruact.query_registry,
@@ -61,7 +64,7 @@ namespace :ruact do
           snapshot: snapshot,
           output_path: ts_path
         )
-      rescue Ruact::ConfigurationError, Errno::ENOENT => e
+      rescue Ruact::ConfigurationError, Errno::ENOENT, JSON::ParserError => e
         warn "[ruact] error: #{e.message}"
         exit 1
       end

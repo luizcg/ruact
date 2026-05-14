@@ -35,6 +35,15 @@ module Ruact
 
       ALLOWED_KINDS = %w[action query].freeze
 
+      # JS comments (both `//` line comments and `/* … */` block comments via
+      # the spec's LineTerminator production) end on LF, CR, U+2028, and U+2029.
+      # A snapshot value that smuggles any of these would break out of the
+      # leading comment header in the emitted module. The reviewer's Pass-2
+      # finding noted that an earlier `/[\r\n]/` guard missed the two Unicode
+      # line separators; the regex is widened here and a parity test in
+      # `server-functions-codegen.test.mjs` keeps both renderers in sync.
+      LINE_TERMINATORS = /[\r\n  ]/
+
       class << self
         # Renders +snapshot+ into the TS module text. Pure; no I/O.
         #
@@ -48,9 +57,14 @@ module Ruact
         #   outside {ALLOWED_KINDS}, or duplicate `js_identifier` — mirror of
         #   the JS-side `validateSnapshot` per the 2026-05-14 Re-run patch).
         def render(snapshot)
-          version      = snapshot.fetch(:version) { snapshot.fetch("version") }
-          generated_at = snapshot.fetch(:generated_at) { snapshot.fetch("generated_at") }
-          functions    = snapshot.fetch(:functions) { snapshot.fetch("functions") }
+          unless snapshot.is_a?(Hash)
+            raise Ruact::ConfigurationError,
+                  "ruact server-function codegen: snapshot must be a Hash, got #{snapshot.class}"
+          end
+
+          version      = fetch_snapshot_key!(snapshot, :version, "version")
+          generated_at = fetch_snapshot_key!(snapshot, :generated_at, "generated_at")
+          functions    = fetch_snapshot_key!(snapshot, :functions, "functions")
 
           validate_metadata!(version, generated_at)
           validate_functions!(functions)
@@ -100,6 +114,19 @@ module Ruact
           "export const #{js_id}: #{signature} =\n  _makeRef(#{json_escape(ruby_sym.to_s)});\n"
         end
 
+        # Pass-2 patch 2026-05-14 — wrap raw `KeyError` from `Hash#fetch` so
+        # the rake / Railtie call sites get a consistent `Ruact::ConfigurationError`
+        # for every snapshot-shape failure, not a mixture of error classes.
+        def fetch_snapshot_key!(snapshot, sym_key, str_key)
+          return snapshot[sym_key] if snapshot.key?(sym_key)
+          return snapshot[str_key] if snapshot.key?(str_key)
+
+          raise Ruact::ConfigurationError,
+                "ruact server-function codegen: snapshot is missing required key " \
+                "#{sym_key.inspect} (or #{str_key.inspect}); the bridge JSON is " \
+                "corrupted — regenerate via `bin/rails ruact:server_functions:generate`."
+        end
+
         # Mirror of the JS-side `validateSnapshot` (2026-05-14 Re-run parity
         # fix). The Ruby renderer also reads from the on-disk JSON bridge in
         # the rake-task and Railtie paths, so the same trust-boundary guards
@@ -110,11 +137,11 @@ module Ruact
                   "ruact server-function codegen: snapshot.version must be an " \
                   "Integer or String, got #{version.class}"
           end
-          if version.to_s.match?(/[\r\n]/)
+          if version.to_s.match?(LINE_TERMINATORS)
             raise Ruact::ConfigurationError,
                   "ruact server-function codegen: snapshot.version contains a " \
-                  "line break — would break out of the header comment; snapshot " \
-                  "JSON is corrupted."
+                  "line break (LF, CR, U+2028, or U+2029) — would break out of " \
+                  "the header comment; snapshot JSON is corrupted."
           end
 
           unless generated_at.is_a?(String)
@@ -122,11 +149,11 @@ module Ruact
                   "ruact server-function codegen: snapshot.generated_at must be " \
                   "a String, got #{generated_at.class}"
           end
-          if generated_at.match?(/[\r\n]/)
+          if generated_at.match?(LINE_TERMINATORS)
             raise Ruact::ConfigurationError,
                   "ruact server-function codegen: snapshot.generated_at contains " \
-                  "a line break — would break out of the header comment; snapshot " \
-                  "JSON is corrupted."
+                  "a line break (LF, CR, U+2028, or U+2029) — would break out of " \
+                  "the header comment; snapshot JSON is corrupted."
           end
         end
 
@@ -148,12 +175,29 @@ module Ruact
             kind     = (entry["kind"] || entry[:kind]).to_s
             ruby_sym = entry["ruby_symbol"] || entry[:ruby_symbol]
 
+            validate_ruby_symbol!(ruby_sym)
             validate_js_identifier!(js_id, ruby_sym)
             validate_kind!(kind, ruby_sym)
             validate_not_reserved!(js_id, ruby_sym)
             validate_no_duplicate!(seen, js_id)
             seen[js_id] = true
           end
+        end
+
+        # Pass-2 patch 2026-05-14 — without this guard, a missing or empty
+        # `ruby_symbol` on a snapshot entry would render `_makeRef("")` and
+        # silently emit an export that can never resolve at runtime (the
+        # placeholder rejects on call but the empty string is a meaningless
+        # registration name). Treat as a corrupt-snapshot signal.
+        def validate_ruby_symbol!(ruby_sym)
+          return if ruby_sym.is_a?(String) && !ruby_sym.empty?
+          return if ruby_sym.is_a?(Symbol) && !ruby_sym.empty?
+
+          raise Ruact::ConfigurationError,
+                "ruact server-function codegen: snapshot.functions entry has " \
+                "missing or empty ruby_symbol (got #{ruby_sym.inspect}); the " \
+                "bridge JSON is corrupted — regenerate via " \
+                "`bin/rails ruact:server_functions:generate`."
         end
 
         def validate_js_identifier!(js_id, ruby_sym)

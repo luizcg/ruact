@@ -63,14 +63,13 @@ module Ruact
           queries.register(:foo, kind: :query, controller: cats_controller)
           expect { described_class.functions_payload(actions, queries) }
             .to raise_error(Ruact::ConfigurationError) do |error|
-              # AC7 prefix: rake wraps to "[ruact] error: server-function naming collision: ..."
+              # AC7 exact shape: rake wraps to "[ruact] error: server-function naming collision: :foo (in PostsController) and :foo (in CategoriesController) both map to JS identifier \"foo\""
               expect(error.message).to start_with("server-function naming collision:")
-              expect(error.message).to include(":foo")
-              expect(error.message).to include(":action")
-              expect(error.message).to include(":query")
-              expect(error.message).to include("PostsController")
-              expect(error.message).to include("CategoriesController")
+              expect(error.message).to include(":foo (in PostsController)")
+              expect(error.message).to include(":foo (in CategoriesController)")
               expect(error.message).to include('"foo"')
+              # No "kind:" annotation per Pass-2 patch 2026-05-14
+              expect(error.message).not_to include("kind:")
             end
         end
 

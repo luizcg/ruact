@@ -430,6 +430,43 @@ describe("Story 8.0a — snapshot validation (Chunk 2 M1 — trust-boundary guar
     });
     expect(() => render(evil)).toThrow(/reserved JS word/);
   });
+
+  it("rejects snapshot whose version contains U+2028 LINE SEPARATOR " +
+    "(Pass-2 patch 2026-05-14 — JS LineTerminator parity)", () => {
+    const evil = baseSnapshot({ version: "1 // injected" });
+    expect(() => render(evil)).toThrow(/U\+2028/);
+  });
+
+  it("rejects snapshot whose generated_at contains U+2029 PARAGRAPH SEPARATOR " +
+    "(Pass-2 patch 2026-05-14)", () => {
+    const evil = baseSnapshot({ generated_at: "2026-05-14 // injected" });
+    expect(() => render(evil)).toThrow(/U\+2029/);
+  });
+
+  it("rejects snapshot missing a root key (Pass-2 patch 2026-05-14)", () => {
+    const evil = { generated_at: "x", functions: [] }; // no version
+    expect(() => render(evil)).toThrow(/missing required key "version"/);
+  });
+
+  it("rejects entry with empty ruby_symbol so we never emit _makeRef(\"\") " +
+    "(Pass-2 patch 2026-05-14)", () => {
+    const evil = baseSnapshot({
+      functions: [{ ruby_symbol: "", js_identifier: "foo", kind: "action" }],
+    });
+    expect(() => render(evil)).toThrow(/missing or empty ruby_symbol/);
+  });
+
+  it("rejects entry with missing ruby_symbol field (Pass-2 patch 2026-05-14)", () => {
+    const evil = baseSnapshot({
+      functions: [{ js_identifier: "foo", kind: "action" }],
+    });
+    expect(() => render(evil)).toThrow(/missing or empty ruby_symbol/);
+  });
+
+  it("rejects when snapshot itself is not an object (e.g., an array) " +
+    "(Pass-2 patch 2026-05-14)", () => {
+    expect(() => render([])).toThrow(/snapshot is not an object/);
+  });
 });
 
 describe("Story 8.0a — readSnapshot() (Chunk 2 M3 — log malformed JSON)", () => {

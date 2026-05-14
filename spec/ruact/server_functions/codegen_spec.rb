@@ -221,6 +221,53 @@ module Ruact
           expect { described_class.render(evil) }
             .to raise_error(Ruact::ConfigurationError, /reserved JS word/)
         end
+
+        it "rejects a snapshot whose version contains a U+2028 line separator " \
+           "(Pass-2 patch 2026-05-14 — JS LineTerminator parity)" do
+          evil = base_snapshot.merge(version: "1 // injected")
+          expect { described_class.render(evil) }
+            .to raise_error(Ruact::ConfigurationError, /line break.*U\+2028/)
+        end
+
+        it "rejects a snapshot whose generated_at contains a U+2029 paragraph separator " \
+           "(Pass-2 patch 2026-05-14 — JS LineTerminator parity)" do
+          evil = base_snapshot.merge(generated_at: "2026-05-14 // injected")
+          expect { described_class.render(evil) }
+            .to raise_error(Ruact::ConfigurationError, /line break.*U\+2029/)
+        end
+
+        it "wraps Hash#fetch KeyError as Ruact::ConfigurationError when a root key is " \
+           "missing (Pass-2 patch 2026-05-14)" do
+          evil = { generated_at: "2026-05-14T00:00:00Z", functions: [] } # no :version
+          expect { described_class.render(evil) }
+            .to raise_error(Ruact::ConfigurationError, /missing required key/)
+        end
+
+        it "rejects an entry with empty ruby_symbol so we never emit _makeRef(\"\") " \
+           "(Pass-2 patch 2026-05-14)" do
+          evil = base_snapshot.merge(functions: [
+                                       { "ruby_symbol" => "",
+                                         "js_identifier" => "foo",
+                                         "kind" => "action" }
+                                     ])
+          expect { described_class.render(evil) }
+            .to raise_error(Ruact::ConfigurationError, /missing or empty ruby_symbol/)
+        end
+
+        it "rejects an entry with nil ruby_symbol (Pass-2 patch 2026-05-14)" do
+          evil = base_snapshot.merge(functions: [
+                                       { "ruby_symbol" => nil,
+                                         "js_identifier" => "foo",
+                                         "kind" => "action" }
+                                     ])
+          expect { described_class.render(evil) }
+            .to raise_error(Ruact::ConfigurationError, /missing or empty ruby_symbol/)
+        end
+
+        it "rejects when snapshot is not a Hash" do
+          expect { described_class.render("oops") }
+            .to raise_error(Ruact::ConfigurationError, /snapshot must be a Hash/)
+        end
       end
 
       describe ".generate_ts! (Story 8.0a — write-if-changed wrapper)" do

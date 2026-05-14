@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "set"
+
 module Ruact
   module ServerFunctions
     # Translates a Ruby symbol into the JS identifier exported from

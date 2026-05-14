@@ -13,10 +13,10 @@
 
 Epic 8 (`ruact_action`) and Epic 9 (`ruact_query`) both need a way for a React
 component to obtain a reference to a server-side function declared in a Rails
-controller. Before this decision, the placeholder phrase "exposed to the view
-(`server_actions[:create_post]` or equivalent — exact API to be finalized in this
-story)" appeared in Story 8.1's AC1 and was implicitly carried by every downstream
-story that needs the same reference.
+controller. Before this decision, Story 8.1's AC1 carried a placeholder for the
+accessor surface (a deferred `server_actions[:create_post]`-style indexed
+lookup with the call shape left undetermined) which was implicitly inherited by
+every downstream story that needs the same reference.
 
 A symmetric, ergonomic accessor must be picked once, shared by actions and
 queries, and locked before implementation begins so that 11 downstream stories

@@ -26,6 +26,16 @@ export const RUNTIME_IMPORT_SPECIFIER = "ruact/server-functions-runtime";
 
 export const VALID_JS_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
+// JS comment terminators per ECMAScript LineTerminator production: LF (\n),
+// CR (\r), U+2028 (LINE SEPARATOR), U+2029 (PARAGRAPH SEPARATOR). A snapshot
+// value containing any of these would break out of the leading `//` comment
+// header. The Ruby `LINE_TERMINATORS` constant in `codegen.rb` mirrors this
+// list; a snapshot containing a Unicode line separator must be rejected
+// identically by both renderers (Pass-2 patch 2026-05-14).
+function containsLineTerminator(s) {
+  return /[\r\n\u2028\u2029]/.test(s);
+}
+
 // Mirror of Ruby `NameBridge::RESERVED_JS_IDENTIFIERS`. The Ruby side enforces
 // this at controller load time (Story 8.1 / 9.1). The JS side re-enforces
 // because the JSON bridge is an independent trust boundary — a hand-edited
@@ -59,12 +69,25 @@ export function runtimePackagePath() {
  * @param {unknown} snapshot
  */
 function validateSnapshot(snapshot) {
-  if (!snapshot || typeof snapshot !== "object") {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
     throw new Error(
       "ruact server-function codegen: snapshot is not an object — " +
         "the bridge JSON is corrupted; regenerate via " +
         "`bin/rails ruact:server_functions:generate`.",
     );
+  }
+
+  // Pass-2 patch 2026-05-14 — fail explicitly on missing root keys rather
+  // than letting `undefined` reach the type/value checks below with an
+  // opaque "X must be a string, got undefined" message.
+  for (const k of ["version", "generated_at", "functions"]) {
+    if (!(k in snapshot)) {
+      throw new Error(
+        `ruact server-function codegen: snapshot is missing required key "${k}"; ` +
+          "the bridge JSON is corrupted — regenerate via " +
+          "`bin/rails ruact:server_functions:generate`.",
+      );
+    }
   }
 
   const { version, generated_at, functions } = snapshot;
@@ -75,10 +98,11 @@ function validateSnapshot(snapshot) {
     );
   }
   const versionStr = String(version);
-  if (versionStr.includes("\n") || versionStr.includes("\r")) {
+  if (containsLineTerminator(versionStr)) {
     throw new Error(
-      "ruact server-function codegen: snapshot.version contains a line break — " +
-        "would break out of the header comment; snapshot JSON is corrupted.",
+      "ruact server-function codegen: snapshot.version contains a line break " +
+        "(LF, CR, U+2028, or U+2029) — would break out of the header comment; " +
+        "snapshot JSON is corrupted.",
     );
   }
 
@@ -87,10 +111,11 @@ function validateSnapshot(snapshot) {
       `ruact server-function codegen: snapshot.generated_at must be a string, got ${typeof generated_at}`,
     );
   }
-  if (generated_at.includes("\n") || generated_at.includes("\r")) {
+  if (containsLineTerminator(generated_at)) {
     throw new Error(
-      "ruact server-function codegen: snapshot.generated_at contains a line break — " +
-        "would break out of the header comment; snapshot JSON is corrupted.",
+      "ruact server-function codegen: snapshot.generated_at contains a line break " +
+        "(LF, CR, U+2028, or U+2029) — would break out of the header comment; " +
+        "snapshot JSON is corrupted.",
     );
   }
 
@@ -102,9 +127,16 @@ function validateSnapshot(snapshot) {
 
   const seen = new Set();
   for (const fn of functions) {
-    if (!fn || typeof fn !== "object") {
+    if (!fn || typeof fn !== "object" || Array.isArray(fn)) {
       throw new Error(
         `ruact server-function codegen: snapshot.functions entry is not an object: ${JSON.stringify(fn)}`,
+      );
+    }
+    if (typeof fn.ruby_symbol !== "string" || fn.ruby_symbol.length === 0) {
+      throw new Error(
+        "ruact server-function codegen: snapshot.functions entry has missing or " +
+          `empty ruby_symbol (got ${JSON.stringify(fn.ruby_symbol)}); the bridge ` +
+          "JSON is corrupted — regenerate via `bin/rails ruact:server_functions:generate`.",
       );
     }
     if (fn.kind !== "action" && fn.kind !== "query") {
@@ -423,16 +455,24 @@ export function installServerFunctionsHooks(plugin, options = {}) {
       result = await originalConfigureServer.call(this, server);
     }
     const { snapshotJson, generatedTs } = resolvePaths(rootDir, options);
-    const canonicalSnapshot = path.resolve(snapshotJson);
-    server.watcher.add(canonicalSnapshot);
+    const canonicalSnapshots = canonicalPathCandidates(snapshotJson, rootDir);
+    server.watcher.add(path.resolve(snapshotJson));
     const onEvent = (file) => {
-      // Canonicalize the event path before comparison — chokidar may emit
-      // relative, normalized, or platform-specific path forms depending on
-      // how the watch was registered. Relative paths are resolved against
-      // `rootDir` (the Vite root) rather than `process.cwd()` so the match
-      // still works when the CLI was launched from elsewhere.
-      if (path.resolve(rootDir, file) !== canonicalSnapshot) return;
-      generateOnce(rootDir, { ...options, snapshotJson, generatedTs });
+      // Pass-2 patch 2026-05-14 — chokidar may emit event paths in any of
+      // these forms depending on how the watch was registered, the CWD, and
+      // whether the watched path crosses a symlink:
+      //   • absolute, as-is
+      //   • relative to the Vite root (root-relative)
+      //   • relative to process.cwd() (cwd-relative)
+      //   • the realpath of any of the above (symlink-resolved)
+      // Match against the full candidate set on each side so we never miss
+      // a legitimate snapshot event because of a path-form mismatch.
+      for (const c of canonicalPathCandidates(file, rootDir)) {
+        if (canonicalSnapshots.has(c)) {
+          generateOnce(rootDir, { ...options, snapshotJson, generatedTs });
+          return;
+        }
+      }
     };
     server.watcher.on("change", onEvent);
     server.watcher.on("add", onEvent);
@@ -440,6 +480,36 @@ export function installServerFunctionsHooks(plugin, options = {}) {
   };
 
   return plugin;
+}
+
+/**
+ * Returns the set of absolute path forms that may refer to the same file as
+ * `p`, given a Vite `rootDir` for relative-path disambiguation. Includes
+ * the path resolved against cwd, resolved against rootDir, and (when the
+ * underlying file exists) the realpath of each. Used on both sides of the
+ * watcher event comparison to tolerate every chokidar path form.
+ */
+function canonicalPathCandidates(p, rootDir) {
+  const out = new Set();
+  const cwdResolved = path.resolve(p);
+  const rootResolved = path.resolve(rootDir, p);
+  out.add(cwdResolved);
+  out.add(rootResolved);
+  const r1 = tryRealpath(cwdResolved);
+  if (r1) out.add(r1);
+  if (rootResolved !== cwdResolved) {
+    const r2 = tryRealpath(rootResolved);
+    if (r2) out.add(r2);
+  }
+  return out;
+}
+
+function tryRealpath(p) {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return null;
+  }
 }
 
 function mergeConfigs(a, b) {
