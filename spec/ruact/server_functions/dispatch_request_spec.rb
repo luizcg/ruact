@@ -95,6 +95,11 @@ module DispatchRequestSpecSupport
           "request_params_name" => self.params[:name]
         }
       end
+
+      ruact_action(:strong_params_demo) do |params|
+        permitted = params.require(:post).permit(:title, :body)
+        { "permitted" => permitted.to_h }
+      end
     end
 
     private
@@ -188,6 +193,28 @@ RSpec.describe "Story 8.1: POST /__ruact/fn/:name dispatch", :story_8_1 do
       expect(last_response.status).to eq(422)
       body = JSON.parse(last_response.body)
       expect(body).to eq("error" => "intentional failure", "error_class" => "RuntimeError")
+    end
+  end
+
+  describe "Task 5.4 — strong-parameters API works on the shadowed `params`" do
+    it "params.require(:post).permit(:title, :body) returns the permitted hash" do
+      post "/__ruact/fn/strong_params_demo",
+           { "post" => { "title" => "Hi", "body" => "Body", "evil" => "ignored" } }.to_json,
+           { "CONTENT_TYPE" => "application/json" }
+      expect(last_response.status).to eq(200)
+      body = JSON.parse(last_response.body)
+      expect(body.fetch("permitted")).to eq("title" => "Hi", "body" => "Body")
+    end
+
+    it "params.require(:post) raises ParameterMissing when the key is absent (proves shadow works)" do
+      # Rails app has `show_exceptions: :none`, so the exception bubbles up to
+      # Rack — the request raises directly rather than being converted to a
+      # 400 response. Asserting the raise is a stronger guarantee than the
+      # status code: the call truly reaches `params.require(:post)` inside
+      # the block and the shadowed `params` IS an `ActionController::Parameters`.
+      expect do
+        post "/__ruact/fn/strong_params_demo", "{}", { "CONTENT_TYPE" => "application/json" }
+      end.to raise_error(ActionController::ParameterMissing, /param is missing.*post/)
     end
   end
 end

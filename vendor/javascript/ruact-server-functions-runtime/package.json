@@ -1,7 +1,7 @@
 {
   "name": "ruact-server-functions-runtime",
-  "version": "0.0.0-placeholder",
-  "description": "Placeholder server-functions runtime for ruact gem (Story 8.0a). Replaced by the real implementation in Story 8.1.",
+  "version": "0.1.0",
+  "description": "Server-functions runtime for ruact gem (Story 8.1). Provides `_makeRef(name)` that POSTs to `/__ruact/fn/:name` with CSRF + JSON / FormData support.",
   "type": "module",
   "main": "index.js",
   "types": "./index.d.ts",
