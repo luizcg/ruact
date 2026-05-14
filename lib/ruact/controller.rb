@@ -17,7 +17,103 @@ module Ruact
   module Controller
     extend ActiveSupport::Concern
 
+    # Story 8.1 — class-level DSL surface. The `ruact_action` macro registers
+    # a server-callable symbol with `Ruact.action_registry` (so the Vite-plugin
+    # codegen from Story 8.0a picks it up at the next `config.to_prepare`) AND
+    # defines a matching instance method so the block is reachable from inside
+    # other controller code without going through the HTTP endpoint.
+    #
+    # Validation (naming-bridge rule + within-registry / cross-registry
+    # collision detection) fires from {Ruact::ServerFunctions::Registry#register}
+    # at controller-class load time — the failure is loud at boot, not at
+    # request-dispatch time.
+    class_methods do
+      # @param symbol [Symbol] the action name (snake_case; bridged to JS
+      #   camelCase by {Ruact::ServerFunctions::NameBridge}).
+      # @yield [params] the block runs via `instance_exec` on a fresh
+      #   controller instance at dispatch time; `params` shadows the request's
+      #   `params` accessor and is an `ActionController::Parameters` instance
+      #   wrapping the action-call arguments (NOT the request's query/form params).
+      # @return [Ruact::ServerFunctions::RegistryEntry] the entry just registered.
+      # @raise [Ruact::ConfigurationError] when the symbol fails the
+      #   naming-bridge rule or collides with another `ruact_action` in this
+      #   registry (cross-registry collisions with `ruact_query` are caught
+      #   later by {Ruact::ServerFunctions::Snapshot.functions_payload}).
+      def ruact_action(symbol, &block)
+        unless block
+          raise ArgumentError,
+                "ruact_action :#{symbol} requires a block — declare the " \
+                "implementation with `ruact_action :#{symbol} do |params| ... end`"
+        end
+
+        Ruact.action_registry.register(symbol, kind: :action, controller: self, &block)
+        define_method(symbol, &block)
+        private(symbol)
+
+        # Dispatcher entry point. `Ruact::ServerFunctions::EndpointController`
+        # delegates to `host_controller.dispatch("__ruact_action_<name>",
+        # request, response)`; that runs the full ActionController callback
+        # chain (before_action, around_action, etc.) and ends here. The wrapper
+        # reads the action-call args from the request body (shadowing the
+        # request's own `params`) and renders the block's return value as
+        # JSON unless the block / a before_action already rendered.
+        #
+        # The wrapper is PUBLIC because `ActionController#process` only
+        # dispatches to methods present in `action_methods` (the controller's
+        # public-method set minus a few framework methods). Devs are not
+        # expected to call `__ruact_action_<name>` directly; the
+        # double-underscore prefix is the social contract.
+        wrapper_name = "__ruact_action_#{symbol}"
+        define_method(wrapper_name) do
+          args = ruact_action_params
+          result = __send__(symbol, args)
+          render(json: result) unless performed?
+        end
+
+        # ActionController caches `action_methods` lazily; clear the cache so
+        # the newly-defined wrapper is dispatchable in the same boot cycle
+        # (matters in tests and in dev where `ruact_action` declarations
+        # accumulate after the controller class first loads).
+        clear_action_methods! if respond_to?(:clear_action_methods!, true)
+      end
+    end
+
     private
+
+    # Story 8.1 — extracts the action-call arguments from the request body for
+    # a `ruact_action` invocation. The result becomes the `params` block-arg
+    # the dev wrote in `ruact_action :foo do |params| ... end`, shadowing the
+    # request's own `params` accessor. Returns an `ActionController::Parameters`
+    # so `params.require(:title).permit(...)` continues to work inside the block.
+    #
+    # Wire shape (from the JS runtime):
+    #   - `Content-Type: application/json` → `JSON.parse(request.body)` as a Hash
+    #   - `Content-Type: multipart/form-data` or `application/x-www-form-urlencoded`
+    #     → Rails has already parsed `request.request_parameters` for us
+    #   - Other / missing → empty Hash (callers must validate themselves)
+    def ruact_action_params
+      raw = ruact_action_raw_args
+      ActionController::Parameters.new(raw)
+    end
+
+    def ruact_action_raw_args
+      content_type = request.content_mime_type&.to_s ||
+                     request.headers["Content-Type"]&.split(";")&.first
+      case content_type
+      when "application/json"
+        body = request.body.read
+        request.body.rewind if request.body.respond_to?(:rewind)
+        return {} if body.nil? || body.empty?
+        parsed = JSON.parse(body)
+        parsed.is_a?(Hash) ? parsed : { "_value" => parsed }
+      when "multipart/form-data", "application/x-www-form-urlencoded"
+        request.request_parameters.except(:name, :action, :controller)
+      else
+        {}
+      end
+    rescue JSON::ParserError
+      {}
+    end
 
     # Returns the boot-time cached manifest (set by Railtie#config.to_prepare).
     # No per-request file I/O (AC#6).

@@ -17,11 +17,12 @@
 # Empty registries are valid (Story 8.0a ships them empty; 8.1 and 9.1 populate).
 module Ruact
   module ServerFunctions
-    autoload :NameBridge,     "ruact/server_functions/name_bridge"
-    autoload :RegistryEntry,  "ruact/server_functions/registry_entry"
-    autoload :Registry,       "ruact/server_functions/registry"
-    autoload :Snapshot,       "ruact/server_functions/snapshot"
-    autoload :SnapshotWriter, "ruact/server_functions/snapshot_writer"
-    autoload :Codegen,        "ruact/server_functions/codegen"
+    autoload :NameBridge,         "ruact/server_functions/name_bridge"
+    autoload :RegistryEntry,      "ruact/server_functions/registry_entry"
+    autoload :Registry,           "ruact/server_functions/registry"
+    autoload :Snapshot,           "ruact/server_functions/snapshot"
+    autoload :SnapshotWriter,     "ruact/server_functions/snapshot_writer"
+    autoload :Codegen,            "ruact/server_functions/codegen"
+    autoload :EndpointController, "ruact/server_functions/endpoint_controller"
   end
 end

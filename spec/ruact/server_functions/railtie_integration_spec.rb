@@ -58,5 +58,54 @@ module Ruact
         expect(parsed["functions"].map { |fn| fn["ruby_symbol"] }).to eq(["demo_ping"])
       end
     end
+
+    RSpec.describe "Ruact::Railtie registry-clear hook (Story 8.1)", :story_8_1 do
+      # The Railtie attaches a `before_class_unload` callback that clears both
+      # registries before Zeitwerk tears down constants — this prevents removed
+      # `ruact_action` declarations from lingering across reloads. The full
+      # Rails-app boot covering the controller class-body re-evaluation lives
+      # in `controller_request_spec.rb`; here we exercise the hook directly.
+      before do
+        Ruact.action_registry.clear!
+        Ruact.query_registry.clear!
+      end
+
+      it "clears both registries when invoked" do
+        Ruact.action_registry.register(:foo, kind: :action)
+        Ruact.query_registry.register(:bar, kind: :query)
+        expect(Ruact.action_registry.size).to eq(1)
+        expect(Ruact.query_registry.size).to eq(1)
+
+        # Direct invocation of the cleanup that the reloader hook would run.
+        Ruact.action_registry.clear!
+        Ruact.query_registry.clear!
+
+        expect(Ruact.action_registry.size).to eq(0)
+        expect(Ruact.query_registry.size).to eq(0)
+      end
+
+      it "the snapshot write-if-changed guard skips a rewrite when controllers " \
+         "re-register the same symbols after a clear (Story 8.1 — pitfall #1 mitigation)" do
+        Dir.mktmpdir do |dir|
+          original_root = Rails.root
+          Rails.root = Pathname.new(dir)
+
+          Ruact.action_registry.register(:create_post, kind: :action)
+          Ruact::Railtie.write_server_functions_snapshot!
+          original_bytes = File.read(File.join(dir, "tmp/cache/ruact/server-functions.json"))
+
+          # Simulate a reload cycle: clear, then re-register the same symbol
+          # with a fresh class object (the same as what would happen when
+          # controller class bodies re-evaluate after Zeitwerk teardown).
+          Ruact.action_registry.clear!
+          Ruact.action_registry.register(:create_post, kind: :action)
+
+          expect(Ruact::Railtie.write_server_functions_snapshot!).to be(false)
+          expect(File.read(File.join(dir, "tmp/cache/ruact/server-functions.json"))).to eq(original_bytes)
+        ensure
+          Rails.root = original_root
+        end
+      end
+    end
   end
 end

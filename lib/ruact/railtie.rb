@@ -12,6 +12,41 @@ module Ruact
       load File.expand_path("../tasks/ruact.rake", __dir__)
     end
 
+    # Story 8.1 — clear the action/query registries on every code reload so
+    # removed `ruact_action` declarations don't linger in the registry. We hook
+    # `before_class_unload` (BEFORE Zeitwerk tears down constants) rather than
+    # `to_prepare` (AFTER reload): controller class bodies re-evaluate during
+    # the reload itself, and clearing in `to_prepare` would wipe their fresh
+    # registrations.
+    #
+    # First-boot is naturally safe — registries start empty, so there's nothing
+    # to clear; the very first controller class-body evaluation populates them.
+    # In production this hook never fires (no reloads), which is correct.
+    initializer "ruact.attach_registry_clear_hook" do |app|
+      app.reloader.before_class_unload do
+        Ruact.action_registry.clear!
+        Ruact.query_registry.clear!
+      end
+    end
+
+    # Story 8.1 — mount the single gem-managed endpoint that dispatches all
+    # `ruact_action` calls. The route is `POST /__ruact/fn/:name`; the
+    # controller resolves `:name` against `Ruact.action_registry` (and, once
+    # Story 9.1 lands, `Ruact.query_registry`) and delegates execution to the
+    # entry's host controller class via Rails' normal `dispatch` flow.
+    #
+    # `routes.append` (not `routes.draw`) appends to the host's routes after
+    # they're defined, so the gem's endpoint can never accidentally shadow a
+    # host route — the host always wins on conflicts.
+    initializer "ruact.mount_server_functions_route" do |app|
+      app.routes.append do
+        post "/__ruact/fn/:name",
+             to: "ruact/server_functions/endpoint#dispatch_action",
+             as: :ruact_server_function,
+             constraints: { name: /[a-zA-Z_][a-zA-Z0-9_]*/ }
+      end
+    end
+
     # Load the client manifest at boot (and on each code reload in development).
     # config.to_prepare runs once in production and before every code reload in
     # development, ensuring the manifest is always current without file I/O per

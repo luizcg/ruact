@@ -209,5 +209,83 @@ module Ruact
         expect(count).to eq(1), "Expected 1 </script> (closing tag), found #{count}"
       end
     end
+
+    describe "ruact_action DSL macro (Story 8.1)", :story_8_1 do
+      # The macro is class-level. Each example builds a fresh anonymous
+      # controller class so registry state is per-example. The registry
+      # itself is reset at the top of every example via Ruact.action_registry.clear!
+      # to avoid leakage across spec runs.
+      before { Ruact.action_registry.clear! }
+
+      it "registers an action in Ruact.action_registry with the correct kind, controller, and block" do
+        klass = Class.new do
+          def self.name = "ExampleController"
+          include Ruact::Controller
+          ruact_action(:create_post) { |params| "created #{params[:title]}" }
+        end
+
+        entry = Ruact.action_registry.entries[:create_post]
+        expect(entry).not_to be_nil
+        expect(entry.ruby_symbol).to eq(:create_post)
+        expect(entry.js_identifier).to eq("createPost")
+        expect(entry.kind).to eq(:action)
+        expect(entry.controller).to be(klass)
+        expect(entry.block).to be_a(Proc)
+      end
+
+      it "defines a private instance method matching the action symbol" do
+        klass = Class.new do
+          def self.name = "ExampleController"
+          include Ruact::Controller
+          ruact_action(:create_post) { |params| "echo #{params[:title]}" }
+        end
+
+        instance = klass.allocate
+        expect(instance.respond_to?(:create_post)).to be(false)
+        expect(instance.respond_to?(:create_post, true)).to be(true)
+        expect(instance.send(:create_post, { title: "Hi" })).to eq("echo Hi")
+      end
+
+      it "raises ArgumentError when no block is given" do
+        expect do
+          Class.new do
+            def self.name = "BadController"
+            include Ruact::Controller
+            ruact_action(:create_post)
+          end
+        end.to raise_error(ArgumentError, /requires a block/)
+      end
+
+      it "raises Ruact::ConfigurationError with the AC7 prefix on invalid symbol shape" do
+        expect do
+          Class.new do
+            def self.name = "BadController"
+            include Ruact::Controller
+            ruact_action(:CreatePost) { |_p| nil }
+          end
+        end.to raise_error(Ruact::ConfigurationError, /invalid server-function symbol :CreatePost in BadController/)
+      end
+
+      it "raises Ruact::ConfigurationError with the AC7 collision wording on within-registry duplicate js_identifier" do
+        expect do
+          Class.new do
+            def self.name = "CollidingController"
+            include Ruact::Controller
+            ruact_action(:foo_bar)  { |_p| nil }
+            ruact_action(:foo__bar) { |_p| nil }
+          end
+        end.to raise_error(Ruact::ConfigurationError, /server-function naming collision.*"fooBar"/m)
+      end
+
+      it "raises Ruact::ConfigurationError when the symbol maps to a reserved JS word" do
+        expect do
+          Class.new do
+            def self.name = "BadController"
+            include Ruact::Controller
+            ruact_action(:delete) { |_p| nil }
+          end
+        end.to raise_error(Ruact::ConfigurationError, /reserved/)
+      end
+    end
   end
 end
