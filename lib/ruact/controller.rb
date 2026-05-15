@@ -41,9 +41,10 @@ module Ruact
       __send__ action_name controller_name controller_path cookies
       default_render dispatch flash form_authenticity_token head headers
       instance_eval instance_exec logger logger= method params process
-      process_action public_send redirect_to render render_to_body
-      render_to_string request response send send_action send_data
-      send_file session url_for url_options verified_request?
+      process_action protect_from_forgery public_send redirect_to render
+      render_to_body render_to_string request response send send_action
+      send_data send_file session skip_forgery_protection url_for
+      url_options verified_request? verify_authenticity_token
     ].to_set.freeze
 
     # Story 8.1 — class-level DSL surface. The `ruact_action` macro registers
@@ -98,9 +99,28 @@ module Ruact
         # `:rest`) AND have no required keyword parameters (`:keyreq`).
         # Optional keyword params (`:key`) and double-splat (`:keyrest`)
         # are fine.
-        positional = block.parameters.count { |kind, _| %i[req opt rest].include?(kind) }
+        # Re-run-5 (2026-05-15) — block must accept exactly one
+        # positional argument. The macro invokes the block with one
+        # positional arg (`instance_exec(args, &block)`), so:
+        #
+        #   - `do |a, b|` would have `b` silently set to `nil`.
+        #     Parameters report `[[:opt, :a], [:opt, :b]]` for blocks
+        #     (proc-arity-coercion). Reject `:opt+:req > 1`.
+        #   - `do |p, required:|` (kwarg case): block.arity stays
+        #     negative, dispatch later raises. Reject `:keyreq`.
+        #   - `do |*args|` accepts any count including 1; `:rest`
+        #     entry counts as 1.
+        #   - `do |params, opt: nil|` is fine (optional kwarg).
+        #
+        # Allowed shapes: `do |p|`, `do |*args|`, `do |p, key: nil|`.
+        # Rejected: `do ||`, `do |a, b|`, `do |p, required:|`.
+        req_count    = block.parameters.count { |kind, _| kind == :req }
+        opt_count    = block.parameters.count { |kind, _| kind == :opt }
+        rest_count   = block.parameters.count { |kind, _| kind == :rest }
+        named_positional = req_count + opt_count
+        positional_total = named_positional + rest_count
         has_required_kwarg = block.parameters.any? { |kind, _| kind == :keyreq }
-        if positional == 0 || has_required_kwarg
+        if positional_total == 0 || named_positional > 1 || has_required_kwarg
           raise ArgumentError,
                 "ruact_action :#{symbol} block must accept exactly one " \
                 "positional parameter and no required keyword arguments " \

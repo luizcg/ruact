@@ -10,3 +10,7 @@
 
 # Story 8.0a — vitest devDeps (the bundled Vite plugin's only test runtime).
 vendor/javascript/vite-plugin-ruact/node_modules/
+# Story 8.1 Re-run-5 — local vitest devDeps so `npm test` works inside
+# this package directly (mirrors the vite-plugin-ruact pattern).
+vendor/javascript/ruact-server-functions-runtime/node_modules/
+vendor/javascript/ruact-server-functions-runtime/package-lock.json

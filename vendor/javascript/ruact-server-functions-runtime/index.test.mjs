@@ -5,7 +5,7 @@
 // error wrapping. Uses `vi.fn()` to stub `fetch` — no real network.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { _makeRef, __RUNTIME_VERSION__, __internals, RuactActionError } from "./index.js";
+import { _makeRef, __RUNTIME_VERSION__, __internals, RuactActionError, configureRuactRuntime } from "./index.js";
 
 let originalFetch;
 let originalDocument;
@@ -360,6 +360,78 @@ describe("Story 8.1 — Re-run-3 — Content-Type matching is case-insensitive (
 
     const result = await _makeRef("noop")({});
     expect(result).toEqual({ id: 42 });
+  });
+});
+
+describe("Story 8.1 — Re-run-5 — fetch redirect: 'error' (#5)", () => {
+  it("sets redirect: 'error' on the fetch init so auth `redirect_to` failures surface as errors", async () => {
+    mockFetchOk({ ok: true });
+    mockMetaTag(null);
+
+    await _makeRef("create_post")({});
+
+    const [, init] = globalThis.fetch.mock.calls[0];
+    expect(init.redirect).toBe("error");
+  });
+});
+
+describe("Story 8.1 — Re-run-5 — configureRuactRuntime (#6)", () => {
+  afterEach(() => {
+    configureRuactRuntime({ defaultHeaders: null });
+  });
+
+  it("merges defaultHeaders object into every fetch init", async () => {
+    mockFetchOk({ ok: true });
+    mockMetaTag(null);
+    configureRuactRuntime({ defaultHeaders: { Authorization: "Bearer abc" } });
+
+    await _makeRef("create_post")({});
+
+    const [, init] = globalThis.fetch.mock.calls[0];
+    expect(init.headers.Authorization).toBe("Bearer abc");
+  });
+
+  it("calls a defaultHeaders function on every request so tokens can refresh", async () => {
+    mockFetchOk({ ok: true });
+    mockMetaTag(null);
+    let calls = 0;
+    configureRuactRuntime({
+      defaultHeaders: () => {
+        calls += 1;
+        return { Authorization: `Bearer t${calls}` };
+      },
+    });
+
+    await _makeRef("create_post")({});
+    await _makeRef("create_post")({});
+
+    expect(globalThis.fetch.mock.calls[0][1].headers.Authorization).toBe("Bearer t1");
+    expect(globalThis.fetch.mock.calls[1][1].headers.Authorization).toBe("Bearer t2");
+  });
+
+  it("does NOT let defaultHeaders override the gem's CSRF / Accept / Content-Type", async () => {
+    mockFetchOk({ ok: true });
+    mockMetaTag("real-csrf");
+    configureRuactRuntime({
+      defaultHeaders: {
+        "X-CSRF-Token": "tampered",
+        Accept: "text/html",
+        "Content-Type": "application/xml",
+      },
+    });
+
+    await _makeRef("create_post")({});
+
+    const [, init] = globalThis.fetch.mock.calls[0];
+    expect(init.headers["X-CSRF-Token"]).toBe("real-csrf");
+    expect(init.headers.Accept).toBe("application/json");
+    expect(init.headers["Content-Type"]).toBe("application/json");
+  });
+
+  it("rejects non-object/non-function/non-null defaultHeaders", () => {
+    expect(() => configureRuactRuntime({ defaultHeaders: "Bearer abc" })).toThrow(
+      /must be a plain object or a \(\) => object function/,
+    );
   });
 });
 

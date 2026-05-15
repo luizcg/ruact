@@ -2,6 +2,18 @@
 
 require "spec_helper"
 require "active_support/concern"
+# Re-run-5 (2026-05-15) — the `:current_user` inherited-helper clobber
+# test creates a `Class.new(ActionController::Base)`, which requires
+# `action_controller` to be loaded. Pre-Re-run-5 this test was the
+# first thing in the suite to demand-load `action_controller`,
+# which had the side effect of triggering `Rails::Application`'s
+# class definition AFTER spec_helper's `require "ruact"` ran — so
+# `Ruact::Railtie` never got loaded into the process and downstream
+# specs that depend on the Railtie's `to_prepare` hook would behave
+# inconsistently. Loading both explicitly here makes the order
+# deterministic.
+require "action_controller"
+require "ruact"
 require "ruact/controller"
 
 module Ruact
@@ -385,6 +397,28 @@ module Ruact
             ruact_action(:current_user) { |_p| nil }
           end
         end.to raise_error(Ruact::ConfigurationError, /would clobber an inherited helper/)
+      end
+
+      it "rejects clobber of CSRF callback :verify_authenticity_token " \
+         "(re-run-5 #2 — added to FRAMEWORK_RESERVED_METHODS)" do
+        expect do
+          Class.new do
+            def self.name = "BadController"
+            include Ruact::Controller
+            ruact_action(:verify_authenticity_token) { |_p| nil }
+          end
+        end.to raise_error(Ruact::ConfigurationError, /would clobber a framework method/)
+      end
+
+      it "rejects a block with MULTIPLE required positional parameters " \
+         "(re-run-5 #3 — `do |a, b|` silently received nil for `b`)" do
+        expect do
+          Class.new do
+            def self.name = "ExampleController"
+            include Ruact::Controller
+            ruact_action(:two_positional) { |_a, _b| nil }
+          end
+        end.to raise_error(ArgumentError, /must accept exactly one positional/)
       end
 
       it "rejects clobber of Kernel#send / Kernel#public_send " \

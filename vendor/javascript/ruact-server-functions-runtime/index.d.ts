@@ -50,6 +50,25 @@ export function _makeRef(
 export const __RUNTIME_VERSION__: number;
 
 /**
+ * Re-run-5 (2026-05-15) — app-wide runtime configuration. Hosts in
+ * API mode (no CSRF meta tag) call this once at boot to register a
+ * default-headers function that supplies the `Authorization: Bearer …`
+ * (or similar) header on every server-function call.
+ *
+ * `defaultHeaders` accepts:
+ *   - a plain object → merged on every call
+ *   - a `() => object` function → called on every call (for tokens
+ *     that may refresh at runtime)
+ *   - `null` → clears any previously-registered default
+ *
+ * The gem's own headers (`Accept`, `Content-Type`, `X-CSRF-Token`)
+ * win over `defaultHeaders` — CSRF cannot be silently overridden.
+ */
+export function configureRuactRuntime(options: {
+  defaultHeaders?: Record<string, string> | (() => Record<string, string>) | null;
+}): void;
+
+/**
  * Re-run-4 (2026-05-15) — structured error thrown for 4xx/5xx responses.
  * Callers can branch on `status` and inspect `body` (already
  * JSON-decoded if the server's Content-Type indicated JSON) instead

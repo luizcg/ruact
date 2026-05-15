@@ -23,6 +23,17 @@ require "rack/test"
 require "ruact/controller"
 require "ruact/server_functions/endpoint_controller"
 
+# Re-run-5 (2026-05-15) — explicitly require `ruact/railtie` (NOT just
+# `ruact`, which is cached as already-loaded by `spec_helper.rb`'s
+# earlier `require "ruact"` that ran BEFORE Rails was defined and
+# therefore skipped the conditional `require_relative "ruact/railtie"
+# if defined?(Rails)` at the bottom of `ruact.rb`). Loading the
+# Railtie file directly registers `Ruact::Railtie` with Rails so its
+# `routes.prepend` AND `config.to_prepare` initializers (latter wires
+# `Ruact::ErbPreprocessorHook` into `ActionView::Template::Handlers::ERB`)
+# fire when the test app's `initialize!` runs.
+require "ruact/railtie"
+
 # Re-run-2 (2026-05-14): exercise the REAL `ActiveRecord::RecordInvalid`
 # rather than a structural stub. ActiveRecord is part of Rails (already a
 # dev dep via `gem "rails"`), so requiring `active_model` for the underlying
@@ -56,6 +67,21 @@ I18n.backend.load_translations
 require_relative "../controller_request_spec" if defined?(Rails::Application) &&
                                                  !defined?(ControllerRequestSpecSupport)
 
+# Re-run-5 (2026-05-15) — when reusing the Story 7.9 test app, append
+# the gem's `POST /__ruact/fn/:name` route AT LOAD TIME (before any
+# test runs). This is the only safe window: once `initialize!` has run
+# for the app (driven by EITHER spec's first `boot!`), adding routes
+# post-finalization is unreliable. Doing it here, at spec file load,
+# guarantees the route lands BEFORE either spec calls `boot!`.
+if defined?(ControllerRequestSpecSupport)
+  ControllerRequestSpecSupport.app_class.routes.append do
+    post "/__ruact/fn/:name",
+         to: "ruact/server_functions/endpoint#dispatch_action",
+         as: :ruact_server_function_spec,
+         constraints: { name: /[a-zA-Z_][a-zA-Z0-9_]*/ }
+  end
+end
+
 module DispatchRequestSpecSupport
   class << self
     def app_class
@@ -72,6 +98,15 @@ module DispatchRequestSpecSupport
       if defined?(ControllerRequestSpecSupport)
         ControllerRequestSpecSupport.boot!
       else
+        # Re-run-5 — when this spec runs standalone (no Story 7.9 app
+        # in the process), draw the gem route on its own app BEFORE
+        # initialize! so dispatch tests find it.
+        app_class.routes.append do
+          post "/__ruact/fn/:name",
+               to: "ruact/server_functions/endpoint#dispatch_action",
+               as: :ruact_server_function_standalone,
+               constraints: { name: /[a-zA-Z_][a-zA-Z0-9_]*/ }
+        end
         app_class.instance.initialize!
       end
       @booted = true

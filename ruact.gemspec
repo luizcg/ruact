@@ -20,11 +20,22 @@ Gem::Specification.new do |spec|
   spec.metadata["bug_tracker_uri"] = "https://github.com/luizcg/ruact/issues"
   spec.metadata["rubygems_mfa_required"] = "true"
 
+  # Re-run-5 (2026-05-15) — the `vendor/javascript/**` tree is part of
+  # the gem's PUBLIC surface: the Vite plugin imports
+  # `ruact/server-functions-runtime` (resolved via the bundled package
+  # under `vendor/javascript/ruact-server-functions-runtime/`) and
+  # auto-aliases that path at boot. Pre-batch the gemspec blanket-
+  # excluded `vendor/` to keep the legacy Yarn vendoring out of the
+  # published gem; the exclusion has to be narrower now. We keep
+  # `vendor/bundle/` out (that's the local Bundler install dir) but
+  # ship every other `vendor/` path. Without this, a `gem push`-ed
+  # release would generate import paths to files that don't exist on
+  # the consumer's disk.
   gemspec = File.basename(__FILE__)
   spec.files = IO.popen(%w[git ls-files -z], chdir: __dir__, err: IO::NULL) do |ls|
     ls.readlines("\x0", chomp: true).reject do |f|
       (f == gemspec) ||
-        f.start_with?(*%w[bin/ Gemfile .gitignore vendor/])
+        f.start_with?(*%w[bin/ Gemfile .gitignore vendor/bundle/])
     end
   end
   spec.bindir = "exe"

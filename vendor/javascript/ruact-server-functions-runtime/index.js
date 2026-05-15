@@ -18,6 +18,29 @@
 
 const RUNTIME_VERSION = 1;
 
+// Re-run-5 (2026-05-15) — module-level runtime configuration. Hosts
+// in API mode (no session cookie / no CSRF meta tag) need a way to
+// inject auth headers (`Authorization: Bearer …`) on every call.
+// `_makeRef`'s signature is locked by the codegen so we don't widen
+// it; instead, hosts call `configureRuactRuntime` once at app boot
+// to register a headers-producing function. The function runs on
+// every fetch so dynamic tokens (refreshed at runtime) are picked up.
+const runtimeOptions = {
+  defaultHeaders: null,
+};
+export function configureRuactRuntime(options) {
+  if (options && Object.prototype.hasOwnProperty.call(options, "defaultHeaders")) {
+    const value = options.defaultHeaders;
+    if (value === null || typeof value === "function" || (typeof value === "object" && value !== null)) {
+      runtimeOptions.defaultHeaders = value;
+    } else {
+      throw new TypeError(
+        "configureRuactRuntime: defaultHeaders must be a plain object or a () => object function",
+      );
+    }
+  }
+}
+
 /**
  * Re-run-4 (2026-05-15) — structured error class for 4xx/5xx responses.
  *
@@ -109,7 +132,19 @@ function buildFetchInit(args) {
   // request format. Without it, Rails' default for a POST to an HTML
   // controller would select the HTML branch — surprising in actions
   // expected to return structured JSON.
-  const headers = { Accept: "application/json" };
+  // Re-run-5 — start the headers map with defaultHeaders (so the gem's
+  // own keys, set below, OVERRIDE them) and then layer the gem's own
+  // keys on top. `Accept`, `Content-Type`, and `X-CSRF-Token` are the
+  // gem's responsibility — `configureRuactRuntime({ defaultHeaders })`
+  // can't silently downgrade CSRF or swap the response negotiation.
+  const extra = typeof runtimeOptions.defaultHeaders === "function"
+    ? runtimeOptions.defaultHeaders()
+    : runtimeOptions.defaultHeaders;
+  const headers = {};
+  if (extra && typeof extra === "object") {
+    Object.assign(headers, extra);
+  }
+  headers.Accept = "application/json";
   const csrf = resolveCsrfToken();
   if (csrf) headers["X-CSRF-Token"] = csrf;
 
@@ -126,6 +161,13 @@ function buildFetchInit(args) {
   return {
     method: "POST",
     credentials: "same-origin",
+    // Re-run-5 (2026-05-15) — `redirect: "error"` so the runtime
+    // FAILS LOUDLY when a host `before_action` `redirect_to "/login"`
+    // (auth filter) issues a 302. Default fetch follows redirects
+    // silently and would resolve with the eventual HTML login page
+    // body — masking auth failures from the caller. The structured
+    // `RuactActionError` path is the right surface for "not allowed".
+    redirect: "error",
     headers,
     body,
   };

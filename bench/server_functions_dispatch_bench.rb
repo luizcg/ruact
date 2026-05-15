@@ -122,24 +122,45 @@ Benchmark.ips do |x|
   x.compare!
 end
 
-def time_seconds
+# Re-run-5 (2026-05-15) — AC12 asks for MEDIAN per-call overhead, not
+# mean. Sample N individual requests so we can compute the median and
+# the percentile spread. The median is the load-bearing number — a few
+# slow outliers (GC pause, OS scheduler) would otherwise inflate the
+# mean and produce misleading regression alerts.
+def time_one_seconds
   t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
   yield
   Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
 end
 
-ruact_secs = time_seconds { 1000.times { post("/__ruact/fn/create_post", body_for.call, headers) } }
-plain_secs = time_seconds { 1000.times { post("/plain", body_for.call, headers) } }
+def sample_times(count, &block)
+  Array.new(count) { time_one_seconds(&block) }.sort
+end
 
-ruact_ms_per_call = (ruact_secs * 1000.0 / 1000).round(3)
-plain_ms_per_call = (plain_secs * 1000.0 / 1000).round(3)
-overhead_ms = (ruact_ms_per_call - plain_ms_per_call).round(3)
-overhead_pct = ((ruact_secs - plain_secs) / plain_secs * 100).round(1)
+def percentile(sorted, pct)
+  idx = (sorted.size * pct / 100).clamp(0, sorted.size - 1)
+  sorted[idx]
+end
+
+SAMPLES = 1000
+ruact_samples = sample_times(SAMPLES) { post("/__ruact/fn/create_post", body_for.call, headers) }
+plain_samples = sample_times(SAMPLES) { post("/plain", body_for.call, headers) }
+
+ruact_p50 = percentile(ruact_samples, 50) * 1000
+plain_p50 = percentile(plain_samples, 50) * 1000
+ruact_p95 = percentile(ruact_samples, 95) * 1000
+plain_p95 = percentile(plain_samples, 95) * 1000
+ruact_total = ruact_samples.sum
+plain_total = plain_samples.sum
+
+overhead_p50 = (ruact_p50 - plain_p50).round(3)
+overhead_p95 = (ruact_p95 - plain_p95).round(3)
 
 puts ""
-puts "1000 requests (Post.create! body):"
-puts "  ruact_action dispatch:    #{(ruact_secs * 1000).round(1)}ms total — #{ruact_ms_per_call}ms/call (#{(1000 / ruact_secs).round(0)} req/s)"
-puts "  plain controller action:  #{(plain_secs * 1000).round(1)}ms total — #{plain_ms_per_call}ms/call (#{(1000 / plain_secs).round(0)} req/s)"
-puts "  per-call overhead:        +#{overhead_ms}ms (#{overhead_pct}%)"
+puts "#{SAMPLES} requests (Post.create! body):"
+puts "  ruact_action dispatch:    total=#{(ruact_total * 1000).round(1)}ms  p50=#{ruact_p50.round(3)}ms  p95=#{ruact_p95.round(3)}ms"
+puts "  plain controller action:  total=#{(plain_total * 1000).round(1)}ms  p50=#{plain_p50.round(3)}ms  p95=#{plain_p95.round(3)}ms"
+puts "  per-call overhead (p50):  +#{overhead_p50}ms"
+puts "  per-call overhead (p95):  +#{overhead_p95}ms"
 puts ""
-puts "AC12 target: median ruact_action overhead < 20 ms per call (#{overhead_ms < 20 ? 'PASS' : 'FAIL'})"
+puts "AC12 target: MEDIAN ruact_action overhead < 20 ms per call (#{overhead_p50 < 20 ? 'PASS' : 'FAIL'})"
