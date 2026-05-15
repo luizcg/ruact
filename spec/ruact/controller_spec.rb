@@ -312,7 +312,29 @@ module Ruact
             include Ruact::Controller
             ruact_action(:no_args) { "pong" }
           end
-        end.to raise_error(ArgumentError, /must accept exactly one parameter/)
+        end.to raise_error(ArgumentError, /must accept exactly one positional parameter/)
+      end
+
+      it "rejects a block with required keyword arguments (re-run-4 #4 — " \
+         "block.parameters guard catches `do |p, required:|`)" do
+        expect do
+          Class.new do
+            def self.name = "ExampleController"
+            include Ruact::Controller
+            ruact_action(:bad_kwargs) { |_params, required:| required }
+          end
+        end.to raise_error(ArgumentError, /no required keyword arguments/)
+      end
+
+      it "accepts optional keyword args alongside the positional (re-run-4 #4 — " \
+         "`do |params, opt: nil|` is fine)" do
+        expect do
+          Class.new do
+            def self.name = "ExampleController"
+            include Ruact::Controller
+            ruact_action(:opt_kwargs) { |_params, opt: nil| opt }
+          end
+        end.not_to raise_error
       end
 
       it "accepts a splat-arity block (do |*args|) since it tolerates one positional arg" do

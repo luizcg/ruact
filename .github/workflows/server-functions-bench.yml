@@ -1,0 +1,54 @@
+name: Server-functions bench (AC12)
+
+# Story 8.1 AC12 — non-blocking nightly perf guard. Runs the AR-backed
+# end-to-end dispatch benchmark and posts the numbers as a workflow
+# summary. Does NOT gate merge (the bench measures wall-clock and is
+# subject to runner noise); it exists to surface 10× regressions in
+# the open instead of after release.
+#
+# Triggers:
+#   - nightly cron (06:00 UTC)
+#   - PRs touching `lib/ruact/server_functions/**` or the bench script
+#     itself
+#   - manual `workflow_dispatch`
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  pull_request:
+    paths:
+      - "lib/ruact/server_functions/**"
+      - "lib/ruact/controller.rb"
+      - "vendor/javascript/ruact-server-functions-runtime/**"
+      - "bench/server_functions_dispatch_bench.rb"
+      - ".github/workflows/server-functions-bench.yml"
+  workflow_dispatch:
+
+jobs:
+  bench:
+    name: Run dispatch bench
+    runs-on: ubuntu-latest
+    env:
+      BUNDLE_DEPLOYMENT: "false"
+      BUNDLE_FROZEN: "false"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+      - name: Run bench
+        id: bench
+        run: |
+          bundle exec ruby bench/server_functions_dispatch_bench.rb \
+            | tee bench-output.txt
+      - name: Post numbers as workflow summary
+        if: always()
+        run: |
+          {
+            echo "## Server-functions dispatch bench"
+            echo ""
+            echo '```'
+            cat bench-output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

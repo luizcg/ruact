@@ -31,6 +31,11 @@ gem "yard", "~> 0.9", require: false
 # Benchmarking
 gem "benchmark-ips", "~> 2.14", require: false
 gem "memory_profiler", "~> 1.0", require: false
+# Re-run-4 (2026-05-15) — sqlite3 powers the AR-backed AC12 dispatch
+# benchmark (`bench/server_functions_dispatch_bench.rb`) which compares
+# `ruact_action :create_post` against a plain controller doing the same
+# `Post.create!`. Not loaded by any spec; bench-only.
+gem "sqlite3", "~> 2.1", require: false
 
 # Coverage
 gem "simplecov", "~> 0.22", require: false

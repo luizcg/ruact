@@ -30,12 +30,20 @@ module Ruact
     # `:url_for`, `:url_options` — URL generation
     # `:dispatch`, `:process`, `:process_action` — Rails dispatch internals
     # `:form_authenticity_token`, `:verified_request?` — CSRF plumbing
+    # Re-run-4 (2026-05-15) — list expanded with the additional
+    # ActionController instance methods reviewers flagged as silently
+    # clobberable: `:render_to_string` / `:render_to_body` (response
+    # producers used by templating), `:send_action` (Rails dispatch
+    # internal), `:logger` / `:logger=` (clobbering breaks every log
+    # statement on the controller), `:default_render` (the gem hook
+    # method itself — overriding would disable RSC rendering).
     FRAMEWORK_RESERVED_METHODS = %i[
-      __send__ action_name controller_name controller_path cookies dispatch
-      flash form_authenticity_token head headers instance_eval instance_exec
-      method params process process_action public_send redirect_to render
-      request response send send_data send_file session url_for url_options
-      verified_request?
+      __send__ action_name controller_name controller_path cookies
+      default_render dispatch flash form_authenticity_token head headers
+      instance_eval instance_exec logger logger= method params process
+      process_action public_send redirect_to render render_to_body
+      render_to_string request response send send_action send_data
+      send_file session url_for url_options verified_request?
     ].to_set.freeze
 
     # Story 8.1 — class-level DSL surface. The `ruact_action` macro registers
@@ -79,13 +87,24 @@ module Ruact
                 "implementation with `ruact_action :#{symbol} do |params| ... end`"
         end
 
-        # Review-batch 1 (2026-05-14) — arity guard. The block's first
-        # parameter is the action-call args shadow; a zero-arity block would
-        # crash at dispatch time because the macro passes one argument.
-        unless block.arity == 1 || block.arity.negative?
+        # Re-run-4 (2026-05-15) — parameter-shape guard (replaces the
+        # earlier `block.arity` check). `block.arity` is negative for
+        # ALL signatures that include any optional/keyword/splat
+        # parameter — including footguns like `do |params, required:|`
+        # which would crash at dispatch time when the macro invokes the
+        # block with one positional argument and no keyword arguments.
+        # We use `block.parameters` for full inspection: the block must
+        # accept exactly one positional argument (`:req`, `:opt`, or
+        # `:rest`) AND have no required keyword parameters (`:keyreq`).
+        # Optional keyword params (`:key`) and double-splat (`:keyrest`)
+        # are fine.
+        positional = block.parameters.count { |kind, _| %i[req opt rest].include?(kind) }
+        has_required_kwarg = block.parameters.any? { |kind, _| kind == :keyreq }
+        if positional == 0 || has_required_kwarg
           raise ArgumentError,
                 "ruact_action :#{symbol} block must accept exactly one " \
-                "parameter (got arity=#{block.arity}). Use " \
+                "positional parameter and no required keyword arguments " \
+                "(got parameters=#{block.parameters.inspect}). Use " \
                 "`ruact_action :#{symbol} do |params| ... end`."
         end
 
@@ -179,7 +198,20 @@ module Ruact
                   "POST /__ruact/fn/:name. Direct method calls or wildcard " \
                   "routes are rejected for security reasons."
           end
-          args = ruact_action_params
+          begin
+            args = ruact_action_params
+          rescue JSON::ParserError => e
+            # Re-run-4 (2026-05-15) — return a structured 400 instead of
+            # surfacing the raw `JSON::ParserError`. The host's
+            # `rescue_from` chain may not have a handler for it (Rails'
+            # default is a 500), and even when it does the response
+            # shape is not the bad-request contract the JS runtime
+            # expects (`{error}` JSON body + 400 status).
+            return render(
+              json: { error: "ruact action :#{symbol} received malformed JSON body: #{e.message}" },
+              status: :bad_request
+            )
+          end
           result = instance_exec(args, &block)
           return if performed?
           # AC2: a nil block return renders 204 No Content (no body). A non-nil

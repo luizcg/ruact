@@ -5,7 +5,7 @@
 // error wrapping. Uses `vi.fn()` to stub `fetch` — no real network.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { _makeRef, __RUNTIME_VERSION__, __internals } from "./index.js";
+import { _makeRef, __RUNTIME_VERSION__, __internals, RuactActionError } from "./index.js";
 
 let originalFetch;
 let originalDocument;
@@ -259,6 +259,78 @@ describe("Story 8.1 — error responses", () => {
     await expect(_makeRef("create_post")({})).rejects.toThrow(
       /ruact action :create_post request failed: Failed to fetch/,
     );
+  });
+});
+
+describe("Story 8.1 — Re-run-4 — RuactActionError carries status/body (#6)", () => {
+  it("rejects with a RuactActionError exposing status and parsed JSON body on 422", async () => {
+    const r = {
+      ok: false,
+      status: 422,
+      headers: { get: (n) => (n.toLowerCase() === "content-type" ? "application/json" : null) },
+      text: vi.fn().mockResolvedValue(JSON.stringify({ errors: { title: ["can't be blank"] } })),
+      json: vi.fn(),
+    };
+    globalThis.fetch = vi.fn().mockResolvedValue(r);
+    mockMetaTag(null);
+
+    let captured = null;
+    try {
+      await _makeRef("create_post")({ title: "" });
+    } catch (err) {
+      captured = err;
+    }
+    expect(captured).toBeInstanceOf(RuactActionError);
+    expect(captured.status).toBe(422);
+    expect(captured.actionName).toBe("create_post");
+    expect(captured.body).toEqual({ errors: { title: ["can't be blank"] } });
+  });
+
+  it("RuactActionError.body holds raw text when the response is not JSON", async () => {
+    mockFetchError(500, "boom");
+    mockMetaTag(null);
+
+    let captured = null;
+    try {
+      await _makeRef("create_post")({});
+    } catch (err) {
+      captured = err;
+    }
+    expect(captured).toBeInstanceOf(RuactActionError);
+    expect(captured.status).toBe(500);
+    expect(captured.body).toBe("boom");
+  });
+});
+
+describe("Story 8.1 — Re-run-4 — +json structured-syntax-suffix media types (#7)", () => {
+  it("parses application/problem+json as JSON (RFC 6838 §4.2.8)", async () => {
+    const r = {
+      ok: true,
+      status: 200,
+      headers: { get: (n) => (n.toLowerCase() === "content-type" ? "application/problem+json" : null) },
+      text: vi.fn().mockResolvedValue(JSON.stringify({ type: "about:blank", title: "ok" })),
+      json: vi.fn(),
+    };
+    globalThis.fetch = vi.fn().mockResolvedValue(r);
+    mockMetaTag(null);
+
+    const result = await _makeRef("noop")({});
+    expect(result).toEqual({ type: "about:blank", title: "ok" });
+  });
+
+  it("parses application/vnd.api+json as JSON", async () => {
+    const r = {
+      ok: true,
+      status: 200,
+      headers: { get: (n) => (n.toLowerCase() === "content-type" ? "application/vnd.api+json" : null) },
+      text: vi.fn().mockResolvedValue(JSON.stringify({ data: { id: "1" } })),
+      json: vi.fn(),
+    };
+    globalThis.fetch = vi.fn().mockResolvedValue(r);
+    mockMetaTag(null);
+
+    const result = await _makeRef("noop")({});
+    expect(result).toEqual({ data: { id: "1" } });
   });
 });
 

@@ -66,11 +66,18 @@ module Ruact
         # `controller_path` / Pundit policy resolution / any code that reads
         # the routing identity. Restore after dispatch so the endpoint
         # response can be rendered with its own identity intact.
+        # Re-run-4 (2026-05-15) — DROP `name: raw_name` from the swap.
+        # The host action does not need the routing function name (it's
+        # already inferable from `action_name`), and keeping it in
+        # `path_parameters` made `params[:name]` inside the host action /
+        # before_action chain return the route function name instead of
+        # a legitimate submitted body field named `:name`. Only
+        # `controller`/`action` are swapped — those are required for
+        # `controller_name` / `controller_path` / Pundit / instrumentation.
         original_path_parameters = request.path_parameters.dup
         host_path_parameters = {
           controller: host_class.controller_path,
-          action: name_sym.to_s,
-          name: raw_name
+          action: name_sym.to_s
         }
         request.path_parameters = host_path_parameters
 

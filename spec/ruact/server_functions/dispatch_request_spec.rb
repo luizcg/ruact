@@ -255,21 +255,16 @@ RSpec.describe "Story 8.1: POST /__ruact/fn/:name dispatch", :story_8_1 do
       )
     end
 
-    it "raises on malformed JSON instead of silently treating it as {} " \
-       "(review-batch 2 — fail loud on corrupted request bodies)" do
-      # Re-run-2 (2026-05-14): now that `dispatch_action` reads the URL
-      # name via `request.path_parameters[:name]` (NOT `params[:name]`,
-      # which would force body parsing first), the body is parsed
-      # lazily inside `ruact_action_raw_args` AFTER the registry lookup
-      # succeeds. So malformed JSON for a KNOWN action surfaces
-      # `JSON::ParserError` from our own `JSON.parse` call; malformed JSON
-      # for an UNKNOWN action returns 404 first (separate test below).
-      # Both branches are fail-loud — corrupted JSON is NOT silently
-      # coerced to an empty action-call.
-      expect do
-        post "/__ruact/fn/echo", "{ not json", { "CONTENT_TYPE" => "application/json" }
-      end.to raise_error(an_instance_of(JSON::ParserError)
-                          .or(an_instance_of(ActionDispatch::Http::Parameters::ParseError)))
+    it "returns a structured 400 on malformed JSON instead of silently treating it as {} " \
+       "(re-run-4 #1 — structured bad-request response, not raw JSON::ParserError)" do
+      # Pre-Re-run-4 this surfaced a raw `JSON::ParserError` from inside
+      # the action body. Now `ruact_action`'s defined method catches the
+      # parse error and renders a 400 with a `{error}` JSON body — same
+      # contract as the unknown-action 404 path.
+      post "/__ruact/fn/echo", "{ not json", { "CONTENT_TYPE" => "application/json" }
+      expect(last_response.status).to eq(400)
+      body = JSON.parse(last_response.body)
+      expect(body.fetch("error")).to match(/malformed JSON body/)
     end
   end
 
@@ -293,13 +288,29 @@ RSpec.describe "Story 8.1: POST /__ruact/fn/:name dispatch", :story_8_1 do
 
   describe "AC5 — params shadow inside the block" do
     it "the block's `params` argument carries the action-call args; the controller's " \
-       "`params` accessor still carries the routing data (`:name`)" do
+       "`params` accessor carries the routing data (controller/action)" do
+      # Re-run-4 (#2): `:name` is no longer injected into
+      # `request.path_parameters` (would shadow a legitimate body field
+      # named `:name`). The block's `params` is the body; the controller's
+      # `params` carries `:controller` and `:action` (Rails routing data).
       post "/__ruact/fn/capture_both",
            { "title" => "From body" }.to_json,
            { "CONTENT_TYPE" => "application/json" }
       body = JSON.parse(last_response.body)
       expect(body.fetch("block_params")).to eq("title" => "From body")
-      expect(body.fetch("request_params_name")).to eq("capture_both")
+      expect(body.fetch("request_params_name")).to be_nil
+    end
+
+    it "preserves a body field literally named `:name` (re-run-4 #2 — no leak from path_parameters)" do
+      # Send `{ "name": "alice" }` as the body. Pre-batch the dispatcher
+      # had injected `name: "send_name"` into path_parameters which
+      # merged into params and shadowed the body field; the block would
+      # have seen `params[:name] == "send_name"`. Now it sees "alice".
+      post "/__ruact/fn/echo",
+           { "name" => "alice" }.to_json,
+           { "CONTENT_TYPE" => "application/json" }
+      expect(last_response.status).to eq(200)
+      expect(JSON.parse(last_response.body)).to eq("echoed" => { "name" => "alice" })
     end
   end
 

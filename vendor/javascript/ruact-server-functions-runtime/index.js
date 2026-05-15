@@ -19,6 +19,30 @@
 const RUNTIME_VERSION = 1;
 
 /**
+ * Re-run-4 (2026-05-15) — structured error class for 4xx/5xx responses.
+ *
+ * Pre-batch the runtime threw a plain `Error` whose message embedded
+ * the status + body. Callers wanting to branch on status (`error.status
+ * === 422`) or parse the body had to scrape the message — fragile and
+ * not the AC4/AC10 contract. `RuactActionError` exposes the structured
+ * fields directly while still carrying a human-readable `message`.
+ *
+ * The constructor accepts the parsed body (already JSON-decoded if the
+ * Content-Type said so) so callers don't re-parse.
+ */
+export class RuactActionError extends Error {
+  constructor({ name, status, body, response }) {
+    const bodyForMessage = typeof body === "string" ? body : JSON.stringify(body);
+    super(`ruact action :${name} failed: ${status} ${bodyForMessage}`);
+    this.name = "RuactActionError";
+    this.actionName = name;
+    this.status = status;
+    this.body = body;
+    this.response = response;
+  }
+}
+
+/**
  * Returns a callable accessor for a server function registered with the
  * given Ruby symbol name. The accessor, when invoked, POSTs the args to
  * `/__ruact/fn/${name}` and resolves with the response (JSON-decoded for
@@ -68,10 +92,13 @@ async function ruactPost(name, args) {
     );
   }
   if (!response.ok) {
-    const body = await safeReadText(response);
-    throw new Error(
-      `ruact action :${name} failed: ${response.status} ${body}`,
-    );
+    // Re-run-4 (2026-05-15) — throw a structured `RuactActionError` so
+    // callers can branch on `status` / `body` instead of scraping the
+    // message string. We parse the body the same way as a successful
+    // response (JSON when CT says so, otherwise text) so the shape is
+    // consistent across the success and failure paths.
+    const body = await safeParseBody(response);
+    throw new RuactActionError({ name, status: response.status, body, response });
   }
   return parseResponse(response);
 }
@@ -121,19 +148,37 @@ async function parseResponse(response) {
   if (text.length === 0) return null;
   // Re-run-3 (2026-05-15) — Content-Type matching is case-insensitive
   // per RFC 9110 §8.3.1 (`Application/JSON` and `application/json` are
-  // the same media type). Pre-batch the check was case-sensitive, so a
-  // proxy that upper-cased the header would leak a JSON body as raw text.
+  // the same media type).
+  // Re-run-4 (2026-05-15) — also accept structured-syntax-suffix JSON
+  // types per RFC 6838 §4.2.8: `application/problem+json`,
+  // `application/vnd.api+json`, etc. The regex matches the literal
+  // `application/json` and any `+json` suffix.
   const contentType = (response.headers.get("Content-Type") || "").toLowerCase();
-  if (contentType.includes("application/json")) {
+  if (/^application\/(json|.*\+json)\b/.test(contentType)) {
     return JSON.parse(text);
   }
   return text;
 }
 
-async function safeReadText(response) {
+async function safeParseBody(response) {
+  // Mirror `parseResponse`'s logic but never let a parse failure crash
+  // the error path — if the JSON parse fails we fall back to the raw
+  // text. The error path is already a sad path; surfacing a second
+  // exception inside it would hide the real failure from the caller.
+  let text;
   try {
-    return await response.text();
+    text = await response.text();
   } catch {
     return "<unreadable body>";
   }
+  if (text.length === 0) return null;
+  const contentType = (response.headers.get("Content-Type") || "").toLowerCase();
+  if (/^application\/(json|.*\+json)\b/.test(contentType)) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  }
+  return text;
 }
