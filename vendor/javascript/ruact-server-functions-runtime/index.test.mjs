@@ -262,6 +262,35 @@ describe("Story 8.1 — error responses", () => {
   });
 });
 
+describe("Story 8.1 — Re-run-3 — URL encoding of name (#6)", () => {
+  it("encodeURIComponent's the name so a stray '/' cannot rewrite the path", async () => {
+    mockFetchOk({ ok: true });
+    mockMetaTag(null);
+
+    await _makeRef("../foo?x=1")({});
+
+    const [url] = globalThis.fetch.mock.calls[0];
+    expect(url).toBe("/__ruact/fn/..%2Ffoo%3Fx%3D1");
+  });
+});
+
+describe("Story 8.1 — Re-run-3 — Content-Type matching is case-insensitive (#5)", () => {
+  it("parses JSON when Content-Type is `Application/JSON` (RFC 9110 — case-insensitive media type)", async () => {
+    const r = {
+      ok: true,
+      status: 200,
+      headers: { get: (n) => (n.toLowerCase() === "content-type" ? "Application/JSON; charset=utf-8" : null) },
+      text: vi.fn().mockResolvedValue('{"id":42}'),
+      json: vi.fn(),
+    };
+    globalThis.fetch = vi.fn().mockResolvedValue(r);
+    mockMetaTag(null);
+
+    const result = await _makeRef("noop")({});
+    expect(result).toEqual({ id: 42 });
+  });
+});
+
 describe("Story 8.1 — __internals (test-only surface)", () => {
   it("exposes buildFetchInit, resolveCsrfToken, parseResponse for granular asserts", () => {
     expect(typeof __internals.buildFetchInit).toBe("function");

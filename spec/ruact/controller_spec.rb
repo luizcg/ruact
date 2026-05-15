@@ -346,6 +346,56 @@ module Ruact
           end
         end.to raise_error(Ruact::ConfigurationError, /would clobber an existing method/)
       end
+
+      it "rejects clobber of an INHERITED app helper like :current_user " \
+         "(re-run-3 #2 — guard extended from own-class to inherited app methods)" do
+        # Stand-in for `ApplicationController` defining `current_user` and
+        # subclasses inheriting it; declaring `ruact_action :current_user`
+        # would silently override the auth helper.
+        app_controller = Class.new(ActionController::Base) do
+          def current_user; end
+          def authenticate_user!; end
+        end
+        expect do
+          Class.new(app_controller) do
+            def self.name = "BadController"
+            include Ruact::Controller
+            ruact_action(:current_user) { |_p| nil }
+          end
+        end.to raise_error(Ruact::ConfigurationError, /would clobber an inherited helper/)
+      end
+
+      it "rejects clobber of Kernel#send / Kernel#public_send " \
+         "(re-run-3 #2 — added to FRAMEWORK_RESERVED_METHODS)" do
+        expect do
+          Class.new do
+            def self.name = "BadController"
+            include Ruact::Controller
+            ruact_action(:send) { |_p| nil }
+          end
+        end.to raise_error(Ruact::ConfigurationError, /would clobber a framework method/)
+      end
+    end
+
+    describe "ruact_action cross-controller collisions (Story 8.1 — re-run-3)" do
+      before { Ruact.action_registry.clear! }
+
+      it "raises Ruact::ConfigurationError when the SAME symbol is declared on TWO controllers " \
+         "(re-run-3 #1 — silent overwrite would route to whichever loaded last)" do
+        Class.new do
+          def self.name = "PostsController"
+          include Ruact::Controller
+          ruact_action(:create_post) { |_p| nil }
+        end
+
+        expect do
+          Class.new do
+            def self.name = "AdminPostsController"
+            include Ruact::Controller
+            ruact_action(:create_post) { |_p| nil }
+          end
+        end.to raise_error(Ruact::ConfigurationError, /declared in BOTH/)
+      end
     end
   end
 end

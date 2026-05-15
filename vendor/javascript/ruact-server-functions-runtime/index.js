@@ -52,7 +52,12 @@ export const __internals = {
 };
 
 async function ruactPost(name, args) {
-  const url = `/__ruact/fn/${name}`;
+  // Re-run-3 (2026-05-15) — `encodeURIComponent(name)` so a stray `/`,
+  // `?`, or `#` in a name (only reachable through direct/buggy
+  // `_makeRef` calls — the gem-side route constraint and the codegen
+  // validator both refuse non-identifier characters) cannot rewrite the
+  // path or hijack the query/fragment of the request URL.
+  const url = `/__ruact/fn/${encodeURIComponent(name)}`;
   const init = buildFetchInit(args);
   let response;
   try {
@@ -114,7 +119,11 @@ async function parseResponse(response) {
   // versions parsed JSON eagerly and failed `SyntaxError` on these.
   const text = await response.text();
   if (text.length === 0) return null;
-  const contentType = response.headers.get("Content-Type") || "";
+  // Re-run-3 (2026-05-15) — Content-Type matching is case-insensitive
+  // per RFC 9110 §8.3.1 (`Application/JSON` and `application/json` are
+  // the same media type). Pre-batch the check was case-sensitive, so a
+  // proxy that upper-cased the header would leak a JSON body as raw text.
+  const contentType = (response.headers.get("Content-Type") || "").toLowerCase();
   if (contentType.includes("application/json")) {
     return JSON.parse(text);
   }

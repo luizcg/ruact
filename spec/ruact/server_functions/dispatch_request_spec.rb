@@ -128,6 +128,18 @@ module DispatchRequestSpecSupport
 
     before_action :require_token, only: %i[authed_action]
 
+    # Re-run-3 (2026-05-15) — simulates a host before_action that touches
+    # `request.body` (e.g., a generic audit/logging filter that reads the
+    # raw POST body for signature verification). Pre-batch, `body.read`
+    # advanced the IO to EOF, so the action's own `body.read` returned
+    # `""` and silently coerced the action call to `{}`. The fix uses
+    # `request.raw_post` (Rack-cached) so the action still sees the
+    # original body. The `body_peek` action below proves it.
+    before_action :peek_body, only: %i[body_peek]
+    def peek_body
+      @peeked = request.body.read.tap { request.body.rewind if request.body.respond_to?(:rewind) }
+    end
+
     # spec_helper wipes the registries between examples (lazy-init singletons
     # reset to fresh instances), so the controller's class-body `ruact_action`
     # declarations would only populate the original singleton — invisible to
@@ -158,6 +170,10 @@ module DispatchRequestSpecSupport
         record = DispatchRequestSpecSupport::StubPost.new
         record.valid? # populates record.errors
         raise ActiveRecord::RecordInvalid, record
+      end
+
+      ruact_action(:body_peek) do |params|
+        { "echoed" => params.to_unsafe_h }
       end
 
       ruact_action(:routing_identity) do |_p|
@@ -330,6 +346,18 @@ RSpec.describe "Story 8.1: POST /__ruact/fn/:name dispatch", :story_8_1 do
     # the host's own `verify_authenticity_token` filter. Pre-batch-5
     # versions of the story file flagged this as deferred to Story 8.2's
     # `<form action={fn}>` integration where CSRF is the user-visible path.
+  end
+
+  describe "Re-run-3 — before_action reads request.body (#3 raw_post fix)" do
+    it "the action still sees the original body when a before_action already drained it" do
+      # Pre-Re-run-3: the before_action's `body.read` advanced the IO to EOF;
+      # the action's own `body.read` returned `""` → `ruact_action_raw_args`
+      # silently coerced to `{}` → echoed empty params. Now: `request.raw_post`
+      # is Rack-cached, so the action sees the full body.
+      post "/__ruact/fn/body_peek", { "title" => "Hello" }.to_json, { "CONTENT_TYPE" => "application/json" }
+      expect(last_response.status).to eq(200)
+      expect(JSON.parse(last_response.body)).to eq("echoed" => { "title" => "Hello" })
+    end
   end
 
   describe "Re-run-2 — host routing identity (#6 path params)" do

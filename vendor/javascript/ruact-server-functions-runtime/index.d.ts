@@ -12,13 +12,25 @@
 // branch only fires through Story 8.2's `<form action={fn}>` wiring.
 
 /**
+ * Re-run-3 (2026-05-15) — local alias for the FormData type that does
+ * NOT require `lib: ["dom"]` to be in the consumer's tsconfig. In DOM
+ * targets, `globalThis.FormData` is the real class and the union widens
+ * to accept it; in non-DOM targets (`lib: ["es2022"]`-only Node, Deno,
+ * SSR-only projects), the conditional resolves to a minimal structural
+ * type so the declaration still compiles cleanly under `tsc --noEmit`.
+ */
+type RuactFormData = typeof globalThis extends { FormData: infer F }
+  ? F
+  : { append(name: string, value: unknown): void };
+
+/**
  * Returns a callable accessor for a server function registered with the
  * given Ruby symbol name. The accessor, when invoked, POSTs the args to
  * `/__ruact/fn/${name}`.
  */
 export function _makeRef(
   name: string,
-): (args?: Record<string, unknown> | FormData) => Promise<unknown>;
+): (args?: Record<string, unknown> | RuactFormData) => Promise<unknown>;
 
 /** Numeric sentinel downstream tooling can read to confirm the real
  * runtime is in place (the Story 8.0a placeholder exported

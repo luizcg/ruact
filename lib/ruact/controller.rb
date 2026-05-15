@@ -31,10 +31,11 @@ module Ruact
     # `:dispatch`, `:process`, `:process_action` — Rails dispatch internals
     # `:form_authenticity_token`, `:verified_request?` — CSRF plumbing
     FRAMEWORK_RESERVED_METHODS = %i[
-      action_name controller_name controller_path cookies dispatch flash
-      form_authenticity_token head headers params process process_action
-      redirect_to render request response send_data send_file session
-      url_for url_options verified_request?
+      __send__ action_name controller_name controller_path cookies dispatch
+      flash form_authenticity_token head headers instance_eval instance_exec
+      method params process process_action public_send redirect_to render
+      request response send send_data send_file session url_for url_options
+      verified_request?
     ].to_set.freeze
 
     # Story 8.1 — class-level DSL surface. The `ruact_action` macro registers
@@ -133,6 +134,30 @@ module Ruact
                 "ruact_action symbol (e.g. :#{symbol}_remote)."
         end
 
+        # Re-run-3 (2026-05-15) — refuse to clobber an INHERITED app helper.
+        # Common case: `ApplicationController` defines `current_user` /
+        # `authenticate_user!` / `authorize` and a subclass mistakenly
+        # writes `ruact_action :current_user`. The above own-class check
+        # misses these because the method lives on a superclass; the
+        # FRAMEWORK_RESERVED_METHODS check misses them because they are
+        # app-defined, not part of `ActionController::Base`. Detect by
+        # asking the class hierarchy MINUS the ActionController baseline:
+        # any method that responds on `self` but NOT on
+        # `ActionController::Base` is an app-defined helper inherited
+        # from `ApplicationController` (or a concern mixed in there).
+        baseline = defined?(ActionController::Base) ? ActionController::Base : nil
+        if baseline &&
+           (method_defined?(symbol) || private_method_defined?(symbol)) &&
+           !(baseline.method_defined?(symbol) || baseline.private_method_defined?(symbol)) &&
+           !@__ruact_defined_methods.include?(symbol)
+          raise Ruact::ConfigurationError,
+                "ruact_action :#{symbol} would clobber an inherited helper " \
+                "on #{self.name || self} (likely defined on " \
+                "ApplicationController or a concern). Overriding " \
+                "#{symbol.inspect} would break callers that rely on it — " \
+                "pick a different ruact_action symbol (e.g. :#{symbol}_remote)."
+        end
+
         Ruact.action_registry.register(symbol, kind: :action, controller: self, &block)
 
         # Review-batch 1 (2026-05-14) — define `<symbol>` directly (no
@@ -197,8 +222,14 @@ module Ruact
                      request.headers["Content-Type"]&.split(";")&.first
       case content_type
       when "application/json"
-        body = request.body.read
-        request.body.rewind if request.body.respond_to?(:rewind)
+        # Re-run-3 (2026-05-15) — use `request.raw_post` instead of
+        # `request.body.read`. Rack caches `raw_post` after the first
+        # read of the request body, so a host `before_action` that
+        # already touched `request.body` would otherwise leave the
+        # IO at EOF and our `.read` would return `""` — silently
+        # coercing the action call to an empty hash. `raw_post` is
+        # safe to call multiple times and returns the full POST body.
+        body = request.raw_post
         return {} if body.nil? || body.empty?
         # Review-batch 2 (2026-05-14) — raise on malformed JSON instead of
         # silently coercing to {}. A request with `Content-Type:

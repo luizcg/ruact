@@ -103,15 +103,38 @@ module Ruact
       end
 
       def detect_collision!(symbol, js_identifier, controller)
-        existing = @entries.values.find do |e|
+        # Re-run-3 (2026-05-15) — TWO failure shapes:
+        #
+        # (a) Different Ruby symbols, same JS identifier (`:foo_bar` and
+        #     `:fooBar` both → "fooBar"). Filtered by `js_identifier ==`.
+        # (b) Same Ruby symbol declared on TWO different controllers
+        #     (e.g., `ruact_action :create_post` in both `PostsController`
+        #     AND `AdminPostsController`). Pre-batch this silently
+        #     overwrote `@entries[symbol]` with the last-loaded one, so
+        #     dispatch routed to whichever controller Zeitwerk happened
+        #     to load last — non-deterministic in dev, surprise breakage
+        #     when refactoring. Detect by checking the existing entry's
+        #     `controller` against the one trying to register.
+        existing = @entries[symbol]
+        if existing && existing.controller != controller
+          raise Ruact::ConfigurationError,
+                "server-function naming collision: " \
+                ":#{symbol} is declared in BOTH " \
+                "#{describe_controller(existing.controller)} and " \
+                "#{describe_controller(controller)}. Each `ruact_action` " \
+                "symbol must be unique across the whole registry — pick a " \
+                "more specific name (e.g. :admin_create_post) on one side."
+        end
+
+        collision = @entries.values.find do |e|
           e.js_identifier == js_identifier && e.ruby_symbol != symbol
         end
-        return unless existing
+        return unless collision
 
         raise Ruact::ConfigurationError,
               "server-function naming collision: " \
               ":#{symbol} (in #{describe_controller(controller)}) and " \
-              ":#{existing.ruby_symbol} (in #{describe_controller(existing.controller)}) " \
+              ":#{collision.ruby_symbol} (in #{describe_controller(collision.controller)}) " \
               "both map to JS identifier \"#{js_identifier}\""
       end
 
