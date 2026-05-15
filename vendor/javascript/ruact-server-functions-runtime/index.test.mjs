@@ -22,6 +22,9 @@ afterEach(() => {
 });
 
 function mockFetchOk(jsonBody, { status = 200, contentType = "application/json" } = {}) {
+  // Re-run-2 (2026-05-14) — parseResponse now reads `text()` first, then
+  // JSON.parses if Content-Type says JSON. Default the text mock to the
+  // JSON-stringified body so tests still see the structured value.
   const response = {
     ok: true,
     status,
@@ -108,6 +111,14 @@ describe("Story 8.1 — JSON body branch", () => {
     expect(result).toEqual({ id: 7 });
   });
 
+  it("attaches Accept: application/json header (re-run-2 #8 — host respond_to branching)", async () => {
+    mockFetchOk({});
+    mockMetaTag(null);
+    await _makeRef("create_post")({});
+    const [, init] = globalThis.fetch.mock.calls[0];
+    expect(init.headers.Accept).toBe("application/json");
+  });
+
   it("resolves with raw text for non-JSON responses", async () => {
     const r = {
       ok: true,
@@ -125,12 +136,29 @@ describe("Story 8.1 — JSON body branch", () => {
     expect(r.json).not.toHaveBeenCalled();
   });
 
+  it("resolves with null for non-204 empty-body responses (e.g., `head :ok`, 205) " +
+    "(re-run-2 #7 — text-first parse)", async () => {
+    const r = {
+      ok: true,
+      status: 205,
+      headers: { get: (n) => (n.toLowerCase() === "content-type" ? "application/json" : null) },
+      text: vi.fn().mockResolvedValue(""),
+      json: vi.fn().mockRejectedValue(new SyntaxError("Unexpected end of JSON input")),
+    };
+    globalThis.fetch = vi.fn().mockResolvedValue(r);
+    mockMetaTag(null);
+
+    const result = await _makeRef("noop")({});
+    expect(result).toBeNull();
+    expect(r.json).not.toHaveBeenCalled();
+  });
+
   it("resolves with null for 204 No Content responses", async () => {
     const r = {
       ok: true,
       status: 204,
       headers: { get: () => null },
-      text: vi.fn(),
+      text: vi.fn().mockResolvedValue(""),
       json: vi.fn(),
     };
     globalThis.fetch = vi.fn().mockResolvedValue(r);
@@ -141,14 +169,14 @@ describe("Story 8.1 — JSON body branch", () => {
   });
 
   it("resolves with null for 204 No Content even when Content-Type says application/json " +
-    "(review-batch 4 — order 204 check before JSON branch)", async () => {
+    "(review-batch 4 + re-run-2 — empty body → null regardless of Content-Type)", async () => {
     const r = {
       ok: true,
       status: 204,
       // Rails sends `head :no_content` with Content-Type: application/json
       // when the controller is in a JSON-context. The 204 still has no body.
       headers: { get: (n) => (n.toLowerCase() === "content-type" ? "application/json" : null) },
-      text: vi.fn(),
+      text: vi.fn().mockResolvedValue(""),
       json: vi.fn().mockRejectedValue(new SyntaxError("Unexpected end of JSON input")),
     };
     globalThis.fetch = vi.fn().mockResolvedValue(r);

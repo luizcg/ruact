@@ -35,11 +35,15 @@ module Ruact
     # Story 9.1 lands, `Ruact.query_registry`) and delegates execution to the
     # entry's host controller class via Rails' normal `dispatch` flow.
     #
-    # `routes.append` (not `routes.draw`) appends to the host's routes after
-    # they're defined, so the gem's endpoint can never accidentally shadow a
-    # host route — the host always wins on conflicts.
+    # Story 8.1 Re-run-2 (2026-05-14) — `routes.prepend` (not `.append`) so
+    # the gem's reserved `/__ruact/fn/:name` endpoint wins ahead of any host
+    # catch-all (e.g. `match "*path", to: "errors#not_found"` or a wildcard
+    # POST handler) that would otherwise swallow every server-function call
+    # before Ruact saw it. The `/__ruact/fn/` URL prefix is the gem's
+    # documented reserved namespace; hosts that route under `/__ruact/` are
+    # using the same prefix at their own risk.
     initializer "ruact.mount_server_functions_route" do |app|
-      app.routes.append do
+      app.routes.prepend do
         post "/__ruact/fn/:name",
              to: "ruact/server_functions/endpoint#dispatch_action",
              as: :ruact_server_function,

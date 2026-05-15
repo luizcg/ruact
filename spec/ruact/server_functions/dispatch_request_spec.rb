@@ -23,6 +23,31 @@ require "rack/test"
 require "ruact/controller"
 require "ruact/server_functions/endpoint_controller"
 
+# Re-run-2 (2026-05-14): exercise the REAL `ActiveRecord::RecordInvalid`
+# rather than a structural stub. ActiveRecord is part of Rails (already a
+# dev dep via `gem "rails"`), so requiring `active_model` for the underlying
+# validation error and `active_record` for `RecordInvalid` is cheap. The
+# require is local to this spec — the rest of the suite continues to use
+# the lightweight rails_stub.rb path.
+require "active_model"
+require "active_record"
+require "i18n"
+
+# Load ActiveModel + ActiveRecord locale files so `RecordInvalid#message`
+# resolves the `errors.messages.record_invalid` translation key — without
+# this, `error.message` returns "Translation missing: en.activemodel.errors..."
+# instead of the human-readable "Validation failed: Title can't be blank".
+{
+  "activemodel" => "active_model",
+  "activerecord" => "active_record"
+}.each do |gem_name, dir|
+  spec = Gem.loaded_specs[gem_name]
+  next unless spec
+  locale_file = File.join(spec.gem_dir, "lib", dir, "locale", "en.yml")
+  I18n.load_path << locale_file if File.exist?(locale_file)
+end
+I18n.backend.load_translations
+
 # Reuse the Rails::Application booted by `controller_request_spec.rb` if it
 # has already been loaded into this RSpec process — Rails does not support
 # two distinct `Rails::Application` subclasses initialized in the same
@@ -68,12 +93,22 @@ module DispatchRequestSpecSupport
     end
   end
 
-  # Stand-in for `ActiveRecord::RecordInvalid` — same call shape; no AR dep.
-  class StubRecordInvalid < StandardError
-    attr_reader :record
-    def initialize(message = "validation failed", record: nil)
-      super(message)
-      @record = record
+  # Minimal ActiveModel-compatible record class so a REAL
+  # `ActiveRecord::RecordInvalid` instance can be constructed (the error's
+  # `#initialize(record)` reads `record.errors.full_messages`). This keeps
+  # the AC9 spec faithful to the literal AC wording while not requiring a
+  # full ActiveRecord schema/setup.
+  class StubPost
+    include ActiveModel::Model
+    attr_accessor :title
+    validates :title, presence: true
+
+    # Override `i18n_scope` to `:activerecord` so `RecordInvalid#message`
+    # resolves the `activerecord.errors.messages.record_invalid` key
+    # ("Validation failed: %{errors}") instead of falling through to the
+    # missing `activemodel.errors.messages.record_invalid`.
+    def self.i18n_scope
+      :activerecord
     end
   end
 
@@ -84,7 +119,7 @@ module DispatchRequestSpecSupport
       render(json: { error: error.message, error_class: error.class.name }, status: :unprocessable_entity)
     end
 
-    rescue_from StubRecordInvalid do |error|
+    rescue_from ActiveRecord::RecordInvalid do |error|
       render(
         json: { error: error.message, error_class: error.class.name, validation: true },
         status: :unprocessable_entity
@@ -120,7 +155,21 @@ module DispatchRequestSpecSupport
       ruact_action(:nil_return) { |_p| nil }
 
       ruact_action(:invalid_record) do |_p|
-        raise DispatchRequestSpecSupport::StubRecordInvalid, "Title can't be blank"
+        record = DispatchRequestSpecSupport::StubPost.new
+        record.valid? # populates record.errors
+        raise ActiveRecord::RecordInvalid, record
+      end
+
+      ruact_action(:routing_identity) do |_p|
+        # Re-run-2 (2026-05-14) — proves that `params[:controller]` and
+        # `params[:action]` inside the host action describe the HOST class,
+        # not the gem endpoint route.
+        {
+          "controller" => self.controller_path,
+          "action" => action_name,
+          "params_controller" => self.params[:controller],
+          "params_action" => self.params[:action]
+        }
       end
     end
 
@@ -192,14 +241,19 @@ RSpec.describe "Story 8.1: POST /__ruact/fn/:name dispatch", :story_8_1 do
 
     it "raises on malformed JSON instead of silently treating it as {} " \
        "(review-batch 2 — fail loud on corrupted request bodies)" do
-      # Rails' own body parser middleware raises ParseError before our
-      # action handler runs — same fail-loud behaviour, slightly different
-      # error class. The point is: corrupted JSON is NOT silently coerced
-      # to an empty action-call. Pre-batch-2 our `ruact_action_raw_args`
-      # rescued JSON::ParserError and returned `{}`; that mask is removed.
+      # Re-run-2 (2026-05-14): now that `dispatch_action` reads the URL
+      # name via `request.path_parameters[:name]` (NOT `params[:name]`,
+      # which would force body parsing first), the body is parsed
+      # lazily inside `ruact_action_raw_args` AFTER the registry lookup
+      # succeeds. So malformed JSON for a KNOWN action surfaces
+      # `JSON::ParserError` from our own `JSON.parse` call; malformed JSON
+      # for an UNKNOWN action returns 404 first (separate test below).
+      # Both branches are fail-loud — corrupted JSON is NOT silently
+      # coerced to an empty action-call.
       expect do
         post "/__ruact/fn/echo", "{ not json", { "CONTENT_TYPE" => "application/json" }
-      end.to raise_error(ActionDispatch::Http::Parameters::ParseError)
+      end.to raise_error(an_instance_of(JSON::ParserError)
+                          .or(an_instance_of(ActionDispatch::Http::Parameters::ParseError)))
     end
   end
 
@@ -278,17 +332,37 @@ RSpec.describe "Story 8.1: POST /__ruact/fn/:name dispatch", :story_8_1 do
     # `<form action={fn}>` integration where CSRF is the user-visible path.
   end
 
-  describe "AC9 — ActiveRecord-style validation errors (review-batch 5 2026-05-14)" do
-    it "wraps a validation-style error (RecordInvalid-shaped) into a structured 422 " \
-       "via the host's rescue_from" do
+  describe "Re-run-2 — host routing identity (#6 path params)" do
+    it "inside the host action, params[:controller] and params[:action] describe " \
+       "the host, not the gem endpoint route" do
+      post "/__ruact/fn/routing_identity", "{}", { "CONTENT_TYPE" => "application/json" }
+      expect(last_response.status).to eq(200)
+      body = JSON.parse(last_response.body)
+      expect(body.fetch("controller")).to eq("dispatch_request_spec_support/test")
+      expect(body.fetch("action")).to eq("routing_identity")
+      expect(body.fetch("params_controller")).to eq("dispatch_request_spec_support/test")
+      expect(body.fetch("params_action")).to eq("routing_identity")
+    end
+  end
+
+  describe "Re-run-2 — unknown action returns 404 even when body is malformed (#5)" do
+    it "does not parse the body before lookup, so a corrupted JSON for an unknown " \
+       "name still returns the 404 shape" do
+      # Pre-Re-run-2 this raised ParseError on body parse before the lookup.
+      post "/__ruact/fn/no_such_thing", "{ not json", { "CONTENT_TYPE" => "application/json" }
+      expect(last_response.status).to eq(404)
+      expect(JSON.parse(last_response.body)).to eq("error" => "unknown ruact action: :no_such_thing")
+    end
+  end
+
+  describe "AC9 — ActiveRecord::RecordInvalid (re-run-2 #9 — real AR class, not a stub)" do
+    it "wraps a real ActiveRecord::RecordInvalid into a structured 422 via the host's rescue_from" do
       post "/__ruact/fn/invalid_record", "{}", { "CONTENT_TYPE" => "application/json" }
       expect(last_response.status).to eq(422)
       body = JSON.parse(last_response.body)
-      expect(body).to eq(
-        "error" => "Title can't be blank",
-        "error_class" => "DispatchRequestSpecSupport::StubRecordInvalid",
-        "validation" => true
-      )
+      expect(body.fetch("error_class")).to eq("ActiveRecord::RecordInvalid")
+      expect(body.fetch("error")).to match(/Title can't be blank/i)
+      expect(body.fetch("validation")).to be(true)
     end
   end
 

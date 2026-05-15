@@ -324,6 +324,28 @@ module Ruact
           end
         end.not_to raise_error
       end
+
+      it "rejects a String argument (re-run-2 #4 — String key would 404 on dispatch)" do
+        expect do
+          Class.new do
+            def self.name = "BadController"
+            include Ruact::Controller
+            ruact_action("create_post") { |_p| nil }
+          end
+        end.to raise_error(ArgumentError, /requires a Symbol/)
+      end
+
+      it "rejects clobber of a method already defined on the host class itself " \
+         "(re-run-2 #3 — guard extended from framework methods to host methods)" do
+        expect do
+          Class.new do
+            def self.name = "BadController"
+            include Ruact::Controller
+            def index; end
+            ruact_action(:index) { |_p| nil }
+          end
+        end.to raise_error(Ruact::ConfigurationError, /would clobber an existing method/)
+      end
     end
   end
 end

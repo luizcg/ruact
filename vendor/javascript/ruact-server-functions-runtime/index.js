@@ -72,7 +72,12 @@ async function ruactPost(name, args) {
 }
 
 function buildFetchInit(args) {
-  const headers = {};
+  // Re-run-2 (2026-05-14) — `Accept: application/json` so the host's
+  // `respond_to` / `before_action` / `rescue_from` logic sees a JSON
+  // request format. Without it, Rails' default for a POST to an HTML
+  // controller would select the HTML branch — surprising in actions
+  // expected to return structured JSON.
+  const headers = { Accept: "application/json" };
   const csrf = resolveCsrfToken();
   if (csrf) headers["X-CSRF-Token"] = csrf;
 
@@ -101,18 +106,19 @@ function resolveCsrfToken() {
 }
 
 async function parseResponse(response) {
-  // Review-batch 4 (2026-05-14) — 204 No Content is always null, regardless
-  // of any `Content-Type` header the server may have set. The previous
-  // order (JSON branch first) would attempt to parse an empty body when
-  // Rails sent `204 No Content` with `Content-Type: application/json` (the
-  // default for a `render head: :no_content` in a JSON-context controller),
-  // throwing a SyntaxError instead of resolving null.
-  if (response.status === 204) return null;
+  // Re-run-2 (2026-05-14) — read the response as TEXT first, then attempt
+  // JSON parse if the body is non-empty AND the Content-Type indicates
+  // JSON. This handles ALL empty-body cases (`head :no_content` (204),
+  // `head :ok` (200 + empty body), `head :reset_content` (205), etc.)
+  // uniformly: empty body → null, regardless of Content-Type. Earlier
+  // versions parsed JSON eagerly and failed `SyntaxError` on these.
+  const text = await response.text();
+  if (text.length === 0) return null;
   const contentType = response.headers.get("Content-Type") || "";
   if (contentType.includes("application/json")) {
-    return response.json();
+    return JSON.parse(text);
   }
-  return response.text();
+  return text;
 }
 
 async function safeReadText(response) {

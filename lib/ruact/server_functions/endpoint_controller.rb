@@ -38,7 +38,14 @@ module Ruact
 
       # `POST /__ruact/fn/:name` (mounted by `Ruact::Railtie`).
       def dispatch_action
-        name_sym = params[:name].to_sym
+        # Re-run-2 (2026-05-14) — read `:name` from `request.path_parameters`,
+        # NOT `params[:name]`. The latter triggers eager body parsing (Rails'
+        # `ActionController::StrongParameters#params` merges body + query +
+        # path params); a malformed JSON body for an unknown action would
+        # raise `ActionDispatch::Http::Parameters::ParseError` BEFORE the
+        # 404 path runs, hiding the real failure shape from the client.
+        raw_name = request.path_parameters[:name].to_s
+        name_sym = raw_name.to_sym
         entry = lookup_entry(name_sym)
         return render_unknown(name_sym) unless entry
 
@@ -50,19 +57,31 @@ module Ruact
           )
         end
 
-        # Run the host controller through Rails' normal dispatch path so
-        # `before_action :foo, only: :create_post` callbacks match the
-        # action name. The dispatched method IS the user's symbol — see
-        # `Ruact::Controller#ruact_action` for the body that reads action
-        # args + instance_exec's the block.
-        #
-        # The thread-local sentinel ensures the public action method can
-        # only be invoked here, not from a wildcard route the host may
-        # have set up — see the guard inside the defined method.
+        # Re-run-2 (2026-05-14) — rebuild `request.path_parameters` so that
+        # the host action sees `controller`/`action` keys describing ITSELF,
+        # not the gem-endpoint route. Without this, `params[:controller]`
+        # inside the host's action body returns
+        # `"ruact/server_functions/endpoint"` and `params[:action]` returns
+        # `"dispatch_action"` — which breaks `controller_name` /
+        # `controller_path` / Pundit policy resolution / any code that reads
+        # the routing identity. Restore after dispatch so the endpoint
+        # response can be rendered with its own identity intact.
+        original_path_parameters = request.path_parameters.dup
+        host_path_parameters = {
+          controller: host_class.controller_path,
+          action: name_sym.to_s,
+          name: raw_name
+        }
+        request.path_parameters = host_path_parameters
+
+        # Thread-local sentinel allows the public action method to be
+        # invoked only here, not from a wildcard route the host may have
+        # set up — see the guard inside the defined method.
         Thread.current[:__ruact_dispatching] = name_sym
         host_class.dispatch(name_sym.to_s, request, response)
       ensure
         Thread.current[:__ruact_dispatching] = nil
+        request.path_parameters = original_path_parameters if original_path_parameters
       end
 
       private

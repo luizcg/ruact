@@ -60,6 +60,18 @@ module Ruact
       #   registry (cross-registry collisions with `ruact_query` are caught
       #   later by {Ruact::ServerFunctions::Snapshot.functions_payload}).
       def ruact_action(symbol, &block)
+        # Re-run-2 (2026-05-14) — `ruact_action` strictly requires a Symbol.
+        # A String slips through the naming-bridge regex but stores a
+        # String key in `@entries`, while `EndpointController#dispatch_action`
+        # looks the entry up by `:name.to_sym` — net effect: silent 404 on
+        # every dispatch. Refuse Strings (and anything else) loudly.
+        unless symbol.is_a?(Symbol)
+          raise ArgumentError,
+                "ruact_action requires a Symbol argument, got " \
+                "#{symbol.inspect} (#{symbol.class}). Use " \
+                "`ruact_action :#{symbol}` not `ruact_action #{symbol.inspect}`."
+        end
+
         unless block
           raise ArgumentError,
                 "ruact_action :#{symbol} requires a block — declare the " \
@@ -95,6 +107,32 @@ module Ruact
                 "the host's CSRF / params / render plumbing remains intact."
         end
 
+        # Re-run-2 (2026-05-14) — refuse to clobber a method ALREADY defined
+        # on the host controller class itself. Common case: a controller has
+        # a normal `def index` action and the dev mistakenly writes
+        # `ruact_action :index do ... end`. Pre-batch this silently
+        # overrode :index with the action body + thread-local guard — the
+        # standard `GET /widgets` would then raise the security guard, since
+        # it's not a /__ruact/fn/index call. We check `instance_methods(false)
+        # + private_instance_methods(false)` (own class only — inherited
+        # framework methods are already caught by FRAMEWORK_RESERVED_METHODS).
+        #
+        # A method previously defined BY `ruact_action` on this same class
+        # is NOT a clobber — re-registration is legitimate (dev-mode reload,
+        # test re-registration after registry reset). We track our own
+        # define_method calls in `@__ruact_defined_methods` and skip the
+        # guard for those.
+        @__ruact_defined_methods ||= Set.new
+        own_methods = instance_methods(false) + private_instance_methods(false)
+        if own_methods.include?(symbol) && !@__ruact_defined_methods.include?(symbol)
+          raise Ruact::ConfigurationError,
+                "ruact_action :#{symbol} would clobber an existing method " \
+                "on #{self.name || self}. If #{symbol.inspect} is meant to be " \
+                "a server action, remove the existing definition first; " \
+                "if it's a regular controller action, pick a different " \
+                "ruact_action symbol (e.g. :#{symbol}_remote)."
+        end
+
         Ruact.action_registry.register(symbol, kind: :action, controller: self, &block)
 
         # Review-batch 1 (2026-05-14) — define `<symbol>` directly (no
@@ -108,6 +146,7 @@ module Ruact
         # `Ruact::ServerFunctions::EndpointController#dispatch_action`).
         # Without the sentinel, a wildcard route like `get ":controller/
         # :action"` could otherwise reach `create_post` as a GET (no CSRF).
+        @__ruact_defined_methods << symbol
         define_method(symbol) do
           unless Thread.current[:__ruact_dispatching] == symbol
             raise Ruact::Error,
