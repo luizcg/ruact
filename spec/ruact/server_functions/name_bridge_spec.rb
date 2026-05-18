@@ -147,6 +147,41 @@ module Ruact
             expect(described_class.to_js_identifier(:class_action)).to eq("classAction")
           end
         end
+
+        describe "Ruact-reserved names (Story 8.2 review patch R2 — 2026-05-17)", :story_8_2 do
+          # The codegen unconditionally re-exports certain runtime helpers
+          # from `@/.ruact/server-functions` (e.g. `revalidate`). A
+          # `ruact_action :revalidate` would emit `export const revalidate`
+          # next to the helper re-export and crash at module load with a
+          # duplicate-export error. Reject at controller load instead.
+          it "rejects :revalidate because it collides with the unconditional helper re-export" do
+            expect { described_class.to_js_identifier(:revalidate) }
+              .to raise_error(Ruact::ConfigurationError) do |error|
+                expect(error.message).to include(":revalidate")
+                expect(error.message).to include("duplicate export")
+              end
+          end
+
+          it "accepts :revalidate_post (suffix escape hatch — same convention as JS reserved-word path)" do
+            expect(described_class.to_js_identifier(:revalidate_post)).to eq("revalidatePost")
+          end
+
+          it "accepts :_revalidate (leading-underscore escape hatch)" do
+            expect(described_class.to_js_identifier(:_revalidate)).to eq("_revalidate")
+          end
+
+          it "R12 — rejects :_make_ref because it collides with the codegen's runtime import" do
+            expect { described_class.to_js_identifier(:_make_ref) }
+              .to raise_error(Ruact::ConfigurationError) do |error|
+                expect(error.message).to include(":_make_ref")
+                expect(error.message).to include("duplicate export")
+              end
+          end
+
+          it "R12 — accepts :_make_ref_action (suffix escape hatch keeps working)" do
+            expect(described_class.to_js_identifier(:_make_ref_action)).to eq("_makeRefAction")
+          end
+        end
       end
     end
   end

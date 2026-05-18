@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require "set"
-
 module Ruact
   module ServerFunctions
     # Translates a Ruby symbol into the JS identifier exported from
@@ -47,6 +45,19 @@ module Ruact
         switch this throw true try typeof var void while with yield
       ].to_set.freeze
 
+      # Story 8.2 (2026-05-17 review patches R2 + R12) — names already
+      # bound at the top of `app/javascript/.ruact/server-functions.ts`,
+      # either by the helper re-export (`revalidate`) or the runtime
+      # import (`_makeRef`). A `ruact_action :revalidate` or
+      # `ruact_action :_make_ref` would emit a clashing `export const`
+      # next to the existing binding and crash at module-load time.
+      # The rule fires at controller-class load so the failure
+      # surfaces during boot, not at first request.
+      RESERVED_BY_RUACT = %w[
+        _makeRef
+        revalidate
+      ].to_set.freeze
+
       class << self
         # @param symbol [Symbol, String] the Ruby identifier registered via
         #   `ruact_action` / `ruact_query` (Phase 2 stories 8.1 and 9.1).
@@ -83,6 +94,14 @@ module Ruact
             raise Ruact::ConfigurationError,
                   "ruact_action / ruact_query symbol :#{symbol} maps to JS reserved " \
                   "word \"#{js_id}\" — pick a different Ruby symbol (e.g. :#{symbol}_action)"
+          end
+
+          if RESERVED_BY_RUACT.include?(js_id)
+            raise Ruact::ConfigurationError,
+                  "ruact_action / ruact_query symbol :#{symbol} maps to \"#{js_id}\", " \
+                  "which is already exported by the ruact runtime from " \
+                  "`@/.ruact/server-functions` and would emit a duplicate export. " \
+                  "Pick a different Ruby symbol (e.g. :#{symbol}_action)."
           end
 
           js_id

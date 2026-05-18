@@ -48,6 +48,14 @@ const RESERVED_JS_IDENTIFIERS = new Set([
   "switch", "this", "throw", "true", "try", "typeof", "var", "void", "while", "with", "yield",
 ]);
 
+// Story 8.2 R12 (2026-05-17) — names ALREADY bound at module top by the
+// codegen itself: `_makeRef` (imported from the runtime) and `revalidate`
+// (re-exported unconditionally from the runtime). A snapshot that
+// declared either as an action `js_identifier` would emit a duplicate
+// binding and crash at module-load time. Mirrors Ruby
+// `NameBridge::RESERVED_BY_RUACT`.
+const RESERVED_BY_RUACT = new Set(["_makeRef", "revalidate"]);
+
 /**
  * Absolute path to the placeholder runtime bundled inside the gem. Used as the
  * target of the `ruact/server-functions-runtime` Vite alias so host apps
@@ -164,6 +172,15 @@ function validateSnapshot(snapshot) {
           "`bin/rails ruact:server_functions:generate`.",
       );
     }
+    if (RESERVED_BY_RUACT.has(fn.js_identifier)) {
+      throw new Error(
+        `ruact server-function codegen: js_identifier "${fn.js_identifier}" is reserved by ` +
+          "the ruact runtime/codegen surface (would clash with the module's `revalidate` " +
+          `re-export or \`_makeRef\` import) — ruby_symbol=${JSON.stringify(fn.ruby_symbol)} ` +
+          "cannot be exported. NameBridge should have rejected this; regenerate via " +
+          "`bin/rails ruact:server_functions:generate`.",
+      );
+    }
     if (seen.has(fn.js_identifier)) {
       throw new Error(
         `ruact server-function codegen: duplicate js_identifier "${fn.js_identifier}" in ` +
@@ -207,14 +224,26 @@ export function render(snapshot) {
       out += renderExport(fn);
     }
   }
+  // Story 8.2 — `revalidate()` re-export. Emitted in both branches
+  // (empty + populated registry) because the helper is unconditional;
+  // see codegen.rb's REVALIDATE_REEXPORT and the 2026-05-16 Decision-log
+  // entry for the rationale.
+  out += "\n";
+  out += `export { revalidate } from "${RUNTIME_IMPORT_SPECIFIER}";\n`;
   return out;
 }
 
 function renderExport(fn) {
+  // Story 8.2 (refined 2026-05-17 per review patch R1) — action signature
+  // is an intersection of two call signatures so `<form action={fn}>`
+  // typechecks DIRECTLY against React 19's `(formData: FormData) =>
+  // void | Promise<void>` while direct callers keep the `Promise<unknown>`
+  // return surface for `await createPost(...)`. Mirrors
+  // `Ruact::ServerFunctions::Codegen::ACTION_SIGNATURE` byte-for-byte.
   const signature =
     fn.kind === "query"
       ? "() => Promise<unknown>"
-      : "(args?: Record<string, unknown>) => Promise<unknown>";
+      : "((args?: FormData | Record<string, unknown>) => Promise<unknown>) & ((formData: FormData) => Promise<void>)";
   // JSON.stringify produces a JSON string literal — escaping backslashes,
   // double quotes, and control characters — so an arbitrary `ruby_symbol`
   // (from a corrupted or hand-edited snapshot) cannot break out of the

@@ -22,8 +22,44 @@ module Ruact
 
       RUNTIME_IMPORT = '"ruact/server-functions-runtime"'
 
-      ACTION_SIGNATURE = "(args?: Record<string, unknown>) => Promise<unknown>"
+      # Story 8.2 (2026-05-16, refined 2026-05-17 per review patch R1) —
+      # ACTION_SIGNATURE is a TS intersection type with TWO call signatures:
+      #
+      #   1. `(args?: FormData | Record<string, unknown>) => Promise<unknown>`
+      #      — for direct callers (`await createPost({...})` /
+      #      `await createPost(formData)` / event handlers), preserving the
+      #      JSON-decoded response value.
+      #   2. `(formData: FormData) => Promise<void>` — assignable to
+      #      `@types/react@19.x`'s `<form action>` prop, which is typed as
+      #      `(formData: FormData) => void | Promise<void>`. TS rejects
+      #      `Promise<unknown>` → `Promise<void>` even via the void-discard
+      #      rule (Promise generics are invariant), so the intersection is
+      #      required to make `<form action={createPost}>` typecheck DIRECTLY
+      #      against the codegen-emitted module — no call-site cast, no
+      #      wrapper closure.
+      #
+      # Runtime behavior is unchanged — `_makeRef` always resolves with the
+      # JSON-decoded value (or `null` for empty bodies). The intersection is
+      # a TYPE-ONLY surface: when callers `await` the result, they see
+      # `Promise<unknown>`; when React invokes the function from a
+      # `<form action>` prop, the `Promise<void>` overload is selected and
+      # the return value is discarded by React.
+      #
+      # See the 2026-05-17 entry in `gem/docs/internal/decisions/server-functions-api.md`
+      # ("R1 — intersection-type refinement") for the option (a)→(a′)
+      # evolution and the empirical typecheck-probe that motivated it.
+      # Query signatures stay narrow because queries are never reachable via
+      # `<form action>` (read-only via `useQuery`).
+      ACTION_SIGNATURE =
+        "((args?: FormData | Record<string, unknown>) => Promise<unknown>) " \
+        "& ((formData: FormData) => Promise<void>)"
       QUERY_SIGNATURE  = "() => Promise<unknown>"
+
+      # Story 8.2 — fixed re-export appended AFTER the per-function block.
+      # Emitted in BOTH branches (empty + populated registry) so
+      # `import { revalidate } from "@/.ruact/server-functions"` works on
+      # day one of any host app. Ruby + JS codegens emit byte-identically.
+      REVALIDATE_REEXPORT = "export { revalidate } from #{RUNTIME_IMPORT};\n".freeze
 
       # JS identifier shape — same as `NameBridge::VALID_SYMBOL` but expressed
       # in JS-identifier terms (leading letter / underscore / `$`, then alnum
@@ -89,6 +125,16 @@ module Ruact
             end
           end
 
+          # Story 8.2 — `revalidate()` is always available, so the
+          # re-export lands in both branches (empty registry + populated).
+          # The codegen owns the canonical import path
+          # `@/.ruact/server-functions` and is the only stable surface devs
+          # are told to import from in the docs (per the Story 8.0 ADR);
+          # without this line, devs would need a second import statement
+          # from a less-stable runtime-package path.
+          io << "\n"
+          io << REVALIDATE_REEXPORT
+
           io
         end
 
@@ -149,12 +195,12 @@ module Ruact
                   "ruact server-function codegen: snapshot.generated_at must be " \
                   "a String, got #{generated_at.class}"
           end
-          if generated_at.match?(LINE_TERMINATORS)
-            raise Ruact::ConfigurationError,
-                  "ruact server-function codegen: snapshot.generated_at contains " \
-                  "a line break (LF, CR, U+2028, or U+2029) — would break out of " \
-                  "the header comment; snapshot JSON is corrupted."
-          end
+          return unless generated_at.match?(LINE_TERMINATORS)
+
+          raise Ruact::ConfigurationError,
+                "ruact server-function codegen: snapshot.generated_at contains " \
+                "a line break (LF, CR, U+2028, or U+2029) — would break out of " \
+                "the header comment; snapshot JSON is corrupted."
         end
 
         def validate_functions!(functions)
@@ -221,13 +267,29 @@ module Ruact
         end
 
         def validate_not_reserved!(js_id, ruby_sym)
-          return unless NameBridge::RESERVED_JS_IDENTIFIERS.include?(js_id)
+          if NameBridge::RESERVED_JS_IDENTIFIERS.include?(js_id)
+            raise Ruact::ConfigurationError,
+                  "ruact server-function codegen: js_identifier #{js_id.inspect} " \
+                  "is a reserved JS word — ruby_symbol=#{ruby_sym.inspect} would " \
+                  "emit an invalid TS module. NameBridge should have rejected this; " \
+                  "regenerate via `bin/rails ruact:server_functions:generate`."
+          end
+
+          # Story 8.2 R12 — even if NameBridge somehow lets a reserved
+          # ruact name through (e.g. a hand-edited bridge JSON), the
+          # codegen MUST refuse — otherwise the rendered module would
+          # bind `revalidate` / `_makeRef` twice (once via the
+          # re-export / import, once via the action `export const`)
+          # and crash at module load.
+          return unless NameBridge::RESERVED_BY_RUACT.include?(js_id)
 
           raise Ruact::ConfigurationError,
                 "ruact server-function codegen: js_identifier #{js_id.inspect} " \
-                "is a reserved JS word — ruby_symbol=#{ruby_sym.inspect} would " \
-                "emit an invalid TS module. NameBridge should have rejected this; " \
-                "regenerate via `bin/rails ruact:server_functions:generate`."
+                "is reserved by the ruact runtime/codegen surface (would clash " \
+                "with the module's `revalidate` re-export or `_makeRef` import) — " \
+                "ruby_symbol=#{ruby_sym.inspect} cannot be exported. NameBridge " \
+                "should have rejected this; regenerate via " \
+                "`bin/rails ruact:server_functions:generate`."
         end
 
         def validate_no_duplicate!(seen, js_id)

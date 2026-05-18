@@ -1,7 +1,7 @@
 {
   "name": "ruact-server-functions-runtime",
-  "version": "0.1.0",
-  "description": "Server-functions runtime for ruact gem (Story 8.1). Provides `_makeRef(name)` that POSTs to `/__ruact/fn/:name` with CSRF + JSON / FormData support.",
+  "version": "0.2.0",
+  "description": "Server-functions runtime for ruact gem (Stories 8.1 + 8.2). Provides `_makeRef(name)` (POSTs to `/__ruact/fn/:name` with CSRF + JSON / FormData support, including the useActionState two-arg shape) and `revalidate(path?)` (Flight refetch via the installed ruact-router).",
   "type": "module",
   "main": "index.js",
   "types": "./index.d.ts",

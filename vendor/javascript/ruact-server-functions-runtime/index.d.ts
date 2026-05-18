@@ -39,10 +39,46 @@ type RuactResponse = typeof globalThis extends { Response: new (...args: never[]
  * Returns a callable accessor for a server function registered with the
  * given Ruby symbol name. The accessor, when invoked, POSTs the args to
  * `/__ruact/fn/${name}`.
+ *
+ * Story 8.2 (refined 2026-05-17 per review patch R1) — the return type
+ * is an intersection of FOUR call signatures so the same exported
+ * reference is usable from every call site:
+ *
+ *   1. `()` / `(args)` / `(prevState, formData)` — direct callers and
+ *      `useActionState`'s two-arg invocation; returns `Promise<unknown>`.
+ *   2. `(formData: FormData)` — assignable to React 19's `<form action>`
+ *      prop, which is typed as `(formData: FormData) => void | Promise<void>`.
+ *      Promise generics are invariant in TS, so `Promise<unknown>` is
+ *      NOT assignable to `Promise<void>` even via the void-discard rule;
+ *      the intersection lets `<form action={createPost}>` typecheck
+ *      DIRECTLY against the emitted module without a call-site cast.
+ *
+ * Runtime behavior is unchanged — `_makeRef` always resolves with the
+ * JSON-decoded value. The `Promise<void>` overload is a TYPE-ONLY
+ * surface: when React invokes the function from a `<form action>` prop,
+ * the return value is discarded by React anyway.
  */
 export function _makeRef(
   name: string,
-): (args?: Record<string, unknown> | RuactFormData) => Promise<unknown>;
+): ((
+  arg1?: Record<string, unknown> | RuactFormData,
+  arg2?: RuactFormData | Record<string, unknown>,
+) => Promise<unknown>) &
+  ((formData: RuactFormData) => Promise<void>);
+
+/**
+ * Story 8.2 — issues a Flight refetch of the supplied path (or the
+ * current URL when omitted) and swaps the React tree in place. Mirrors
+ * Next.js' `revalidatePath` ergonomic: call it after a server action
+ * settles when local React state is not enough to reflect the server
+ * mutation.
+ *
+ * Requires the ruact router to be installed (`setupRouter()` publishes
+ * `globalThis.__ruact_revalidate`). Throws a descriptive error when
+ * called without an installed router so the failure mode is loud rather
+ * than a silent no-op.
+ */
+export function revalidate(path?: string): Promise<void>;
 
 /** Numeric sentinel downstream tooling can read to confirm the real
  * runtime is in place (the Story 8.0a placeholder exported

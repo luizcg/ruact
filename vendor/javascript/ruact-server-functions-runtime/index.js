@@ -71,22 +71,101 @@ export class RuactActionError extends Error {
  * `/__ruact/fn/${name}` and resolves with the response (JSON-decoded for
  * application/json responses, text for everything else).
  *
- * The argument is type-checked at call time:
- *   - `undefined` / `null` / plain object → `Content-Type: application/json`,
- *     body = `JSON.stringify(args ?? {})`
- *   - `FormData` → multipart/form-data, body = the FormData (the browser
- *     sets the boundary header automatically)
+ * Story 8.2 — the returned function accepts up to TWO positional
+ * arguments to support React 19's `useActionState` shape:
+ *
+ *   useActionState(action, initialState)
+ *
+ * calls `action(prevState, formData)` on every submit. `_makeRef` picks
+ * the FormData-typed candidate from the call and discards the prevState
+ * argument silently — prev-state is a client-only concern, never
+ * transmitted to the server. The single-arg shape (`fn(args)` from event
+ * handlers; `<form action={fn}>` passing FormData directly) is preserved.
+ *
+ * Argument shape selection rules (first match wins):
+ *   - 0 args                                     → JSON body, `{}`
+ *   - 1 arg, FormData                            → multipart
+ *   - 1 arg, plain object / null / undefined     → JSON body
+ *   - 2 args, FormData in either slot            → multipart (FormData wins;
+ *                                                  the other arg is discarded)
+ *   - 2 args, neither FormData                   → JSON body of the SECOND arg
+ *                                                  (the `useActionState` payload
+ *                                                  slot); first arg discarded
+ *                                                  as prev-state
+ *   - 3+ args                                    → TypeError
  *
  * @param {string} name
- * @returns {(args?: Record<string, unknown> | FormData) => Promise<unknown>}
+ * @returns {(arg1?: Record<string, unknown> | FormData, arg2?: FormData | Record<string, unknown>) => Promise<unknown>}
  */
 export function _makeRef(name) {
-  return function ruactServerFunctionCall(args) {
-    return ruactPost(name, args);
+  return function ruactServerFunctionCall(...callArgs) {
+    if (callArgs.length > 2) {
+      throw new TypeError(
+        `ruact action :${name} called with ${callArgs.length} arguments — ` +
+          "expected 0, 1, or 2 (the useActionState shape)",
+      );
+    }
+    return ruactPost(name, pickWirePayload(callArgs));
   };
 }
 
+// Story 8.2 — picks the argument the wire request should serialize from
+// `_makeRef`'s call-args, following the rules documented in the JSDoc
+// above. Exported through `__internals` for the vitest suite (AC10) — it
+// is intentionally NOT part of the public runtime surface.
+function pickWirePayload(callArgs) {
+  const isFD = (v) => typeof FormData !== "undefined" && v instanceof FormData;
+  if (callArgs.length === 0) return undefined;
+  if (callArgs.length === 1) return callArgs[0];
+  // 2 args. Prefer a FormData candidate regardless of position.
+  if (isFD(callArgs[1])) return callArgs[1];
+  if (isFD(callArgs[0])) return callArgs[0];
+  // Defensive: useActionState's normal payload is in slot 1 (slot 0 is
+  // prev-state); echo that ordering for the non-FormData case too. The
+  // prevState shape is opaque (any React-state value) — never sent to
+  // the server.
+  return callArgs[1];
+}
+
 export const __RUNTIME_VERSION__ = RUNTIME_VERSION;
+
+/**
+ * Story 8.2 — issues a Flight refetch of the supplied path (or the
+ * current URL when omitted) and swaps the React tree in place. The
+ * runtime side is intentionally thin: it reads a globally-published
+ * handle (`globalThis.__ruact_revalidate`) that `ruact-router.js`'s
+ * `setupRouter()` registers at app boot, and delegates the actual
+ * refetch to the router's existing `navigate()` machinery (push: false,
+ * scroll: false — semantically: refetch in place, no history entry).
+ *
+ * Why globalThis instead of a direct import: the runtime ships inside
+ * the gem (`gem/vendor/javascript/...`) and the router lives inside the
+ * host app (`app/javascript/ruact-router.js`). Direct imports would
+ * couple the two packages and force the router into the gem; the
+ * globalThis handoff keeps the runtime portable.
+ *
+ * Throws when called without an installed router so a misconfigured
+ * app fails LOUDLY at the first call rather than silently no-op'ing.
+ *
+ * @param {string} [path] Optional path to refetch. Defaults to the
+ *   current `location.pathname + location.search`.
+ * @returns {Promise<void>}
+ */
+export async function revalidate(path) {
+  const handle = typeof globalThis !== "undefined" ? globalThis.__ruact_revalidate : undefined;
+  if (typeof handle !== "function") {
+    throw new Error(
+      "ruact: revalidate() called but no router is installed — wire setupRouter() in your application.jsx",
+    );
+  }
+  const target =
+    path != null
+      ? path
+      : typeof location !== "undefined"
+        ? location.pathname + location.search
+        : "/";
+  return handle(target);
+}
 
 // Exported for tests; intentionally NOT part of the public API surface
 // the codegen consumes. The vitest suite stubs `globalThis.fetch` and
@@ -96,6 +175,7 @@ export const __internals = {
   buildFetchInit,
   resolveCsrfToken,
   parseResponse,
+  pickWirePayload,
 };
 
 async function ruactPost(name, args) {
@@ -137,12 +217,23 @@ function buildFetchInit(args) {
   // keys on top. `Accept`, `Content-Type`, and `X-CSRF-Token` are the
   // gem's responsibility — `configureRuactRuntime({ defaultHeaders })`
   // can't silently downgrade CSRF or swap the response negotiation.
+  // Re-run-6 (2026-05-15) — match header names case-insensitively when
+  // filtering reserved keys from the caller-provided `defaultHeaders`.
+  // HTTP header names are case-insensitive (RFC 9110 §5.1), so a host
+  // passing `{ accept: "text/html" }` or `{ "content-type": "..." }`
+  // would otherwise survive the gem's own assignment (object keys are
+  // case-sensitive in JS) and either downgrade the Accept negotiation
+  // or — for the FormData branch — kill the multipart boundary the
+  // browser sets automatically.
+  const RESERVED = new Set(["accept", "content-type", "x-csrf-token"]);
   const extra = typeof runtimeOptions.defaultHeaders === "function"
     ? runtimeOptions.defaultHeaders()
     : runtimeOptions.defaultHeaders;
   const headers = {};
   if (extra && typeof extra === "object") {
-    Object.assign(headers, extra);
+    for (const [key, value] of Object.entries(extra)) {
+      if (!RESERVED.has(key.toLowerCase())) headers[key] = value;
+    }
   }
   headers.Accept = "application/json";
   const csrf = resolveCsrfToken();
@@ -151,7 +242,9 @@ function buildFetchInit(args) {
   let body;
   if (typeof FormData !== "undefined" && args instanceof FormData) {
     // Let the browser set the `Content-Type: multipart/form-data; boundary=...`
-    // header — don't set it manually.
+    // header — don't set it manually. The case-insensitive filter above
+    // already stripped any `Content-Type` from defaultHeaders, so the
+    // browser is in control here.
     body = args;
   } else {
     headers["Content-Type"] = "application/json";

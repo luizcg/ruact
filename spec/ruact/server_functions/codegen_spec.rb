@@ -16,6 +16,10 @@ module Ruact
 
       describe ".render — empty registry (Story 8.0a AC4)" do
         it "emits a valid module with import line and the empty-registry comment" do
+          # Story 8.2 — the empty-registry branch also emits the
+          # `export { revalidate } from "..."` re-export so
+          # `import { revalidate } from "@/.ruact/server-functions"` works in
+          # projects that have not yet declared any server actions.
           result = described_class.render(base_snapshot)
 
           expect(result).to eq(<<~TS)
@@ -26,6 +30,8 @@ module Ruact
 
             // (no server functions registered yet — Stories 8.1 / 9.1 populate)
             void _makeRef;
+
+            export { revalidate } from "ruact/server-functions-runtime";
           TS
         end
 
@@ -43,8 +49,14 @@ module Ruact
         end
       end
 
-      describe ".render — single action (Story 8.0a AC4)" do
-        it "emits an action export with the args?-based signature" do
+      describe ".render — single action (Story 8.0a AC4 + Story 8.2 intersection)" do
+        it "emits an action export typed as a TS intersection of direct-call + <form action> shapes" do
+          # Story 8.2 (refined 2026-05-17 per review patch R1) — the
+          # intersection makes `<form action={createPost}>` typecheck
+          # directly against React 19's
+          # `(formData: FormData) => void | Promise<void>` while preserving
+          # `Promise<unknown>` for direct callers. See the 2026-05-17 entry
+          # in `gem/docs/internal/decisions/server-functions-api.md`.
           snapshot = base_snapshot.merge(functions: [
                                            {
                                              "ruby_symbol" => "create_post",
@@ -60,9 +72,27 @@ module Ruact
             // Generated at: 2026-05-13T12:34:56Z
             import { _makeRef } from "ruact/server-functions-runtime";
 
-            export const createPost: (args?: Record<string, unknown>) => Promise<unknown> =
+            export const createPost: ((args?: FormData | Record<string, unknown>) => Promise<unknown>) & ((formData: FormData) => Promise<void>) =
               _makeRef("create_post");
+
+            export { revalidate } from "ruact/server-functions-runtime";
           TS
+        end
+
+        it "Story 8.2 — query signatures do NOT widen (regression guard)" do
+          snapshot = base_snapshot.merge(functions: [
+                                           {
+                                             "ruby_symbol" => "categories",
+                                             "js_identifier" => "categories",
+                                             "kind" => "query",
+                                             "controller" => "CategoriesController"
+                                           }
+                                         ])
+
+          out = described_class.render(snapshot)
+          # Action-style FormData widening must not bleed into the query export
+          expect(out).not_to match(/export const categories:[^=]*FormData/)
+          expect(out).to include("export const categories: () => Promise<unknown> =")
         end
       end
 

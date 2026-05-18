@@ -5,7 +5,14 @@
 // error wrapping. Uses `vi.fn()` to stub `fetch` — no real network.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { _makeRef, __RUNTIME_VERSION__, __internals, RuactActionError, configureRuactRuntime } from "./index.js";
+import {
+  _makeRef,
+  __RUNTIME_VERSION__,
+  __internals,
+  RuactActionError,
+  configureRuactRuntime,
+  revalidate,
+} from "./index.js";
 
 let originalFetch;
 let originalDocument;
@@ -433,6 +440,55 @@ describe("Story 8.1 — Re-run-5 — configureRuactRuntime (#6)", () => {
       /must be a plain object or a \(\) => object function/,
     );
   });
+
+  it("strips reserved headers from defaultHeaders case-insensitively (re-run-6 #3)", async () => {
+    // HTTP header names are case-insensitive (RFC 9110 §5.1). A host passing
+    // `{ accept: "text/html" }` or `{ "content-type": "application/xml" }`
+    // must NOT survive into the request: the gem owns these keys regardless
+    // of casing.
+    mockFetchOk({ ok: true });
+    mockMetaTag("real-csrf");
+    configureRuactRuntime({
+      defaultHeaders: {
+        accept: "text/html",
+        "content-type": "application/xml",
+        "x-csrf-token": "tampered",
+        "X-Custom-Header": "kept",
+      },
+    });
+
+    await _makeRef("create_post")({});
+
+    const [, init] = globalThis.fetch.mock.calls[0];
+    expect(init.headers.Accept).toBe("application/json");
+    expect(init.headers["Content-Type"]).toBe("application/json");
+    expect(init.headers["X-CSRF-Token"]).toBe("real-csrf");
+    expect(init.headers["X-Custom-Header"]).toBe("kept");
+    // None of the lowercased reserved keys should leak through.
+    expect(init.headers.accept).toBeUndefined();
+    expect(init.headers["content-type"]).toBeUndefined();
+    expect(init.headers["x-csrf-token"]).toBeUndefined();
+  });
+
+  it("does NOT let defaultHeaders set Content-Type for FormData requests (re-run-6 #3)", async () => {
+    // FormData branch relies on the browser to set
+    // `Content-Type: multipart/form-data; boundary=…`. A surviving
+    // `Content-Type` from defaultHeaders would override that and break
+    // multipart parsing on the server.
+    mockFetchOk({ ok: true });
+    configureRuactRuntime({
+      defaultHeaders: { "content-type": "application/xml" },
+    });
+
+    const fd = new FormData();
+    fd.append("title", "Hello");
+    await _makeRef("upload")(fd);
+
+    const [, init] = globalThis.fetch.mock.calls[0];
+    expect(init.headers["Content-Type"]).toBeUndefined();
+    expect(init.headers["content-type"]).toBeUndefined();
+    expect(init.body).toBe(fd);
+  });
 });
 
 describe("Story 8.1 — __internals (test-only surface)", () => {
@@ -440,5 +496,193 @@ describe("Story 8.1 — __internals (test-only surface)", () => {
     expect(typeof __internals.buildFetchInit).toBe("function");
     expect(typeof __internals.resolveCsrfToken).toBe("function");
     expect(typeof __internals.parseResponse).toBe("function");
+  });
+
+  it("Story 8.2 — exposes pickWirePayload (the two-arg shape-detection helper)", () => {
+    expect(typeof __internals.pickWirePayload).toBe("function");
+  });
+});
+
+// =============================================================================
+// Story 8.2 — useActionState two-arg invocation
+// =============================================================================
+
+describe("Story 8.2 — _makeRef call-shape detection", () => {
+  it("fn() — zero args sends an empty JSON body (parity with Story 8.1 fn() shape)", async () => {
+    mockFetchOk({});
+    mockMetaTag(null);
+
+    await _makeRef("noop")();
+
+    const [, init] = globalThis.fetch.mock.calls[0];
+    expect(init.body).toBe("{}");
+    expect(init.headers["Content-Type"]).toBe("application/json");
+  });
+
+  it("fn(obj) — single plain-object arg sends JSON body (Story 8.1 baseline)", async () => {
+    mockFetchOk({});
+    mockMetaTag(null);
+
+    await _makeRef("create_post")({ title: "Hi" });
+
+    const [, init] = globalThis.fetch.mock.calls[0];
+    expect(init.body).toBe(JSON.stringify({ title: "Hi" }));
+  });
+
+  it("fn(formData) — single FormData arg sends multipart (Story 8.1 baseline)", async () => {
+    mockFetchOk({});
+    mockMetaTag(null);
+
+    const fd = new FormData();
+    fd.append("title", "Hi");
+    await _makeRef("create_post")(fd);
+
+    const [, init] = globalThis.fetch.mock.calls[0];
+    expect(init.body).toBe(fd);
+    expect(init.headers["Content-Type"]).toBeUndefined();
+  });
+
+  it("fn(prevState, formData) — useActionState shape; FormData wins, prevState " +
+    "is silently discarded (the wire request is IDENTICAL to fn(formData))", async () => {
+    mockFetchOk({});
+    mockMetaTag(null);
+
+    const fd = new FormData();
+    fd.append("title", "From form");
+    await _makeRef("create_post")({ message: "previous state" }, fd);
+
+    const [, init] = globalThis.fetch.mock.calls[0];
+    expect(init.body).toBe(fd);
+    expect(init.headers["Content-Type"]).toBeUndefined();
+  });
+
+  it("fn(prevState, obj) — both non-FormData (defensive case); the SECOND arg " +
+    "is the payload (useActionState ordering), the first is discarded", async () => {
+    mockFetchOk({});
+    mockMetaTag(null);
+
+    await _makeRef("create_post")({ message: "previous state" }, { title: "Hi" });
+
+    const [, init] = globalThis.fetch.mock.calls[0];
+    expect(init.body).toBe(JSON.stringify({ title: "Hi" }));
+    expect(init.headers["Content-Type"]).toBe("application/json");
+  });
+
+  it("fn(formData, obj) — FormData in slot 0 still wins (defensive; not the " +
+    "useActionState shape but exercised for completeness)", async () => {
+    mockFetchOk({});
+    mockMetaTag(null);
+
+    const fd = new FormData();
+    fd.append("title", "FD");
+    await _makeRef("create_post")(fd, { title: "obj" });
+
+    const [, init] = globalThis.fetch.mock.calls[0];
+    expect(init.body).toBe(fd);
+  });
+
+  it("fn(a, b, c) — three or more args throws TypeError with a descriptive message", () => {
+    expect(() => _makeRef("create_post")(1, 2, 3)).toThrow(TypeError);
+    expect(() => _makeRef("create_post")(1, 2, 3)).toThrow(
+      /ruact action :create_post called with 3 arguments — expected 0, 1, or 2/,
+    );
+  });
+
+  it("prev-state shape is never serialized to the wire — even when it contains " +
+    "non-serializable values (Pitfall #4 — Date / Map / circular refs)", async () => {
+    mockFetchOk({});
+    mockMetaTag(null);
+
+    const circular = {};
+    circular.self = circular;
+    const fd = new FormData();
+    fd.append("title", "Hi");
+    // Pre-Story-8.2 this would have thrown on JSON.stringify(circular). The
+    // wire path never sees prevState, so circular references are harmless.
+    await expect(
+      _makeRef("create_post")(circular, fd),
+    ).resolves.not.toThrow();
+
+    const [, init] = globalThis.fetch.mock.calls[0];
+    expect(init.body).toBe(fd);
+  });
+});
+
+// =============================================================================
+// Story 8.2 — revalidate() runtime helper
+// =============================================================================
+
+describe("Story 8.2 — revalidate()", () => {
+  let originalRevalidate;
+  let originalLocation;
+
+  beforeEach(() => {
+    originalRevalidate = globalThis.__ruact_revalidate;
+    originalLocation = globalThis.location;
+  });
+
+  afterEach(() => {
+    if (originalRevalidate === undefined) delete globalThis.__ruact_revalidate;
+    else globalThis.__ruact_revalidate = originalRevalidate;
+    if (originalLocation === undefined) {
+      // jsdom / browser env — leave the real `location` alone
+    } else {
+      globalThis.location = originalLocation;
+    }
+  });
+
+  it("invokes the published handle with location.pathname + location.search when " +
+    "no path is provided", async () => {
+    const spy = vi.fn().mockResolvedValue(undefined);
+    globalThis.__ruact_revalidate = spy;
+    globalThis.location = { pathname: "/posts", search: "?page=2" };
+
+    await revalidate();
+    expect(spy).toHaveBeenCalledWith("/posts?page=2");
+  });
+
+  it("invokes the published handle with the explicit path when one is supplied", async () => {
+    const spy = vi.fn().mockResolvedValue(undefined);
+    globalThis.__ruact_revalidate = spy;
+
+    await revalidate("/posts");
+    expect(spy).toHaveBeenCalledWith("/posts");
+  });
+
+  it("invokes the handle with the path even when it does not match location (the " +
+    "router decides whether to push history)", async () => {
+    const spy = vi.fn().mockResolvedValue(undefined);
+    globalThis.__ruact_revalidate = spy;
+
+    await revalidate("/elsewhere?x=1");
+    expect(spy).toHaveBeenCalledWith("/elsewhere?x=1");
+  });
+
+  it("throws a descriptive error when no router is installed (the published handle " +
+    "is missing) — fails loudly instead of silently no-op'ing", async () => {
+    if ("__ruact_revalidate" in globalThis) delete globalThis.__ruact_revalidate;
+
+    await expect(revalidate()).rejects.toThrow(
+      /ruact: revalidate\(\) called but no router is installed/,
+    );
+  });
+
+  it("propagates the resolved value (whatever the router returns) so callers can " +
+    "`await revalidate()` and then continue", async () => {
+    const spy = vi.fn().mockResolvedValue("ok");
+    globalThis.__ruact_revalidate = spy;
+    globalThis.location = { pathname: "/", search: "" };
+
+    const result = await revalidate();
+    expect(result).toBe("ok");
+  });
+
+  it("propagates rejections from the router so callers can catch network failures", async () => {
+    const error = new Error("Failed to fetch");
+    const spy = vi.fn().mockRejectedValue(error);
+    globalThis.__ruact_revalidate = spy;
+    globalThis.location = { pathname: "/", search: "" };
+
+    await expect(revalidate()).rejects.toThrow("Failed to fetch");
   });
 });
