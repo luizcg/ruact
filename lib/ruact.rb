@@ -13,6 +13,7 @@ require_relative "ruact/render_pipeline"
 require_relative "ruact/view_helper"
 require_relative "ruact/erb_preprocessor_hook"
 require_relative "ruact/server_functions"
+require_relative "ruact/server_action"
 # Railtie loads ruact/controller when inside a Rails app
 require_relative "ruact/railtie" if defined?(Rails)
 

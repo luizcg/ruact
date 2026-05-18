@@ -2,12 +2,15 @@
 
 require "spec_helper"
 require "tmpdir"
+require "fileutils"
+require "action_controller"
 
 # Spec_helper's rails_stub defines Rails; the railtie was not auto-required
 # because Rails was not yet defined when ruact.rb evaluated `require_relative
 # "ruact/railtie" if defined?(Rails)`. Load it explicitly (mirrors
 # spec/ruact/railtie_spec.rb).
 require "ruact/railtie"
+require "ruact/controller"
 
 # Story 8.0a — Railtie.write_server_functions_snapshot! is the entry point
 # wired into `config.to_prepare`. The full to_prepare boot lives in
@@ -105,6 +108,174 @@ module Ruact
         ensure
           Rails.root = original_root
         end
+      end
+    end
+
+    # Story 8.1 Re-run-6/8 — force_load_controllers! now walks Rails::Engine
+    # subclasses so engine-owned `ruact_action` declarations populate the
+    # registry at boot (not on first request to the engine controller).
+    # The regression target: a mounted engine that declares its own controller
+    # with `ruact_action :engine_action` must be visible to the snapshot
+    # writer + endpoint dispatcher BEFORE any HTTP traffic.
+    RSpec.describe "Ruact::Railtie.force_load_controllers! engine scanning (Story 8.1)", :story_8_1 do
+      before do
+        Ruact.action_registry.clear!
+        Ruact.query_registry.clear!
+
+        # In a real Rails boot, `require_dependency` is added to `Object` by
+        # `ActiveSupport::Dependencies.hook!` before `config.to_prepare`
+        # fires. The minimal spec-env setup (rails_stub + action_controller
+        # core) does not invoke the hook, so we stub the call directly to
+        # delegate to plain `load(file)` — which is sufficient to exercise
+        # the engine-scanning branch without dragging the full dependencies
+        # subsystem into the suite.
+        allow(Ruact::Railtie).to receive(:force_load_dir).and_wrap_original do |_original, dir|
+          files = Dir.glob("#{dir}/**/*_controller.rb")
+          files.each { |file| load(file) }
+          files.length
+        end
+      end
+
+      it "loads ruact_action declarations from a mounted Rails::Engine's app/controllers " \
+         "(re-run-6 #4 / re-run-8 #2 — engine-owned controllers must populate the registry at boot)" do
+        Dir.mktmpdir do |engine_dir|
+          # Build the engine's controller file on disk. The file's body
+          # declares a real `ruact_action` so populating the registry is
+          # observable (no mocks of the macro itself).
+          controllers_dir = File.join(engine_dir, "app/controllers")
+          FileUtils.mkdir_p(controllers_dir)
+          controller_path = File.join(controllers_dir, "engine_demo_controller.rb")
+          File.write(controller_path, <<~RUBY)
+            # frozen_string_literal: true
+
+            class EngineDemoController < ActionController::Base
+              include Ruact::Controller
+
+              ruact_action(:engine_only_action) { |_params| "from-engine" }
+            end
+          RUBY
+
+          # Build a real Rails::Engine subclass whose paths["app/controllers"]
+          # points at the on-disk controllers directory. `Engine#paths` is
+          # automatically populated by Rails.
+          fake_engine = Class.new(Rails::Engine) do
+            isolate_namespace Module.new
+            config.paths["app/controllers"] = controllers_dir
+          end
+
+          # Stub Rails::Engine.subclasses to return JUST our fake engine — the
+          # host app's own engine class is filtered out inside
+          # force_load_controllers! by an explicit `engine_class ==
+          # Rails.application.class` skip.
+          allow(Rails::Engine).to receive(:subclasses).and_return([fake_engine])
+
+          expect { Ruact::Railtie.force_load_controllers! }.not_to raise_error
+          expect(Ruact.action_registry.entries[:engine_only_action]).not_to be_nil
+          expect(Ruact.action_registry.entries[:engine_only_action].controller).to be(EngineDemoController)
+        end
+      ensure
+        # `EngineDemoController` is loaded via `require_dependency` against an
+        # absolute on-disk path; remove the constant so re-runs of the spec
+        # don't trip the macro's "method already defined" guard.
+        Object.send(:remove_const, :EngineDemoController) if defined?(EngineDemoController)
+      end
+
+      it "skips the host application's own Rails::Engine subclass " \
+         "(avoids double-loading app/controllers already covered by the Rails.application branch)" do
+        # Rails.application.class IS a Rails::Engine subclass; force_load_controllers!
+        # iterates the host app FIRST via the application branch, then skips it
+        # explicitly in the engine branch. Confirm that filtering happens.
+        host_class = Rails.application.class
+        allow(Rails::Engine).to receive(:subclasses).and_return([host_class])
+
+        # We expect ZERO additional load operations from the engine branch
+        # because the only subclass is the host app itself.
+        expect(Ruact::Railtie).not_to receive(:safe_engine_instance)
+
+        expect { Ruact::Railtie.force_load_controllers! }.not_to raise_error
+      end
+
+      it "swallows a misconfigured engine (engine_class.instance raising) " \
+         "via safe_engine_instance so a single broken engine cannot block boot" do
+        bad_engine = Class.new(Rails::Engine)
+        allow(bad_engine).to receive(:instance).and_raise(StandardError, "engine boot failed")
+        allow(Rails::Engine).to receive(:subclasses).and_return([bad_engine])
+
+        # Must not propagate; force_load_controllers! returns normally.
+        expect { Ruact::Railtie.force_load_controllers! }.not_to raise_error
+      end
+    end
+
+    # Story 8.3 — force_load_server_function_hosts! ALSO walks
+    # `app/server_actions/**/*.rb` so standalone modules register at boot
+    # alongside controller-hosted actions. Follows the Story 8.1 fake-engine
+    # pattern to bypass Rails.application's sticky root memoization.
+    RSpec.describe "Ruact::Railtie.force_load_server_function_hosts! " \
+                   "app/server_actions/ scanning (Story 8.3)", :story_8_3 do
+      before do
+        Ruact.action_registry.clear!
+        Ruact.query_registry.clear!
+
+        # Same stub as the Story 8.1 engine-scanning describe — substitutes
+        # `require_dependency` (unavailable in the minimal spec env) with
+        # plain `load`. Accepts both `dir` (positional) and `glob:` (kwarg).
+        allow(Ruact::Railtie).to receive(:force_load_dir).and_wrap_original do |_original, dir, glob: "**/*_controller.rb"|
+          files = Dir.glob("#{dir}/#{glob}")
+          files.each { |file| load(file) }
+          files.length
+        end
+      end
+
+      it "loads ruact_action declarations from app/server_actions/ at boot " \
+         "(Pitfall #7 — standalone modules must register before the snapshot writer runs)" do
+        Dir.mktmpdir do |engine_dir|
+          server_actions_dir = File.join(engine_dir, "app/server_actions")
+          FileUtils.mkdir_p(server_actions_dir)
+          module_path = File.join(server_actions_dir, "standalone_railtie_demo.rb")
+          File.write(module_path, <<~RUBY)
+            # frozen_string_literal: true
+
+            module StandaloneRailtieDemo
+              extend Ruact::ServerAction
+
+              ruact_action(:standalone_railtie_demo) { |_p| "from-standalone" }
+            end
+          RUBY
+
+          fake_engine = Class.new(Rails::Engine) do
+            isolate_namespace Module.new
+            # Register the path explicitly so `server_actions_paths_for`
+            # finds it via the Rails paths enumerator.
+            config.paths.add "app/server_actions", with: server_actions_dir
+          end
+
+          # Stub Rails::Engine.subclasses to expose ONLY the fake engine —
+          # the host app's own controllers/server_actions are filtered out
+          # by the engine_class == Rails.application.class skip inside
+          # force_load_server_function_hosts!.
+          allow(Rails::Engine).to receive(:subclasses).and_return([fake_engine])
+
+          expect { Ruact::Railtie.force_load_server_function_hosts! }.not_to raise_error
+
+          entry = Ruact.action_registry.entries[:standalone_railtie_demo]
+          expect(entry).not_to be_nil
+          expect(entry.controller).to be(StandaloneRailtieDemo)
+          expect(entry.controller).to be_a(Module)
+          expect(entry.controller).not_to be_a(Class)
+        end
+      ensure
+        Object.send(:remove_const, :StandaloneRailtieDemo) if defined?(StandaloneRailtieDemo)
+      end
+
+      it "silently no-ops when no engine has an app/server_actions/ directory " \
+         "(typical for apps that only use controller-hosted actions)" do
+        allow(Rails::Engine).to receive(:subclasses).and_return([])
+        expect { Ruact::Railtie.force_load_server_function_hosts! }.not_to raise_error
+      end
+
+      it "back-compat: the old `force_load_controllers!` name aliases to the new method" do
+        expect(Ruact::Railtie.method(:force_load_controllers!).original_name)
+          .to eq(:force_load_server_function_hosts!)
       end
     end
   end

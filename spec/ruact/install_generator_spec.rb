@@ -3,7 +3,6 @@
 require "spec_helper"
 require "tmpdir"
 require "fileutils"
-require "set"
 require "ruact"
 
 RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat

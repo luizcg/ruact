@@ -111,6 +111,72 @@ module Ruact
         end
       end
 
+      describe "Story 8.3 — mixed controller+standalone collision", :story_8_3 do
+        let(:posts_controller_class) do
+          Class.new { def self.name = "PostsController" }
+        end
+
+        let(:standalone_create_post_module) do
+          Module.new do
+            extend Ruact::ServerAction
+
+            def self.name
+              "CreatePost"
+            end
+          end
+        end
+
+        it "raises Ruact::ConfigurationError when the same Ruby symbol is declared in a controller " \
+           "AND in a standalone module — message names BOTH hosts" do
+          registry.register(:create_post, kind: :action, controller: posts_controller_class)
+
+          expect do
+            registry.register(:create_post, kind: :action, controller: standalone_create_post_module)
+          end.to raise_error(Ruact::ConfigurationError) do |error|
+            expect(error.message).to include(":create_post")
+            expect(error.message).to include("PostsController")
+            expect(error.message).to include("CreatePost")
+            expect(error.message).to include("declared in BOTH")
+          end
+        end
+
+        it "raises Ruact::ConfigurationError when the same symbol is declared in standalone " \
+           "first, then in a controller (order-independent)" do
+          registry.register(:create_post, kind: :action, controller: standalone_create_post_module)
+
+          expect do
+            registry.register(:create_post, kind: :action, controller: posts_controller_class)
+          end.to raise_error(Ruact::ConfigurationError) do |error|
+            expect(error.message).to include("PostsController")
+            expect(error.message).to include("CreatePost")
+          end
+        end
+
+        it "describe_controller names a Module host correctly (no inspection fallback) " \
+           "when one side of the collision is a Module" do
+          registry.register(:create_post, kind: :action, controller: standalone_create_post_module)
+          another_module = Module.new do
+            extend Ruact::ServerAction
+
+            def self.name
+              "AdminCreatePost"
+            end
+          end
+
+          # Cross-bridge JS-identifier collision: two DIFFERENT Ruby symbols
+          # producing the SAME JS identifier — bridges into `js_identifier ==`
+          # branch of detect_collision!. The bridge collapses underscores,
+          # so `:create_post` and `:create__post` both → "createPost".
+          expect do
+            registry.register(:create__post, kind: :action, controller: another_module)
+          end.to raise_error(Ruact::ConfigurationError) do |error|
+            expect(error.message).to include("CreatePost")
+            expect(error.message).to include("AdminCreatePost")
+            expect(error.message).to include('"createPost"')
+          end
+        end
+      end
+
       describe "Ruact module-level accessors (Story 8.0a)" do
         it "returns two independent Registry singletons" do
           expect(Ruact.action_registry).to be_a(described_class)

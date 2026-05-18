@@ -6,6 +6,24 @@ module Ruact
   class Railtie < Rails::Railtie
     initializer "ruact.load_controller" do
       require_relative "controller"
+      require_relative "server_action"
+    end
+
+    # Story 8.3 — register `app/server_actions/` as a Rails `paths` entry
+    # AND as an autoload + eager-load path so Zeitwerk discovers standalone
+    # `Ruact::ServerAction` modules the same way it discovers
+    # controllers/models/jobs. Registering via `config.paths.add` (vs.
+    # `config.autoload_paths <<` only) is what makes
+    # `Rails.application.config.paths["app/server_actions"].existent`
+    # work — that path enumerator is what
+    # {.server_actions_paths_for} consumes during force-load.
+    initializer "ruact.register_server_actions_path", before: :set_autoload_paths do |app|
+      app.config.paths.add "app/server_actions", with: "app/server_actions"
+      candidate = app.root.join("app/server_actions")
+      if candidate.directory?
+        app.config.autoload_paths   << candidate.to_s
+        app.config.eager_load_paths << candidate.to_s
+      end
     end
 
     rake_tasks do
@@ -88,7 +106,14 @@ module Ruact
       # populate the registry — the codegen would then emit a stale TS
       # module missing those exports until the controller is hit at least
       # once. The endpoint controller would also 404 those names.
-      Ruact::Railtie.force_load_controllers!
+      #
+      # Story 8.3 — the force-loader was renamed from
+      # `force_load_controllers!` to `force_load_server_function_hosts!`
+      # and now walks BOTH `app/controllers/**/*_controller.rb` and
+      # `app/server_actions/**/*.rb` so standalone modules also register
+      # at boot. The old method name is kept as an alias for back-compat
+      # with anything outside the gem calling it.
+      Ruact::Railtie.force_load_server_function_hosts!
 
       Ruact::Railtie.write_server_functions_snapshot!
     end
@@ -152,28 +177,105 @@ module Ruact
     # Errors are surfaced as `Ruact::Error` with a controller hint so the
     # developer sees a meaningful boot failure instead of a silent skip.
     #
+    # Re-run-6 (2026-05-15) — also walks every mounted `Rails::Engine`
+    # (and `Rails::Railtie` with `paths["app/controllers"]`) so engine-
+    # owned controllers that declare `ruact_action` populate the registry
+    # at boot. Without this an engine's `ruact_action` declarations would
+    # only register on first request that touches the engine controller —
+    # codegen + endpoint dispatch would lag behind boot.
+    #
     # @return [Integer] number of controller files loaded.
-    def self.force_load_controllers!
-      paths = Rails.application.config.paths["app/controllers"]
-      return 0 unless paths.respond_to?(:existent)
-
+    def self.force_load_server_function_hosts!
       loaded = 0
-      paths.existent.each do |dir|
-        Dir.glob("#{dir}/**/*_controller.rb").each do |file|
-          # `require_dependency` is the cross-autoloader-compatible API; it
-          # tells the autoloader to load the file AND track it for reload.
-          # In Rails 7+/Zeitwerk this delegates to Zeitwerk's autoloader.
-          require_dependency(file)
-          loaded += 1
+
+      controller_paths_for(Rails.application).each do |dir|
+        loaded += force_load_dir(dir, glob: "**/*_controller.rb")
+      end
+      server_actions_paths_for(Rails.application).each do |dir|
+        loaded += force_load_dir(dir, glob: "**/*.rb")
+      end
+
+      if defined?(Rails::Engine)
+        Rails::Engine.subclasses.each do |engine_class|
+          # Skip the host app itself; `Rails.application.class` is a
+          # `Rails::Engine` subclass and was already covered above.
+          next if engine_class == Rails.application.class
+
+          engine = safe_engine_instance(engine_class)
+          next unless engine
+
+          controller_paths_for(engine).each { |dir| loaded += force_load_dir(dir, glob: "**/*_controller.rb") }
+          server_actions_paths_for(engine).each { |dir| loaded += force_load_dir(dir, glob: "**/*.rb") }
         end
       end
+
       loaded
     rescue LoadError, NameError => e
       raise Ruact::Error,
-            "ruact: failed to force-load a controller while populating " \
+            "ruact: failed to force-load a server-function host while populating " \
             "Ruact.action_registry: #{e.class}: #{e.message}. The gem " \
-            "force-loads `app/controllers/**/*_controller.rb` at " \
-            "`config.to_prepare` so registries are complete on first boot."
+            "force-loads `app/controllers/**/*_controller.rb` and " \
+            "`app/server_actions/**/*.rb` at `config.to_prepare` so " \
+            "registries are complete on first boot."
+    end
+
+    # Story 8.3 — back-compat alias. Older code paths (rake tasks shipped
+    # in previous gem versions, downstream tooling) may call the old
+    # name; the new name describes the wider behavior accurately.
+    class << self
+      alias force_load_controllers! force_load_server_function_hosts!
+    end
+
+    # @param engine [Rails::Engine] either `Rails.application` or a mounted engine
+    # @return [Array<String>] existing controller directory paths
+    def self.controller_paths_for(engine)
+      return [] unless engine.respond_to?(:config) && engine.config.respond_to?(:paths)
+
+      paths = engine.config.paths["app/controllers"]
+      return [] unless paths.respond_to?(:existent)
+
+      paths.existent
+    end
+
+    # @param dir [String]
+    # @param glob [String] glob pattern relative to +dir+; defaults to
+    #   `**/*_controller.rb` for back-compat with pre-Story-8.3 callers.
+    # @return [Integer] number of files loaded
+    def self.force_load_dir(dir, glob: "**/*_controller.rb")
+      Dir.glob("#{dir}/#{glob}").each do |file|
+        require_dependency(file)
+      end.length
+    end
+
+    # Story 8.3 — locates `app/server_actions/` for the host application
+    # or a mounted engine. Uses the Rails `paths` enumerator (populated by
+    # the Railtie initializer) when present, falling back to a direct
+    # `engine.root.join` lookup for engines that haven't registered the
+    # path. Returns an empty array when the directory doesn't exist —
+    # silent no-op for hosts that don't use standalone actions.
+    def self.server_actions_paths_for(engine)
+      if engine.respond_to?(:config) && engine.config.respond_to?(:paths)
+        paths = engine.config.paths["app/server_actions"]
+        if paths.respond_to?(:existent)
+          existent = paths.existent
+          return existent unless existent.empty?
+        end
+      end
+
+      return [] unless engine.respond_to?(:root) && engine.root
+
+      candidate = engine.root.join("app/server_actions")
+      candidate.directory? ? [candidate.to_s] : []
+    end
+
+    # Some engine subclasses are abstract (no `.instance` defined yet) or fail
+    # at `.instance` if their config block raises. Swallow those quietly —
+    # the gem's responsibility is to load whatever it can; engines whose
+    # `.instance` blows up will surface on first request anyway.
+    def self.safe_engine_instance(engine_class)
+      engine_class.instance
+    rescue StandardError
+      nil
     end
 
     # Writes the server-functions JSON snapshot to tmp/cache/ruact/ on every

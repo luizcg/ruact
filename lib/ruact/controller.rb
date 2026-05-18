@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "json"
-require "set"
 require "socket"
 require "uri"
 
@@ -50,8 +49,16 @@ module Ruact
     # Story 8.1 — class-level DSL surface. The `ruact_action` macro registers
     # a server-callable symbol with `Ruact.action_registry` (so the Vite-plugin
     # codegen from Story 8.0a picks it up at the next `config.to_prepare`) AND
-    # defines a matching instance method so the block is reachable from inside
-    # other controller code without going through the HTTP endpoint.
+    # defines a matching public instance method that is reachable ONLY via the
+    # gem's `POST /__ruact/fn/:name` endpoint dispatch path. The defined method
+    # body checks a thread-local sentinel (`Thread.current[:__ruact_dispatching]`)
+    # set by `Ruact::ServerFunctions::EndpointController#dispatch_action` and
+    # raises `Ruact::Error` for any direct call from in-controller code, a
+    # wildcard route, or `host_class.action(...).call` — closing the
+    # GET-without-CSRF attack surface that a host's `get ":controller/:action"`
+    # route would otherwise create. If a developer needs the block body from
+    # another controller method, they should refactor the body into a PORO that
+    # both the action and the controller call.
     #
     # Validation (naming-bridge rule + within-registry / cross-registry
     # collision detection) fires from {Ruact::ServerFunctions::Registry#register}
@@ -120,7 +127,7 @@ module Ruact
         named_positional = req_count + opt_count
         positional_total = named_positional + rest_count
         has_required_kwarg = block.parameters.any? { |kind, _| kind == :keyreq }
-        if positional_total == 0 || named_positional > 1 || has_required_kwarg
+        if positional_total.zero? || named_positional > 1 || has_required_kwarg
           raise ArgumentError,
                 "ruact_action :#{symbol} block must accept exactly one " \
                 "positional parameter and no required keyword arguments " \
@@ -147,6 +154,31 @@ module Ruact
                 "the host's CSRF / params / render plumbing remains intact."
         end
 
+        # Re-run-6 (2026-05-15) — also reject ANY symbol that names a method
+        # inherited from `ActionController::Base` (or its ancestors UP TO but
+        # NOT INCLUDING `Object`). The hardcoded `FRAMEWORK_RESERVED_METHODS`
+        # list is the documented surface, but Rails keeps adding/renaming
+        # internal methods (`:status`, `:send_action`, `:render_to_string`,
+        # `:logger`, `:default_render`, …). Anything that lives on
+        # `ActionController::Base` but NOT on plain `Object` is, by
+        # definition, framework plumbing — overriding it is unsafe.
+        # We carve `Object`/`Kernel`/`BasicObject` off so genuinely-generic
+        # methods (`:object_id`, `:respond_to?`, `:hash`, `:tap`) don't
+        # trip the guard — those are safe to coexist with as block-arg
+        # shadow inside `instance_exec`.
+        baseline_class = defined?(ActionController::Base) ? ActionController::Base : nil
+        if baseline_class
+          object_methods = Object.instance_methods + Object.private_instance_methods
+          framework_methods = baseline_class.instance_methods + baseline_class.private_instance_methods
+          if (framework_methods - object_methods).include?(symbol)
+            raise Ruact::ConfigurationError,
+                  "ruact_action :#{symbol} would clobber an inherited " \
+                  "ActionController::Base method. Overriding framework " \
+                  "plumbing (`#{symbol.inspect}`) is unsafe — pick a " \
+                  "different symbol (e.g. :#{symbol}_action)."
+          end
+        end
+
         # Re-run-2 (2026-05-14) — refuse to clobber a method ALREADY defined
         # on the host controller class itself. Common case: a controller has
         # a normal `def index` action and the dev mistakenly writes
@@ -167,7 +199,7 @@ module Ruact
         if own_methods.include?(symbol) && !@__ruact_defined_methods.include?(symbol)
           raise Ruact::ConfigurationError,
                 "ruact_action :#{symbol} would clobber an existing method " \
-                "on #{self.name || self}. If #{symbol.inspect} is meant to be " \
+                "on #{name || self}. If #{symbol.inspect} is meant to be " \
                 "a server action, remove the existing definition first; " \
                 "if it's a regular controller action, pick a different " \
                 "ruact_action symbol (e.g. :#{symbol}_remote)."
@@ -191,7 +223,7 @@ module Ruact
            !@__ruact_defined_methods.include?(symbol)
           raise Ruact::ConfigurationError,
                 "ruact_action :#{symbol} would clobber an inherited helper " \
-                "on #{self.name || self} (likely defined on " \
+                "on #{name || self} (likely defined on " \
                 "ApplicationController or a concern). Overriding " \
                 "#{symbol.inspect} would break callers that rely on it — " \
                 "pick a different ruact_action symbol (e.g. :#{symbol}_remote)."
@@ -211,6 +243,52 @@ module Ruact
         # Without the sentinel, a wildcard route like `get ":controller/
         # :action"` could otherwise reach `create_post` as a GET (no CSRF).
         @__ruact_defined_methods << symbol
+
+        # Re-run-6 (2026-05-15) — install a `method_added` hook so a LATER
+        # `def #{symbol}; ...; end` in the same controller body (or a reopen)
+        # cannot silently override the macro-defined action method. Without
+        # this guard, the registry/codegen still export the symbol but
+        # `host_class.dispatch` would run the user's later definition,
+        # producing a confusing 500 (the sentinel check is gone) instead of
+        # a loud class-load-time error. The hook is installed once per class
+        # and ignores re-definitions performed by the macro itself
+        # (tracked via `@__ruact_being_defined_by_ruact_action`).
+        #
+        # Re-run-7 (2026-05-15) — install the hook by `prepend`-ing a Module
+        # into the host's singleton class instead of `define_method`-ing
+        # `:method_added` directly on it. `define_method` REPLACES any
+        # `def self.method_added` (or `class << self; def method_added`)
+        # the host or its concerns already defined; `super(meth)` would
+        # then chain to `Module#method_added` (the default no-op), not the
+        # original implementation — silently breaking instrumentation and
+        # DSL bookkeeping concerns. Prepending a hook module keeps the
+        # original `method_added` in the ancestor chain so `super(meth)`
+        # invokes it after our check.
+        unless @__ruact_method_added_hook_installed
+          @__ruact_method_added_hook_installed = true
+          ruact_class = self
+          hook = Module.new do
+            define_method(:method_added) do |meth|
+              defined_set = ruact_class.instance_variable_get(:@__ruact_defined_methods)
+              being_defined = ruact_class.instance_variable_get(:@__ruact_being_defined_by_ruact_action)
+              if defined_set&.include?(meth) && !being_defined
+                defined_set.delete(meth)
+                raise Ruact::ConfigurationError,
+                      "method :#{meth} on #{ruact_class.name || ruact_class} was " \
+                      "registered by `ruact_action :#{meth}` and then re-defined " \
+                      "in the same class body. The later definition would " \
+                      "silently shadow the macro-defined action and break " \
+                      "endpoint dispatch. Either remove the explicit `def " \
+                      "#{meth}` (the macro already defines it) or rename the " \
+                      "ruact_action."
+              end
+              super(meth)
+            end
+          end
+          singleton_class.prepend(hook)
+        end
+
+        @__ruact_being_defined_by_ruact_action = true
         define_method(symbol) do
           unless Thread.current[:__ruact_dispatching] == symbol
             raise Ruact::Error,
@@ -234,6 +312,7 @@ module Ruact
           end
           result = instance_exec(args, &block)
           return if performed?
+
           # AC2: a nil block return renders 204 No Content (no body). A non-nil
           # return renders 200 + JSON.
           if result.nil?
@@ -242,6 +321,7 @@ module Ruact
             render(json: result)
           end
         end
+        @__ruact_being_defined_by_ruact_action = false
 
         # ActionController caches `action_methods` lazily; clear the cache so
         # the newly-defined action is dispatchable in the same boot cycle
@@ -283,6 +363,7 @@ module Ruact
         # safe to call multiple times and returns the full POST body.
         body = request.raw_post
         return {} if body.nil? || body.empty?
+
         # Review-batch 2 (2026-05-14) — raise on malformed JSON instead of
         # silently coercing to {}. A request with `Content-Type:
         # application/json` and an unparseable body is corrupted; running
@@ -458,6 +539,7 @@ module Ruact
           <head>
             <meta charset="UTF-8" />
             <meta name="viewport" content="width=device-width, initial-scale=1" />
+            #{ruact_csrf_meta_tag}
             <title>Rails RSC</title>
             #{vite_tags}
           </head>
@@ -472,6 +554,27 @@ module Ruact
           </body>
         </html>
       HTML
+    end
+
+    # Story 8.3 review R7 — emits `<meta name="csrf-token" content="...">`
+    # into the shell so the JS runtime's `<meta>` lookup can forward a
+    # valid `X-CSRF-Token` on every `_makeRef` call. Without this, hosts
+    # that route `ruact_render` through the gem's HTML shell (the
+    # standard path) have no token in the document and standalone
+    # actions' gem-side CSRF check (Story 8.3 AC5) always rejects.
+    #
+    # Returns an empty string when CSRF protection isn't available
+    # (non-Rails specs, or hosts that have deliberately stripped
+    # `form_authenticity_token` from the controller surface).
+    def ruact_csrf_meta_tag
+      return "" unless respond_to?(:form_authenticity_token, true)
+
+      token = form_authenticity_token
+      return "" if token.nil? || token.empty?
+
+      %(<meta name="csrf-token" content="#{ERB::Util.html_escape(token)}" />)
+    rescue StandardError
+      ""
     end
 
     def vite_tags

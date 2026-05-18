@@ -24,5 +24,7 @@ module Ruact
     autoload :SnapshotWriter,     "ruact/server_functions/snapshot_writer"
     autoload :Codegen,            "ruact/server_functions/codegen"
     autoload :EndpointController, "ruact/server_functions/endpoint_controller"
+    autoload :StandaloneContext, "ruact/server_functions/standalone_context"
+    autoload :StandaloneDispatcher, "ruact/server_functions/standalone_dispatcher"
   end
 end

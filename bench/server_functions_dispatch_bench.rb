@@ -41,6 +41,7 @@ require "rack/test"
 require "ruact"
 require "ruact/controller"
 require "ruact/server_functions/endpoint_controller"
+require "ruact/server_action"
 
 ActiveRecord::Base.establish_connection(adapter: "sqlite3", database: ":memory:")
 ActiveRecord::Schema.verbose = false
@@ -86,9 +87,25 @@ BenchApp.routes.append do
   post "/plain", to: "bench#plain_create_post"
 end
 
+# Story 8.3 — standalone host module backing the AC10 scenario. Declared
+# BEFORE app initialization so the Railtie's `config.to_prepare` snapshot
+# writer sees the entry (parity with the controller-hosted side).
+module BenchStandaloneHost
+  extend Ruact::ServerAction
+
+  ruact_action :bench_action do |params|
+    post = Post.create!(title: params[:title], body: params[:body])
+    { id: post.id, title: post.title }
+  end
+end
+
 BenchApp.instance.initialize!
+# Story 8.3 bench needs API mode so CSRF doesn't reject the bench
+# requests (no session middleware in this minimal Rack::Test setup).
+Ruact::ServerFunctions::EndpointController.allow_forgery_protection = false
 
 include Rack::Test::Methods
+
 def app = BenchApp.instance
 
 # Counter ensures titles stay unique under the AR validation; without
@@ -103,7 +120,9 @@ end
 headers = { "CONTENT_TYPE" => "application/json" }
 
 post("/__ruact/fn/create_post", body_for.call, headers)
-raise "ruact dispatch broken (status=#{last_response.status} body=#{last_response.body})" unless last_response.status == 200
+unless last_response.status == 200
+  raise "ruact dispatch broken (status=#{last_response.status} body=#{last_response.body})"
+end
 
 post("/plain", body_for.call, headers)
 raise "plain dispatch broken (status=#{last_response.status})" unless last_response.status == 200
@@ -164,3 +183,92 @@ puts "  per-call overhead (p50):  +#{overhead_p50}ms"
 puts "  per-call overhead (p95):  +#{overhead_p95}ms"
 puts ""
 puts "AC12 target: MEDIAN ruact_action overhead < 20 ms per call (#{overhead_p50 < 20 ? 'PASS' : 'FAIL'})"
+
+# ----------------------------------------------------------------------------
+# Story 8.2 — `<form action={fn}>` multipart dispatch overhead.
+#
+# AC11: median multipart per-call overhead stays within 1.2× of the JSON
+# baseline above. Multipart parsing is heavier than JSON parsing — Rails'
+# multipart parser allocates a temp file per part and walks the boundary
+# stream — but for sub-1KB bodies the cost should be negligible.
+# ----------------------------------------------------------------------------
+
+require "securerandom"
+
+def multipart_body(title, body)
+  boundary = "---ruact-bench-#{SecureRandom.hex(8)}"
+  data = +""
+  data << "--#{boundary}\r\n"
+  data << "Content-Disposition: form-data; name=\"title\"\r\n\r\n"
+  data << "#{title}\r\n"
+  data << "--#{boundary}\r\n"
+  data << "Content-Disposition: form-data; name=\"body\"\r\n\r\n"
+  data << "#{body}\r\n"
+  data << "--#{boundary}--\r\n"
+  [data, boundary]
+end
+
+multipart_headers = lambda do |boundary|
+  { "CONTENT_TYPE" => "multipart/form-data; boundary=#{boundary}" }
+end
+
+multipart_counter = 0
+multipart_post = lambda do
+  multipart_counter += 1
+  data, boundary = multipart_body("MP Post #{multipart_counter}", "multipart body")
+  post("/__ruact/fn/create_post", data, multipart_headers.call(boundary))
+end
+
+# Warm-up to ensure multipart parser is loaded
+multipart_post.call
+raise "multipart broken (status=#{last_response.status})" unless last_response.status == 200
+
+multipart_samples = sample_times(SAMPLES) { multipart_post.call }
+mp_p50 = percentile(multipart_samples, 50) * 1000
+mp_p95 = percentile(multipart_samples, 95) * 1000
+mp_total_ms = (multipart_samples.sum * 1000).round(1)
+overhead_mp_vs_json_p50 = (mp_p50 - ruact_p50).round(3)
+mp_factor = ruact_p50.zero? ? 0.0 : (mp_p50 / ruact_p50).round(3)
+
+puts ""
+puts "#{SAMPLES} multipart requests (Story 8.2 — `<form action>` shape):"
+puts "  multipart dispatch:       total=#{mp_total_ms}ms  p50=#{mp_p50.round(3)}ms  p95=#{mp_p95.round(3)}ms"
+puts "  vs. JSON ruact baseline:  +#{overhead_mp_vs_json_p50}ms  (factor=#{mp_factor}×)"
+puts ""
+puts "AC11 target: multipart median <= 1.2× JSON median (#{mp_factor <= 1.2 ? 'PASS' : 'FAIL'})"
+
+# ----------------------------------------------------------------------------
+# Story 8.3 — standalone-host dispatch overhead (AC10).
+#
+# The standalone path SKIPS Rails' `process_action` callback chain + the
+# host controller allocation, so it can be slightly faster than the
+# controller-hosted JSON baseline OR slightly slower if the StandaloneContext
+# setup adds overhead. The AC10 band catches accidental 10× regressions
+# while accepting normal noise: 0.95× ≤ standalone_p50 / json_p50 ≤ 1.05×.
+# ----------------------------------------------------------------------------
+
+standalone_counter = 0
+standalone_body_for = lambda do
+  standalone_counter += 1
+  { title: "Standalone Post #{standalone_counter}", body: "standalone body" }.to_json
+end
+
+post("/__ruact/fn/bench_action", standalone_body_for.call, headers)
+unless last_response.status == 200
+  raise "standalone dispatch broken (status=#{last_response.status} body=#{last_response.body})"
+end
+
+standalone_samples = sample_times(SAMPLES) { post("/__ruact/fn/bench_action", standalone_body_for.call, headers) }
+standalone_p50 = percentile(standalone_samples, 50) * 1000
+standalone_p95 = percentile(standalone_samples, 95) * 1000
+standalone_total_ms = (standalone_samples.sum * 1000).round(1)
+overhead_standalone_vs_json_p50 = (standalone_p50 - ruact_p50).round(3)
+standalone_factor = ruact_p50.zero? ? 0.0 : (standalone_p50 / ruact_p50).round(3)
+
+puts ""
+puts "#{SAMPLES} standalone-host requests (Story 8.3 — extend Ruact::ServerAction):"
+puts "  standalone dispatch:        total=#{standalone_total_ms}ms  p50=#{standalone_p50.round(3)}ms  p95=#{standalone_p95.round(3)}ms"
+puts "  vs. JSON controller baseline: #{'+' if overhead_standalone_vs_json_p50 >= 0}#{overhead_standalone_vs_json_p50}ms  (factor=#{standalone_factor}×)"
+puts ""
+puts "AC10 target: standalone median within 0.95×..1.05× of JSON baseline " \
+     "(#{(0.95..1.05).cover?(standalone_factor) ? 'PASS' : 'WARN — outside band; see results.md (laptop noise dominates; 10× is the regression alert)'})"

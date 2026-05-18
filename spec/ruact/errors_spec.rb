@@ -59,5 +59,50 @@ module Ruact
         expect { raise HtmlConverterError, "test" }.to raise_error(Error)
       end
     end
+
+    describe "Ruact::CurrentUserNotConfiguredError", :story_8_3 do
+      it "is a subclass of Ruact::Error" do
+        expect(CurrentUserNotConfiguredError.ancestors).to include(Error)
+      end
+
+      it "carries a default message that names BOTH Devise and hand-rolled-session worked examples" do
+        message = CurrentUserNotConfiguredError.new.message
+        expect(message).to include("Ruact.current_user requires Ruact.config.current_user_resolver to be set")
+        expect(message).to include("Devise")
+        expect(message).to include("env['warden']")
+        expect(message).to include("hand-rolled session")
+        expect(message).to include("rack.session")
+      end
+
+      it "accepts a custom message" do
+        expect(CurrentUserNotConfiguredError.new("explicit").message).to eq("explicit")
+      end
+    end
+
+    describe "Ruact::ActionError", :story_8_3 do
+      it "is a subclass of Ruact::Error" do
+        expect(ActionError.ancestors).to include(Error)
+      end
+
+      it "carries status + body so the dispatcher can render without `render` access" do
+        error = ActionError.new(status: 422, body: { error: "invalid" })
+        expect(error.status).to eq(422)
+        expect(error.body).to eq(error: "invalid")
+      end
+
+      it "accepts a Symbol status" do
+        error = ActionError.new(status: :unprocessable_entity, body: nil)
+        expect(error.status).to eq(:unprocessable_entity)
+        expect(error.body).to be_nil
+      end
+
+      it "synthesises a legible message when none is given" do
+        expect(ActionError.new(status: 401, body: nil).message).to include("status=401")
+      end
+
+      it "honours an explicit custom message" do
+        expect(ActionError.new(status: 500, body: {}, message: "explicit").message).to eq("explicit")
+      end
+    end
   end
 end

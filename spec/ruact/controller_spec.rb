@@ -220,6 +220,63 @@ module Ruact
         count = occurrences.length
         expect(count).to eq(1), "Expected 1 </script> (closing tag), found #{count}"
       end
+
+      # Story 8.3 review R7 — the shell must surface the host's CSRF token
+      # as a `<meta name="csrf-token">` tag so the JS runtime can forward
+      # it as `X-CSRF-Token` on every `_makeRef` call. Without this,
+      # standalone server actions (Story 8.3 AC5) — for which the gem
+      # enforces CSRF itself via `protect_from_forgery with: :exception,
+      # if: :dispatching_standalone?` — can never authenticate, because
+      # the document has no token for the runtime to read.
+      context "Story 8.3 — CSRF meta tag injection", :story_8_3 do
+        # The bare `test_class` above is a minimal `include Ruact::Controller`
+        # consumer with no `form_authenticity_token` surface (no Rails
+        # request-forgery-protection module mixed in). Define a real method
+        # on the class so `respond_to?(:form_authenticity_token, true)` is
+        # true AND `verify_partial_doubles` lets us stub the return value.
+        let(:csrf_test_class) do
+          Class.new(test_class) do
+            def form_authenticity_token
+              "stub-default-token"
+            end
+          end
+        end
+        let(:csrf_controller) { csrf_test_class.new(fake_request) }
+
+        it "embeds <meta name=\"csrf-token\" content=\"...\"> when the host exposes form_authenticity_token" do
+          allow(csrf_controller).to receive(:form_authenticity_token).and_return("test-csrf-token-value")
+          html = csrf_controller.send(:ruact_html_shell, payload)
+          expect(html).to include('<meta name="csrf-token" content="test-csrf-token-value" />')
+        end
+
+        it "HTML-escapes the token value (defense against accidental quote injection)" do
+          allow(csrf_controller).to receive(:form_authenticity_token).and_return('"quoted" & <evil>')
+          html = csrf_controller.send(:ruact_html_shell, payload)
+          expect(html).to include("&quot;quoted&quot; &amp; &lt;evil&gt;")
+          expect(html).not_to include('"quoted" & <evil>')
+        end
+
+        it "omits the meta tag (renders empty string) when form_authenticity_token is not available " \
+           "(e.g., a non-Rails spec context)" do
+          # `controller` is the bare test_class without `form_authenticity_token`.
+          html = controller.send(:ruact_html_shell, payload)
+          expect(html).not_to include('name="csrf-token"')
+        end
+
+        it "omits the meta tag when form_authenticity_token returns nil/empty" do
+          allow(csrf_controller).to receive(:form_authenticity_token).and_return("")
+          html = csrf_controller.send(:ruact_html_shell, payload)
+          expect(html).not_to include('name="csrf-token"')
+        end
+
+        it "silently omits the meta tag if form_authenticity_token raises " \
+           "(e.g., session middleware missing in a stripped-down test env)" do
+          allow(csrf_controller).to receive(:form_authenticity_token).and_raise(StandardError, "no session")
+          expect { csrf_controller.send(:ruact_html_shell, payload) }.not_to raise_error
+          html = csrf_controller.send(:ruact_html_shell, payload)
+          expect(html).not_to include('name="csrf-token"')
+        end
+      end
     end
 
     describe "ruact_action DSL macro (Story 8.1)", :story_8_1 do
@@ -233,6 +290,7 @@ module Ruact
         klass = Class.new do
           def self.name = "ExampleController"
           include Ruact::Controller
+
           ruact_action(:create_post) { |params| "created #{params[:title]}" }
         end
 
@@ -250,6 +308,7 @@ module Ruact
         klass = Class.new do
           def self.name = "ExampleController"
           include Ruact::Controller
+
           ruact_action(:create_post) { |params| "echo #{params[:title]}" }
         end
 
@@ -268,6 +327,7 @@ module Ruact
           Class.new do
             def self.name = "BadController"
             include Ruact::Controller
+
             ruact_action(:create_post)
           end
         end.to raise_error(ArgumentError, /requires a block/)
@@ -278,6 +338,7 @@ module Ruact
           Class.new do
             def self.name = "BadController"
             include Ruact::Controller
+
             ruact_action(:CreatePost) { |_p| nil }
           end
         end.to raise_error(Ruact::ConfigurationError, /invalid server-function symbol :CreatePost in BadController/)
@@ -288,6 +349,7 @@ module Ruact
           Class.new do
             def self.name = "CollidingController"
             include Ruact::Controller
+
             ruact_action(:foo_bar)  { |_p| nil }
             ruact_action(:foo__bar) { |_p| nil }
           end
@@ -299,6 +361,7 @@ module Ruact
           Class.new do
             def self.name = "BadController"
             include Ruact::Controller
+
             ruact_action(:delete) { |_p| nil }
           end
         end.to raise_error(Ruact::ConfigurationError, /reserved/)
@@ -312,6 +375,7 @@ module Ruact
           Class.new do
             def self.name = "BadController"
             include Ruact::Controller
+
             ruact_action(:params) { |_p| nil }
           end
         end.to raise_error(Ruact::ConfigurationError, /would clobber a framework method/)
@@ -322,6 +386,7 @@ module Ruact
           Class.new do
             def self.name = "ExampleController"
             include Ruact::Controller
+
             ruact_action(:no_args) { "pong" }
           end
         end.to raise_error(ArgumentError, /must accept exactly one positional parameter/)
@@ -333,6 +398,7 @@ module Ruact
           Class.new do
             def self.name = "ExampleController"
             include Ruact::Controller
+
             ruact_action(:bad_kwargs) { |_params, required:| required }
           end
         end.to raise_error(ArgumentError, /no required keyword arguments/)
@@ -344,6 +410,7 @@ module Ruact
           Class.new do
             def self.name = "ExampleController"
             include Ruact::Controller
+
             ruact_action(:opt_kwargs) { |_params, opt: nil| opt }
           end
         end.not_to raise_error
@@ -354,6 +421,7 @@ module Ruact
           Class.new do
             def self.name = "ExampleController"
             include Ruact::Controller
+
             ruact_action(:splat_args) { |*args| args.first }
           end
         end.not_to raise_error
@@ -364,6 +432,7 @@ module Ruact
           Class.new do
             def self.name = "BadController"
             include Ruact::Controller
+
             ruact_action("create_post") { |_p| nil }
           end
         end.to raise_error(ArgumentError, /requires a Symbol/)
@@ -375,6 +444,7 @@ module Ruact
           Class.new do
             def self.name = "BadController"
             include Ruact::Controller
+
             def index; end
             ruact_action(:index) { |_p| nil }
           end
@@ -394,6 +464,7 @@ module Ruact
           Class.new(app_controller) do
             def self.name = "BadController"
             include Ruact::Controller
+
             ruact_action(:current_user) { |_p| nil }
           end
         end.to raise_error(Ruact::ConfigurationError, /would clobber an inherited helper/)
@@ -405,6 +476,7 @@ module Ruact
           Class.new do
             def self.name = "BadController"
             include Ruact::Controller
+
             ruact_action(:verify_authenticity_token) { |_p| nil }
           end
         end.to raise_error(Ruact::ConfigurationError, /would clobber a framework method/)
@@ -416,6 +488,7 @@ module Ruact
           Class.new do
             def self.name = "ExampleController"
             include Ruact::Controller
+
             ruact_action(:two_positional) { |_a, _b| nil }
           end
         end.to raise_error(ArgumentError, /must accept exactly one positional/)
@@ -427,9 +500,78 @@ module Ruact
           Class.new do
             def self.name = "BadController"
             include Ruact::Controller
+
             ruact_action(:send) { |_p| nil }
           end
         end.to raise_error(Ruact::ConfigurationError, /would clobber a framework method/)
+      end
+
+      it "rejects clobber of an INHERITED ActionController::Base method like :status " \
+         "(re-run-6 #2 — denylist widened from hardcoded set to all framework methods - Object methods)" do
+        expect do
+          Class.new do
+            def self.name = "BadController"
+
+            include Ruact::Controller
+
+            ruact_action(:status) { |_p| nil }
+          end
+        end.to raise_error(Ruact::ConfigurationError,
+                           /would clobber an inherited ActionController::Base method/)
+      end
+
+      it "rejects a LATER def that overrides a previously-registered " \
+         "ruact_action method in the same class body (re-run-6 #1 — method_added hook)" do
+        # The macro defines the action method; a later `def create_post; end`
+        # would silently shadow it, causing host_class.dispatch to skip the
+        # sentinel guard and run the user's later body. Detect at class-load
+        # time via method_added hook so the error is loud at boot.
+        expect do
+          Class.new do
+            def self.name = "BadController"
+
+            include Ruact::Controller
+
+            ruact_action(:create_post) { |_p| "from macro" }
+
+            def create_post
+              "from later def"
+            end
+          end
+        end.to raise_error(Ruact::ConfigurationError,
+                           /registered by `ruact_action :create_post` and then re-defined/)
+      end
+
+      it "preserves a pre-existing `method_added` hook on the host class " \
+         "(re-run-7 #1 — prepended Module instead of define_method clobber)" do
+        # Apps and concerns commonly install `method_added` for
+        # instrumentation, DSL bookkeeping (`attr_*` style helpers), or
+        # auditing. If the gem replaced the host's `method_added` instead
+        # of chaining through it, those concerns would stop firing as soon
+        # as the first `ruact_action` runs.
+        recorded = []
+        klass = Class.new do
+          def self.name = "ExampleController"
+
+          singleton_class.define_method(:method_added) do |meth|
+            recorded << meth
+            super(meth)
+          end
+
+          include Ruact::Controller
+
+          ruact_action(:create_post) { |_p| "from macro" }
+
+          def helper_method
+            :ok
+          end
+        end
+
+        # Both the macro-defined :create_post AND the later `def helper_method`
+        # should have been observed by the host's `method_added`.
+        expect(recorded).to include(:create_post, :helper_method)
+        # The action method is still registered and dispatch-guarded.
+        expect(klass.allocate.respond_to?(:create_post)).to be(true)
       end
     end
 
@@ -441,6 +583,7 @@ module Ruact
         Class.new do
           def self.name = "PostsController"
           include Ruact::Controller
+
           ruact_action(:create_post) { |_p| nil }
         end
 
@@ -448,6 +591,7 @@ module Ruact
           Class.new do
             def self.name = "AdminPostsController"
             include Ruact::Controller
+
             ruact_action(:create_post) { |_p| nil }
           end
         end.to raise_error(Ruact::ConfigurationError, /declared in BOTH/)

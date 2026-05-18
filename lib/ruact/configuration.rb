@@ -12,7 +12,7 @@ module Ruact
   class Configuration
     # The set of public attributes; new attributes added here automatically
     # inherit the freeze contract via the `define_method` writer below.
-    ATTRIBUTES = %i[manifest_path strict_serialization suspense_timeout vite_dev_server].freeze
+    ATTRIBUTES = %i[manifest_path strict_serialization suspense_timeout vite_dev_server current_user_resolver].freeze
 
     # @!attribute [r] manifest_path
     #   @return [String, nil] Path to react-client-manifest.json.
@@ -27,6 +27,17 @@ module Ruact
     #
     # @!attribute [r] vite_dev_server
     #   @return [String] Base URL of the Vite dev server. Default: "http://localhost:5173".
+    #
+    # @!attribute [r] current_user_resolver
+    #   @return [Proc, nil] Story 8.3 — Lambda invoked by the standalone
+    #     server-action dispatcher when a block reads `current_user`. Receives
+    #     `request.env` (Hash) and returns the authenticated user (or nil).
+    #     Memoized per-dispatch; left nil by default so apps that don't use
+    #     standalone actions never get a phantom `current_user` resolver.
+    #   @example Devise
+    #     Ruact.configure { |c| c.current_user_resolver = ->(env) { env['warden']&.user } }
+    #   @example Hand-rolled session
+    #     Ruact.configure { |c| c.current_user_resolver = ->(env) { User.find_by(id: env['rack.session'][:user_id]) } }
     ATTRIBUTES.each do |attr|
       attr_reader attr
 
@@ -55,7 +66,14 @@ module Ruact
     def initialize(template: nil)
       if template
         ATTRIBUTES.each do |attr|
-          instance_variable_set("@#{attr}", template.public_send(attr).dup)
+          value = template.public_send(attr)
+          # Procs are immutable from the outside (Story 8.3 — current_user_resolver).
+          # Duping creates a different Proc instance, breaking identity comparisons
+          # across re-configurations. Procs are inherently re-entrant safe (no
+          # mutable internal state surface) so the dup is unnecessary; the freeze
+          # at seal! time is enough.
+          cloned = value.is_a?(Proc) ? value : value.dup
+          instance_variable_set("@#{attr}", cloned)
         end
       else
         @manifest_path        = nil
@@ -66,6 +84,7 @@ module Ruact
         end
         @suspense_timeout     = 5.0
         @vite_dev_server      = "http://localhost:5173"
+        @current_user_resolver = nil
       end
     end
 
@@ -93,7 +112,18 @@ module Ruact
         value = public_send(attr)
         next if value.nil? || value.frozen?
 
-        instance_variable_set("@#{attr}", value.dup.freeze)
+        # Story 8.3 review — Procs CAN be frozen (`.freeze` flips the frozen
+        # flag; no operational effect on `.call`). Freezing in place preserves
+        # object identity (vital for code that compares the resolver across
+        # re-configurations) AND keeps the deep-freeze contract honest —
+        # `Ruact.config.current_user_resolver.freeze` later would otherwise
+        # silently no-op an already-frozen reference, but a caller probing
+        # `frozen?` would see the right answer.
+        if value.is_a?(Proc)
+          value.freeze
+        else
+          instance_variable_set("@#{attr}", value.dup.freeze)
+        end
       end
       freeze
     end
