@@ -309,6 +309,34 @@ module Ruact
       end
     end
 
+    describe "Story 8.4 — dev_error_payload_enabled attribute", :story_8_4 do
+      it "defaults to nil so the endpoint controller can resolve to Rails env at request time" do
+        expect(Ruact.config.dev_error_payload_enabled).to be_nil
+      end
+
+      it "accepts true inside Ruact.configure and exposes it after publication" do
+        Ruact.configure { |c| c.dev_error_payload_enabled = true }
+        expect(Ruact.config.dev_error_payload_enabled).to be(true)
+      end
+
+      it "accepts false inside Ruact.configure and exposes it after publication" do
+        Ruact.configure { |c| c.dev_error_payload_enabled = false }
+        expect(Ruact.config.dev_error_payload_enabled).to be(false)
+      end
+
+      it "is sealed by the standard freeze contract — direct mutation raises ConfigurationError" do
+        Ruact.configure { |c| c.dev_error_payload_enabled = true }
+        expect { Ruact.config.dev_error_payload_enabled = false }
+          .to raise_error(Ruact::ConfigurationError, /Ruact::Configuration#dev_error_payload_enabled/)
+      end
+
+      it "is carried across atomic re-configuration (template clone)" do
+        Ruact.configure { |c| c.dev_error_payload_enabled = false }
+        Ruact.configure { |c| c.suspense_timeout = 6.0 }
+        expect(Ruact.config.dev_error_payload_enabled).to be(false)
+      end
+    end
+
     describe "error message includes caller location" do
       it "names the file:line of the offending mutation (AC2.2)" do
         Ruact.configure { |c| c.suspense_timeout = 5.0 }

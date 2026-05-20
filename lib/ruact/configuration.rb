@@ -12,7 +12,7 @@ module Ruact
   class Configuration
     # The set of public attributes; new attributes added here automatically
     # inherit the freeze contract via the `define_method` writer below.
-    ATTRIBUTES = %i[manifest_path strict_serialization suspense_timeout vite_dev_server current_user_resolver].freeze
+    ATTRIBUTES = %i[manifest_path strict_serialization suspense_timeout vite_dev_server current_user_resolver dev_error_payload_enabled].freeze
 
     # @!attribute [r] manifest_path
     #   @return [String, nil] Path to react-client-manifest.json.
@@ -38,6 +38,19 @@ module Ruact
     #     Ruact.configure { |c| c.current_user_resolver = ->(env) { env['warden']&.user } }
     #   @example Hand-rolled session
     #     Ruact.configure { |c| c.current_user_resolver = ->(env) { User.find_by(id: env['rack.session'][:user_id]) } }
+    #
+    # @!attribute [r] dev_error_payload_enabled
+    #   @return [Boolean, nil] Story 8.4 — When true, server-action failures
+    #     respond with a verbose JSON payload (action name, error class,
+    #     message, split backtrace, contextual suggestion, validation errors).
+    #     When false, the wire body carries only the four baseline fields
+    #     (`_ruact_server_action_error`, `action_name`, `error_class`,
+    #     `message`) so React components can render their own UI without
+    #     accidental backtrace leakage. Default `nil` — the endpoint
+    #     controller resolves nil to `Rails.env.development? || Rails.env.test?`,
+    #     keeping the Configuration trivially constructible in non-Rails specs.
+    #   @example Force production-shape errors in development
+    #     Ruact.configure { |c| c.dev_error_payload_enabled = false }
     ATTRIBUTES.each do |attr|
       attr_reader attr
 
@@ -85,6 +98,7 @@ module Ruact
         @suspense_timeout     = 5.0
         @vite_dev_server      = "http://localhost:5173"
         @current_user_resolver = nil
+        @dev_error_payload_enabled = nil
       end
     end
 

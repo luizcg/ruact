@@ -94,3 +94,28 @@ hardware while absolute numbers are not.
 gem's CI host and posts the numbers as a non-blocking workflow summary.
 A 10× regression in either ratio is the alert threshold for human
 inspection; no merge gate.
+
+## Story 8.4 baseline (2026-05-18)
+
+Added an `error_path_overhead` scenario: an action that always raises
+`RuntimeError("forced")` end-to-end through the new
+`EndpointController#__ruact_render_action_error` rescue chain
+(`rescue_from StandardError`). Captures p50/p95 of the failing path so
+future regressions (e.g., adding an expensive serializer step inside
+`ErrorPayload.build`) surface in nightly numbers.
+
+| Scenario                    | p50      | p95     |
+| --------------------------- | -------- | ------- |
+| ruact_action (Post.create!) | ~1.02 ms | ~1.5 ms |
+| error-path (raise → 500)    | ~0.83 ms | ~1.3 ms |
+
+The error path is COMPARABLE to (slightly faster than) the happy path
+because the raised exception short-circuits before reaching ActiveRecord's
+write path — `ErrorPayload.build` + `BacktraceCleaner.split` + the JSON
+serialisation are cheaper than the `Post.create!` insert + validation
+roundtrip. This is informational only; no regression band — the happy-path
+scenarios above are the load-bearing gates.
+
+If a future change pushes the error path above ~5 ms p50 without a clear
+reason (e.g., a backtrace-cleaning algorithmic regression, an expensive
+suggestion lookup, or a serialiser change), surface it for review.

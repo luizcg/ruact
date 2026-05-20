@@ -39,6 +39,17 @@ module Ruact
       @query_registry ||= ServerFunctions::Registry.new
     end
 
+    # Story 8.4 — Absolute path to the gem's `lib/` root. Used by
+    # {Ruact::ServerFunctions::BacktraceCleaner} to classify backtrace frames as
+    # APP or GEM. Memoised at first call so the per-frame `start_with?` check
+    # stays constant-time. Anchors on this file's directory: `lib/ruact.rb`
+    # resolves to `lib/` after `expand_path("..", __dir__)`.
+    #
+    # @return [String] absolute path to the gem's `lib/` directory
+    def gem_path
+      @gem_path ||= File.expand_path("..", __dir__)
+    end
+
     # Returns the absolute path to the Vite plugin bundled inside this gem.
     # Use this in vite.config.js: import ruact from '<%= Ruact.vite_plugin_path %>'
     # Re-run `rails generate ruact:install` after gem upgrades to refresh the path.

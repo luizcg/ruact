@@ -763,3 +763,55 @@ Rails' `verified_request?` short-circuits when `allow_forgery_protection = false
 **Why not handle CSRF inside `StandaloneDispatcher`?** Doing it as a Rails callback lets the framework's existing instrumentation, exception classes, and logging all participate. `ActionController::InvalidAuthenticityToken` is the canonical exception class; raising it inline from a custom dispatcher would lose that. The conditional `before_action` is the smallest possible change to the gem's request-cycle wiring that preserves user-visible parity with the controller-hosted matrix.
 
 **Append-only invariant preserved.** No code-shape changes to the locked accessor. The Story 8.0 ADR's "single accessor mechanism" decision is intact; this addendum adds a second host shape that funnels through the same accessor.
+
+### 2026-05-18 — Story 8.4 — structured server-action error payload
+
+**Context.** Story 8.1 (controller-hosted dispatch), Story 8.2 (`<form action={fn}>` runtime), and Story 8.3 (standalone dispatcher) all let a raised exception bubble back to Rails' default `ActionDispatch::ShowExceptions` middleware on the unhappy path — producing an HTML error page that the runtime received as `RuactActionError({ status, body: "<html>..." })`. Story 8.4 closes NFR30 by introducing a structured wire body so the dev overlay can render a meaningful diagnostic view AND the production React component can render its own UI from the same shape.
+
+**Decision.** Add an OUTERMOST `rescue_from StandardError` (and explicit `rescue_from ActionController::InvalidAuthenticityToken`) on `EndpointController` that renders a JSON Hash with a `_ruact_server_action_error: true` discriminator. The Story 8.0 accessor lock is UNTOUCHED; the new wire surface lives entirely in the `body` field of the existing `RuactActionError`, which the runtime treats as opaque JSON.
+
+**(a) Wire shape — backward-compatible body refinement.**
+
+| Field | Dev mode | Prod mode |
+| --- | --- | --- |
+| `_ruact_server_action_error` (bool) | ✅ | ✅ |
+| `action_name` (string) | ✅ | ✅ |
+| `error_class` (string) | ✅ | ✅ |
+| `message` (string) | ✅ | ✅ |
+| `app_frames` (array of string) | ✅ | absent (key not present) |
+| `gem_frames` (array of string) | ✅ | absent |
+| `suggestion` (string \| null) | ✅ | absent |
+| `validation_errors` (array of string) | only for `ActiveRecord::RecordInvalid` | absent |
+
+The discriminator field (`_ruact_server_action_error: true`) is the load-bearing piece: the React overlay uses it to decide whether to render the structured branch or fall back to the existing `<pre>{error.message}</pre>` rendering. Existing callers that read `body.error` (the Story 8.3 malformed-JSON case) or treat the body as opaque keep working — no field rename, no key removal.
+
+The dev/prod gate is `Ruact.config.dev_error_payload_enabled`, default `nil` (the endpoint resolves nil to `Rails.env.development? || Rails.env.test?`). Setting `c.dev_error_payload_enabled = false` inside `Ruact.configure` forces production-shape errors locally — useful for verifying what the React component receives in prod.
+
+**(b) Host `rescue_from` precedence rule.**
+
+The endpoint's `rescue_from StandardError` is the OUTERMOST catch — it only fires for exceptions the host did NOT handle. A host that declares `rescue_from ActiveRecord::RecordInvalid, with: :handle_record_invalid` continues to render its own response unchanged. The structured payload is the FALLBACK, not the override. This invariant is what lets hosts opt into the gem's diagnostics for unhandled classes while keeping their own error UI for owned domain errors.
+
+**(c) Suggestion table is a gem-published surface.**
+
+`Ruact::ServerFunctions::ErrorSuggestion::SUGGESTIONS` is a frozen Hash keyed by error-class-name strings. Today it carries the two NFR30 mandated mappings (`ActiveRecord::RecordInvalid`, `ActionController::InvalidAuthenticityToken`). The table is NOT host-configurable for now: extending it requires an ADR amendment + a constant update. Rationale: making it runtime-configurable would require a Configuration knob that lives in the seal contract (Story 7.3), expanding the public surface for a feature without a cross-host demand signal. A future story that adds (e.g.) `ActiveRecord::StaleObjectError` opens this paragraph.
+
+**(d) Status code mapping.**
+
+| Exception | HTTP status |
+| --- | --- |
+| `ActiveRecord::RecordInvalid` | `422` |
+| `ActionController::InvalidAuthenticityToken` | `403` |
+| any other `StandardError` | `500` |
+
+**Breaking change vs Story 8.3 R2:** standalone CSRF rejections previously returned `422` (Rails' default `InvalidAuthenticityToken` → 422 mapping in `ShowExceptions`); they now return `403`. The change is intentional — 403 Forbidden is semantically the right code for "you are not authorised to make this request" (CSRF mismatch == missing/invalid credentials), while 422 is reserved for "the request was syntactically valid but the entity could not be processed" (validation errors). The Story 8.3 R2 spec assertion is updated in lockstep; production hosts that branched on the 422 status for CSRF-specific handling MUST migrate to either the 403 status or the `error_class === "ActionController::InvalidAuthenticityToken"` field on the structured body.
+
+**(e) `BacktraceCleaner.split` semantics.**
+
+`Ruact::ServerFunctions::BacktraceCleaner.split(error.backtrace)` returns `{ app: [...], gem: [...] }` by classifying each frame on a prefix match against `Ruact.gem_path` (a memoised gem-root accessor added to `lib/ruact.rb`). The implementation is ~10 LoC with zero ActiveSupport dependency — `ActiveSupport::BacktraceCleaner`'s silencer/filter API was deemed heavyweight for the single-purpose need; the lean implementation also loads cleanly in AR-less specs. The app/gem split is what powers the overlay's "App backtrace shown by default, gem frames behind a toggle" UX (NFR30). Frame caps (`MAX_FRAMES_PER_BUCKET = 25`) keep the wire payload bounded; the full backtrace is in `Rails.logger.error` regardless.
+
+**(f) Pure-function ErrorPayload module.**
+
+`Ruact::ServerFunctions::ErrorPayload.build(action_name:, error:, mode:)` has zero I/O — no `Rails.env` read, no `Ruact.config` read. The caller (`EndpointController#__ruact_render_action_error`) resolves `mode` and passes it in. That keeps the module trivially unit-testable without stubbing Rails env, and isolates "what the wire shape is" from "what env are we in". Same design choice as the standalone dispatcher's `Result` value object (Story 8.3).
+
+**Append-only invariant preserved.** The Story 8.0 accessor lock is untouched. The `RuactActionError` constructor signature on the runtime side is untouched (still `{ name, status, body, response }`). The new wire surface is entirely a refinement of what `body` can contain, gated by a discriminator that pre-existing callers do not read.
+

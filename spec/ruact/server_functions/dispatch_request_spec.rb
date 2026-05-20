@@ -74,7 +74,19 @@ require_relative "../controller_request_spec" if defined?(Rails::Application) &&
 # for the app (driven by EITHER spec's first `boot!`), adding routes
 # post-finalization is unreliable. Doing it here, at spec file load,
 # guarantees the route lands BEFORE either spec calls `boot!`.
-if defined?(ControllerRequestSpecSupport)
+# Review F10 (2026-05-19 re-review) — idempotence guard. This file's
+# top-level block can be re-executed when RSpec's runner `Kernel.load`s the
+# file from an explicit `rspec <files>...` invocation that ALSO names
+# `endpoint_controller_rescue_spec.rb` (whose `require_relative` already
+# loaded this file once). Without the guard, the second pass calls
+# `routes.append` against the same name and Rails raises
+# `ArgumentError: Invalid route name, already in use: 'ruact_server_function_spec'`.
+# The flag lives on `ControllerRequestSpecSupport` (not on a top-level
+# constant) so it ties the dedupe to the actual Rails app the route is
+# attached to.
+if defined?(ControllerRequestSpecSupport) &&
+   !ControllerRequestSpecSupport.instance_variable_get(:@__ruact_endpoint_route_appended)
+  ControllerRequestSpecSupport.instance_variable_set(:@__ruact_endpoint_route_appended, true)
   ControllerRequestSpecSupport.app_class.routes.append do
     post "/__ruact/fn/:name",
          to: "ruact/server_functions/endpoint#dispatch_action",
@@ -467,15 +479,18 @@ RSpec.describe "Story 8.1: POST /__ruact/fn/:name dispatch", :story_8_1 do
       expect(body.fetch("permitted")).to eq("title" => "Hi", "body" => "Body")
     end
 
-    it "params.require(:post) raises ParameterMissing when the key is absent (proves shadow works)" do
-      # Rails app has `show_exceptions: :none`, so the exception bubbles up to
-      # Rack — the request raises directly rather than being converted to a
-      # 400 response. Asserting the raise is a stronger guarantee than the
-      # status code: the call truly reaches `params.require(:post)` inside
-      # the block and the shadowed `params` IS an `ActionController::Parameters`.
-      expect do
-        post "/__ruact/fn/strong_params_demo", "{}", { "CONTENT_TYPE" => "application/json" }
-      end.to raise_error(ActionController::ParameterMissing, /param is missing.*post/)
+    it "params.require(:post) ParameterMissing is caught by the Story 8.4 rescue_from " \
+       "→ 500 + structured payload (proves the shadowed params is a real ActionController::Parameters)" do
+      # Pre-Story 8.4 this raised through to Rack (spec app has
+      # `show_exceptions: :none`). Story 8.4's endpoint-level
+      # `rescue_from StandardError` now intercepts ParameterMissing and
+      # renders the structured 500 body. Asserting `error_class` proves
+      # the call truly reached `params.require(:post)` inside the block.
+      post "/__ruact/fn/strong_params_demo", "{}", { "CONTENT_TYPE" => "application/json" }
+      expect(last_response.status).to eq(500)
+      body = JSON.parse(last_response.body)
+      expect(body.fetch("error_class")).to eq("ActionController::ParameterMissing")
+      expect(body.fetch("message")).to match(/param is missing.*post/i)
     end
   end
 
@@ -703,6 +718,25 @@ RSpec.describe "Story 8.1: POST /__ruact/fn/:name dispatch", :story_8_1 do
     it "the EndpointController's standalone_host? predicate identifies the host as standalone" do
       entry = Ruact.action_registry.entries[:standalone_demo]
       expect(Ruact::ServerFunctions::EndpointController.standalone_host?(entry.controller)).to be(true)
+    end
+
+    describe "Story 8.4 — standalone block raise produces structured payload", :story_8_4 do
+      before do
+        DispatchSpecStandaloneHost.module_eval do
+          ruact_action(:standalone_boom) { |_p| raise "standalone explosion" }
+        end
+      end
+
+      it "an unrescued StandardError raised inside the standalone block falls through to " \
+         "EndpointController's rescue_from StandardError and returns 500 + structured body" do
+        post "/__ruact/fn/standalone_boom", "{}", { "CONTENT_TYPE" => "application/json" }
+        expect(last_response.status).to eq(500)
+        body = JSON.parse(last_response.body)
+        expect(body.fetch("_ruact_server_action_error")).to be(true)
+        expect(body.fetch("action_name")).to eq("standalone_boom")
+        expect(body.fetch("error_class")).to eq("RuntimeError")
+        expect(body.fetch("message")).to eq("standalone explosion")
+      end
     end
 
     it "an invalid host shape (neither Class nor extending Ruact::ServerAction) renders 500 " \

@@ -272,3 +272,38 @@ puts "  vs. JSON controller baseline: #{'+' if overhead_standalone_vs_json_p50 >
 puts ""
 puts "AC10 target: standalone median within 0.95×..1.05× of JSON baseline " \
      "(#{(0.95..1.05).cover?(standalone_factor) ? 'PASS' : 'WARN — outside band; see results.md (laptop noise dominates; 10× is the regression alert)'})"
+
+# ----------------------------------------------------------------------------
+# Story 8.4 — error-path overhead.
+#
+# The new endpoint-level `rescue_from StandardError` chain only fires on the
+# unhappy path, so it does NOT touch the happy-path numbers above. This
+# section measures the rescue-from cost itself: an action that always raises
+# `RuntimeError("forced")` end-to-end through the new handler. Captures p50
+# and p95 of the error path so future regressions (e.g., adding an expensive
+# serializer step inside `ErrorPayload.build`) surface in nightly numbers.
+#
+# No regression assertion against the happy-path scenarios above — they're
+# untouched because the new chain only fires on raise.
+# ----------------------------------------------------------------------------
+
+class BenchController
+  ruact_action(:forced_failure) { |_params| raise "forced bench failure" }
+end
+
+# Warm-up — exercise the rescue_from chain once so the path is loaded.
+post("/__ruact/fn/forced_failure", "{}", headers)
+unless last_response.status == 500
+  raise "error-path warm-up did not return 500 (got status=#{last_response.status})"
+end
+
+forced_samples = sample_times(SAMPLES) { post("/__ruact/fn/forced_failure", "{}", headers) }
+forced_p50 = percentile(forced_samples, 50) * 1000
+forced_p95 = percentile(forced_samples, 95) * 1000
+forced_total_ms = (forced_samples.sum * 1000).round(1)
+forced_overhead_p50 = (forced_p50 - ruact_p50).round(3)
+
+puts ""
+puts "#{SAMPLES} error-path requests (Story 8.4 — rescue_from + ErrorPayload.build):"
+puts "  error-path dispatch:        total=#{forced_total_ms}ms  p50=#{forced_p50.round(3)}ms  p95=#{forced_p95.round(3)}ms"
+puts "  vs. JSON happy-path:        #{'+' if forced_overhead_p50 >= 0}#{forced_overhead_p50}ms  (informational only — no regression band)"

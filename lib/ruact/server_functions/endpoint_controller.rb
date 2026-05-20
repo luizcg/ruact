@@ -2,6 +2,8 @@
 
 require "action_controller"
 
+require_relative "error_payload"
+
 module Ruact
   module ServerFunctions
     # Story 8.1 — the single gem-mounted Rails controller backing
@@ -52,6 +54,19 @@ module Ruact
       # mode), so the check is a no-op in that case — same observable
       # behavior as the controller-hosted branch under the same setting.
       protect_from_forgery with: :exception, if: :dispatching_standalone?
+
+      # Story 8.4 — OUTERMOST rescue chain so any StandardError that bubbled
+      # past the host's `rescue_from` chain (controller-hosted branch) or out
+      # of {StandaloneDispatcher} (standalone branch) is rendered as a
+      # structured JSON payload instead of Rails' default HTML error page.
+      # Most-specific entries come last because Rails resolves handlers in
+      # registration order (last registration wins for the same class), but
+      # because both handlers route to the same private method, the order is
+      # only relevant for the EXPLICIT InvalidAuthenticityToken entry — that
+      # one preempts Rails' auto-installed `handle_unverified_request`
+      # (Pitfall #1).
+      rescue_from StandardError, with: :__ruact_render_action_error
+      rescue_from ActionController::InvalidAuthenticityToken, with: :__ruact_render_action_error
 
       # `POST /__ruact/fn/:name` (mounted by `Ruact::Railtie`).
       def dispatch_action
@@ -173,6 +188,84 @@ module Ruact
           json: { error: "unknown ruact action: :#{name_sym}" },
           status: :not_found
         )
+      end
+
+      # Story 8.4 — Structured server-action error renderer. Resolves the
+      # mode from {Ruact.config.dev_error_payload_enabled} (falling back to
+      # `Rails.env.development? || Rails.env.test?` when nil), builds the
+      # JSON body via {ErrorPayload.build}, logs the failure server-side
+      # (always — the prod constraint is "do not leak via the wire", not
+      # "do not log"), then renders `json: payload, status: <mapped>`.
+      def __ruact_render_action_error(error)
+        action_name = @__ruact_name_sym || :"(unknown)"
+        mode = __ruact_payload_mode
+        payload = ErrorPayload.build(action_name: action_name, error: error, mode: mode)
+        __ruact_log_action_error(action_name, error)
+        render(json: payload, status: __ruact_status_for(error))
+      end
+
+      # Story 8.4 — Status mapping per AC1:
+      # - `ActiveRecord::RecordInvalid` → 422
+      # - `ActionController::InvalidAuthenticityToken` → 403
+      # - any other StandardError → 500
+      # Uses class-name string match so the gem does NOT require ActiveRecord
+      # at load time (parity with {ErrorSuggestion}).
+      def __ruact_status_for(error)
+        case error.class.name
+        when "ActiveRecord::RecordInvalid" then 422
+        when "ActionController::InvalidAuthenticityToken" then 403
+        else 500
+        end
+      end
+
+      # Story 8.4 — Resolve the payload mode from configuration with a Rails
+      # env fallback. The fallback keeps the Configuration trivially
+      # constructible in non-Rails specs while ensuring production hosts that
+      # never call `Ruact.configure` still see the reduced wire shape.
+      #
+      # Strict-boolean handling (review follow-up): only the literals `true`
+      # and `false` count as an explicit configuration. Any other value
+      # (strings like `"true"`, numerics, Symbols, etc.) falls back to the
+      # env-driven default rather than being coerced via Ruby truthiness —
+      # otherwise a misconfigured `c.dev_error_payload_enabled = "false"`
+      # would silently leak the verbose payload in production.
+      def __ruact_payload_mode
+        case Ruact.config.dev_error_payload_enabled
+        when true  then :development
+        when false then :production
+        else __ruact_default_dev_mode? ? :development : :production
+        end
+      end
+
+      def __ruact_default_dev_mode?
+        return false unless defined?(Rails) && Rails.respond_to?(:env)
+
+        Rails.env.development? || Rails.env.test?
+      end
+
+      # Story 8.4 AC6 — log a single error line + the full backtrace, both at
+      # `error` severity. When `Rails.logger` responds to `tagged` (the
+      # ActiveSupport::TaggedLogging extension; Rails 6+ default for the
+      # request logger), wrap the entry in a `ruact action:<name>` tag for
+      # log-aggregator indexing. The full backtrace is emitted regardless of
+      # the wire-payload mode — server-side logs always carry the full
+      # picture.
+      def __ruact_log_action_error(action_name, error)
+        return unless defined?(Rails) && Rails.respond_to?(:logger) && Rails.logger
+
+        line = "[ruact] server action :#{action_name} failed — #{error.class.name}: #{error.message}"
+        backtrace_text = Array(error.backtrace).join("\n")
+
+        logger = Rails.logger
+        if logger.respond_to?(:tagged)
+          logger.tagged("ruact action:#{action_name}") do
+            logger.error(line)
+            logger.error(backtrace_text) unless backtrace_text.empty?
+          end
+        else
+          logger.error(line)
+          logger.error(backtrace_text) unless backtrace_text.empty?
+        end
       end
     end
   end

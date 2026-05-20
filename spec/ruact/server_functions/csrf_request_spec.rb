@@ -176,32 +176,28 @@ RSpec.describe "Story 8.2 — CSRF matrix (`<form action={fn}>` end-to-end)",
   end
 
   describe "AC5 — host has `protect_from_forgery with: :exception` enabled" do
-    it "REJECTS a multipart request WITHOUT an X-CSRF-Token header — HTTP 422 + body shape " \
-       "(R19: rescue middleware mirrors Rails' production ShowExceptions output)" do
-      # The host's `protect_from_forgery with: :exception` raises
-      # `ActionController::InvalidAuthenticityToken`. In production
-      # Rails' default exception middleware (ShowExceptions) maps this
-      # to HTTP 422 + Rails' rendered error page. The spec's
-      # `CSRFRescueMiddleware` does the same conversion so the test
-      # observes the SHAPE the client (`RuactActionError.body`) would
-      # see: status 422, JSON body carrying the exception class +
-      # message.
+    it "REJECTS a multipart request WITHOUT an X-CSRF-Token header — HTTP 403 + structured body " \
+       "(Story 8.4: status code changed from 422 → 403 and the gem now renders the structured payload " \
+       "directly via EndpointController's `rescue_from ActionController::InvalidAuthenticityToken`; " \
+       "the test's CSRFRescueMiddleware is now a dead-code fallback that never fires)" do
       multipart_post "/__ruact/fn/csrf_demo", { "title" => "no token" }
-      expect(last_response.status).to eq(422)
+      expect(last_response.status).to eq(403)
       expect(last_response.headers["Content-Type"]).to include("application/json")
       body = JSON.parse(last_response.body)
-      expect(body.fetch("error")).to eq("ActionController::InvalidAuthenticityToken")
+      expect(body.fetch("_ruact_server_action_error")).to be(true)
+      expect(body.fetch("error_class")).to eq("ActionController::InvalidAuthenticityToken")
       expect(body.fetch("message")).to match(/CSRF token|authenticity/i)
     end
 
-    it "REJECTS a multipart request whose X-CSRF-Token header carries an INVALID token — same 422 shape" do
+    it "REJECTS a multipart request whose X-CSRF-Token header carries an INVALID token — same 403 + structured body" do
       multipart_post "/__ruact/fn/csrf_demo",
                      { "title" => "bad token" },
                      { "HTTP_X_CSRF_TOKEN" => "obviously-not-the-real-token" }
-      expect(last_response.status).to eq(422)
+      expect(last_response.status).to eq(403)
       expect(last_response.headers["Content-Type"]).to include("application/json")
       body = JSON.parse(last_response.body)
-      expect(body.fetch("error")).to eq("ActionController::InvalidAuthenticityToken")
+      expect(body.fetch("_ruact_server_action_error")).to be(true)
+      expect(body.fetch("error_class")).to eq("ActionController::InvalidAuthenticityToken")
     end
 
     it "the rejection exception class is the canonical Rails one — `RuactActionError.body` " \
@@ -304,27 +300,25 @@ RSpec.describe "Story 8.2 — CSRF matrix (`<form action={fn}>` end-to-end)",
       end
     end
 
-    it "REJECTS a multipart request WITHOUT an X-CSRF-Token header — HTTP 422 + " \
-       "ActionController::InvalidAuthenticityToken raised " \
-       "(R2: status code + exception class are the gem's guarantee; the JSON body shape " \
-       "is what the test-only CSRFRescueMiddleware synthesises — production response body " \
-       "is whatever the host app's exception middleware produces)" do
+    it "REJECTS a multipart request WITHOUT an X-CSRF-Token header — HTTP 403 + structured body " \
+       "(Story 8.4 update: status moved from 422 → 403; the gem now renders the structured payload " \
+       "directly via EndpointController's explicit `rescue_from InvalidAuthenticityToken` (Pitfall #1) " \
+       "so the body shape is part of the gem's guarantee, not test-middleware synthesis)" do
       multipart_post "/__ruact/fn/standalone_csrf_demo", { "title" => "no token" }
-      # Gem guarantee — status code from `protect_from_forgery with: :exception`
-      # + Rails' default `InvalidAuthenticityToken` → 422 mapping in `ShowExceptions`.
-      expect(last_response.status).to eq(422)
-      # Test-middleware synthesis — production body shape is host-dependent.
+      expect(last_response.status).to eq(403)
       body = JSON.parse(last_response.body)
-      expect(body.fetch("error")).to eq("ActionController::InvalidAuthenticityToken")
+      expect(body.fetch("_ruact_server_action_error")).to be(true)
+      expect(body.fetch("error_class")).to eq("ActionController::InvalidAuthenticityToken")
     end
 
-    it "REJECTS a multipart request whose X-CSRF-Token header carries an INVALID token — same 422 + exception" do
+    it "REJECTS a multipart request whose X-CSRF-Token header carries an INVALID token — same 403 + structured body" do
       multipart_post "/__ruact/fn/standalone_csrf_demo",
                      { "title" => "bad" },
                      { "HTTP_X_CSRF_TOKEN" => "obviously-not-the-real-token" }
-      expect(last_response.status).to eq(422)
+      expect(last_response.status).to eq(403)
       body = JSON.parse(last_response.body)
-      expect(body.fetch("error")).to eq("ActionController::InvalidAuthenticityToken")
+      expect(body.fetch("_ruact_server_action_error")).to be(true)
+      expect(body.fetch("error_class")).to eq("ActionController::InvalidAuthenticityToken")
     end
 
     it "ACCEPTS a multipart request that forwards the freshly-issued X-CSRF-Token (200) — " \
