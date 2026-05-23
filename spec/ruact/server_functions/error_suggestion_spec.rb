@@ -49,6 +49,22 @@ module Ruact
         end
       end
 
+      describe "Story 8.5 — UploadTooLargeError suggestion", :story_8_5 do
+        it "returns the upload-too-large suggestion for Ruact::UploadTooLargeError" do
+          err = Ruact::UploadTooLargeError.new(received_bytes: 11_000_000, limit_bytes: 10_485_760)
+          expect(described_class.for(err))
+            .to eq(
+              "Upload exceeded the configured size limit. " \
+              "Increase Ruact.config.max_upload_bytes or use Active Storage Direct Upload / " \
+              "a presigned S3 URL for large files."
+            )
+        end
+
+        it "has a SUGGESTIONS entry keyed by the exception class name" do
+          expect(described_class::SUGGESTIONS).to have_key("Ruact::UploadTooLargeError")
+        end
+      end
+
       describe "Story 8.4 — SUGGESTIONS constant" do
         it "is frozen so runtime mutation cannot extend the table" do
           expect(described_class::SUGGESTIONS).to be_frozen

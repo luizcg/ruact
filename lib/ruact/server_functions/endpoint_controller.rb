@@ -41,6 +41,18 @@ module Ruact
 
       prepend_before_action :resolve_ruact_entry!
 
+      # Story 8.5 — enforce `Ruact.config.max_upload_bytes` on multipart /
+      # urlencoded bodies BEFORE the registry lookup and BEFORE Rack's
+      # multipart parser runs. `prepend_before_action` is what makes this the
+      # very first callback: the size check is dispatch-independent and the
+      # cheapest possible reject is "look at Content-Length and bail" — so
+      # the upload guard wins the race against `resolve_ruact_entry!` and
+      # (for the standalone branch) the conditional CSRF callback. A
+      # consequence: an oversized request from a CSRF-attacker on a standalone
+      # action is 413'd before CSRF is even checked — correct (the attacker
+      # learns nothing about CSRF state from a 413).
+      prepend_before_action :__ruact_enforce_upload_limit!
+
       # Story 8.3 — install a strategy + conditional callback so
       # `verify_authenticity_token` only fires on the standalone-dispatch
       # branch. `protect_from_forgery with: :exception, if: ...` is the
@@ -170,6 +182,40 @@ module Ruact
         @__ruact_entry = lookup_entry(@__ruact_name_sym)
       end
 
+      # Story 8.5 — `prepend_before_action` callback. Rejects requests whose
+      # wire `Content-Length` exceeds `Ruact.config.max_upload_bytes`. The
+      # check uses `Content-Length` (not body inspection) so it fires BEFORE
+      # Rack's multipart parser would touch the body — the cheapest possible
+      # reject. It only fires for `multipart/form-data` and
+      # `application/x-www-form-urlencoded`; JSON bodies have their own
+      # operational caps (host middleware / reverse proxy) and aren't a
+      # "max upload" concern in this story. Chunked-transfer clients
+      # (`Content-Length` absent) bypass the guard because we cannot know
+      # the size up-front; the action body is responsible for any belt-and-
+      # suspenders check via `params[:file].size` / `params[:file].byte_size`.
+      # A nil `Ruact.config.max_upload_bytes` short-circuits the guard
+      # entirely — the gem-side knob has been opted out and the host's
+      # reverse proxy / middleware owns the cap.
+      #
+      # The reported `received_bytes` is the WIRE Content-Length, which
+      # includes multipart boundary overhead (a 9.5 MB file uploaded via
+      # multipart reports `received_bytes ≈ 9.5 MB + a few KB`). The 10 MB
+      # default has enough headroom that this is invisible for the common
+      # case; the docs page calls it out for the edge.
+      def __ruact_enforce_upload_limit!
+        limit = Ruact.config.max_upload_bytes
+        return if limit.nil?
+
+        content_type = request.content_mime_type&.to_s
+        return unless ["multipart/form-data", "application/x-www-form-urlencoded"].include?(content_type)
+
+        received = request.content_length
+        return if received.nil?
+        return if received <= limit
+
+        raise Ruact::UploadTooLargeError.new(received_bytes: received, limit_bytes: limit)
+      end
+
       def dispatching_standalone?
         return false unless @__ruact_entry
 
@@ -197,7 +243,14 @@ module Ruact
       # (always — the prod constraint is "do not leak via the wire", not
       # "do not log"), then renders `json: payload, status: <mapped>`.
       def __ruact_render_action_error(error)
-        action_name = @__ruact_name_sym || :"(unknown)"
+        # Story 8.5 — the upload-limit guard runs BEFORE `resolve_ruact_entry!`,
+        # so `@__ruact_name_sym` may still be nil when a 413 fires. Fall back
+        # to `request.path_parameters[:name]` (the URL `:name` segment Rails
+        # routed on) so the structured payload still carries a meaningful
+        # `action_name` instead of "(unknown)".
+        action_name = @__ruact_name_sym ||
+                      request.path_parameters[:name]&.to_s&.to_sym ||
+                      :"(unknown)"
         mode = __ruact_payload_mode
         payload = ErrorPayload.build(action_name: action_name, error: error, mode: mode)
         __ruact_log_action_error(action_name, error)
@@ -214,6 +267,7 @@ module Ruact
         case error.class.name
         when "ActiveRecord::RecordInvalid" then 422
         when "ActionController::InvalidAuthenticityToken" then 403
+        when "Ruact::UploadTooLargeError" then 413
         else 500
         end
       end

@@ -50,8 +50,25 @@ module Ruact
         payload["suggestion"] = ErrorSuggestion.for(error)
         validation_errors = extract_validation_errors(error)
         payload["validation_errors"] = validation_errors if validation_errors
+        upload_limit = extract_upload_limit(error)
+        payload["upload_limit"] = upload_limit if upload_limit
         payload
       end
+
+      # Story 8.5 — for `Ruact::UploadTooLargeError`, surface the
+      # `received_bytes` / `limit_bytes` pair as a dev-only block so the
+      # overlay can render both numbers without re-parsing the message.
+      # Returns nil for any other error class so the caller can omit the
+      # key entirely (preserves the "four baseline keys" prod contract).
+      def self.extract_upload_limit(error)
+        return nil unless error.class.name == "Ruact::UploadTooLargeError"
+
+        {
+          "received_bytes" => error.received_bytes,
+          "limit_bytes" => error.limit_bytes
+        }
+      end
+      private_class_method :extract_upload_limit
 
       # Returns `full_messages` for `ActiveRecord::RecordInvalid` (or any
       # error that exposes `.record.errors.full_messages`); `[]` when the

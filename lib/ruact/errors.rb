@@ -62,4 +62,42 @@ module Ruact
       super(message || "ruact action error (status=#{status.inspect})")
     end
   end
+
+  # Story 8.5 — raised by `EndpointController#__ruact_enforce_upload_limit!`
+  # when an inbound multipart / urlencoded request's `Content-Length` exceeds
+  # `Ruact.config.max_upload_bytes`. The exception inherits from
+  # `Ruact::Error` so the Story 8.4 `rescue_from StandardError` chain on
+  # `EndpointController` catches it cleanly; the endpoint controller's
+  # `__ruact_status_for` maps it to HTTP 413, and `ErrorPayload.build`
+  # extracts the `received_bytes` / `limit_bytes` pair into a dev-only
+  # `upload_limit` block alongside the four baseline keys.
+  #
+  # The pair is exposed as `attr_reader` so the structured payload (and host
+  # log lines) can show both numbers without re-parsing the message string.
+  # Numbers report the WIRE `Content-Length` (which includes multipart
+  # boundary overhead — a 9.5 MB file uploaded via multipart will report a
+  # `received_bytes` slightly larger than the file size), not the parsed
+  # file size — that's what the guard checks, and reporting the same number
+  # avoids "why does the error say 9.7 MB when my file is 9.5 MB?" surprise.
+  #
+  # @example Construction shape (matches how the guard raises)
+  #   raise Ruact::UploadTooLargeError.new(
+  #     received_bytes: request.content_length,
+  #     limit_bytes:    Ruact.config.max_upload_bytes
+  #   )
+  class UploadTooLargeError < Error
+    attr_reader :received_bytes, :limit_bytes
+
+    # @param received_bytes [Integer] wire `Content-Length` of the rejected request.
+    # @param limit_bytes [Integer] configured `Ruact.config.max_upload_bytes` at reject time.
+    # @param message [String] optional override; defaults to a string that
+    #   names both numbers so the exception is legible without consulting
+    #   the attr_readers.
+    def initialize(received_bytes:, limit_bytes:, message: nil)
+      @received_bytes = received_bytes
+      @limit_bytes = limit_bytes
+      super(message || "Upload exceeded the configured size limit " \
+                       "(received_bytes=#{received_bytes}, limit_bytes=#{limit_bytes})")
+    end
+  end
 end

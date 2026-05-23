@@ -815,3 +815,42 @@ The endpoint's `rescue_from StandardError` is the OUTERMOST catch — it only fi
 
 **Append-only invariant preserved.** The Story 8.0 accessor lock is untouched. The `RuactActionError` constructor signature on the runtime side is untouched (still `{ name, status, body, response }`). The new wire surface is entirely a refinement of what `body` can contain, gated by a discriminator that pre-existing callers do not read.
 
+### 2026-05-23 — Story 8.5 — file uploads + `max_upload_bytes` guard
+
+**Context.** Story 8.1 (controller-hosted dispatch) and Story 8.3 (standalone dispatcher) both already routed `multipart/form-data` bodies through `request.request_parameters`; React 19's `<form action={fn}>` auto-FormData (Story 8.2) already includes `<input type="file">` entries in the FormData; the runtime's `pickWirePayload` / `buildFetchInit` (Story 8.1) already POST FormData as `multipart/form-data` with the browser-set boundary. So the "wire path for file uploads" was, on paper, already in place. Story 8.5 closes FR84 by (a) pinning the round-trip behavior with explicit gem-side specs so a future refactor can't silently regress UploadedFile delivery, and (b) introducing a controller-boundary size guard so an oversized request gets the Story 8.4 structured 413 instead of timing out at the multipart parser.
+
+**Decision.**
+
+**(a) No accessor surface change.** The Story 8.0 ADR lock is intact. The React side continues to import `{ createPost } from "@/.ruact/server-functions"` and pass FormData; nothing new is exported. The runtime is unmodified — `pickWirePayload` already routes FormData to the multipart branch, `buildFetchInit` already lets the browser set the boundary header. This story's delta lives ENTIRELY on the Ruby side.
+
+**(b) New `Ruact.config.max_upload_bytes` attribute.** Integer (bytes). Default `10 * 1024 * 1024` (10 MB). Set to `nil` to disable the gem-side guard (the host's reverse proxy / middleware then owns the operational cap). Carries the standard `Ruact::Configuration` seal contract (Story 7.3) — direct post-boot mutation raises `Ruact::ConfigurationError`.
+
+**(c) New `Ruact::UploadTooLargeError` exception class.** Inherits from `Ruact::Error` so the Story 8.4 `rescue_from StandardError` chain on `EndpointController` catches it cleanly. Carries `received_bytes` and `limit_bytes` attr_readers so the structured payload can surface both numbers without re-parsing the message string. The class lives in the gem's public namespace (`lib/ruact/errors.rb` next to `ActionError`/`CurrentUserNotConfiguredError`) because docs reference it by name and the `ErrorSuggestion::SUGGESTIONS` table gets a new keyed entry.
+
+**(d) Pre-parse `Content-Length` guard.** `EndpointController` gains `prepend_before_action :__ruact_enforce_upload_limit!` ABOVE the existing `:resolve_ruact_entry!` callback (so the guard fires FIRST in the chain). The check uses `request.content_length` — NOT body inspection — so it fires BEFORE Rack's multipart parser runs. That's the cheapest possible reject: a 100 MB upload's headers are parsed and we 413 it without touching the body. Short-circuits: `max_upload_bytes = nil`; content type not `multipart/form-data` / `application/x-www-form-urlencoded`; `Content-Length` absent (chunked transfer). The dispatch-independence of the guard is why it lives as a callback, not inside `dispatch_action`.
+
+**(e) Why `Content-Length`, not body inspection?** Body inspection (e.g., `Rack::Request#tempfile_for_each_part`) would defeat the purpose of "reject before parsing" — the parser would already be buffering bytes to disk. `Content-Length` is the cheapest pre-parse reject; the cost is two carve-outs: (1) chunked-transfer clients bypass the guard because `Content-Length` is absent (rare for browsers, common for some HTTP libraries), and (2) the reported `received_bytes` is the wire Content-Length including multipart boundary overhead, NOT the parsed file size. A 9.5 MB file uploaded via multipart reports `received_bytes ≈ 9.7 MB`. The 10 MB default has headroom for the boundary overhead in the common case; docs call out the edge.
+
+**(f) Operational cap belongs to the reverse proxy.** `max_upload_bytes` is a controller-level "fail fast at the boundary" knob, NOT a memory-safety guarantee. Rack's multipart parser will still buffer bodies up to its own limits before the controller callback could possibly run on a request without a `Content-Length` header. The docs page (`website/docs/api/server-actions.md` "File uploads" section) explicitly recommends `client_max_body_size` in nginx / `LimitRequestBody` in Apache for the operational cap, plus Active Storage Direct Upload / presigned S3 URLs for large files. The `max_upload_bytes` knob is the "polite reject for the common case", not the load-balancer.
+
+**(g) Status code mapping extends Story 8.4's table.**
+
+| Exception | HTTP status |
+| --- | --- |
+| `ActiveRecord::RecordInvalid` | `422` |
+| `ActionController::InvalidAuthenticityToken` | `403` |
+| `Ruact::UploadTooLargeError` | `413` (new in 8.5) |
+| any other `StandardError` | `500` |
+
+**(h) `ErrorPayload.build` gains a dev-only `upload_limit` block.** When `error.class.name == "Ruact::UploadTooLargeError"` AND `mode == :development`, the payload includes `upload_limit: { received_bytes: <int>, limit_bytes: <int> }` alongside the four baseline keys and the existing dev-mode fields (`app_frames`, `gem_frames`, `suggestion`). The production-mode payload is unchanged (still the four baseline keys only) — `upload_limit` is gated the same way as `app_frames` / `suggestion`. The `_ruact_server_action_error: true` discriminator is preserved.
+
+**(i) `ErrorSuggestion::SUGGESTIONS` gains one entry.** `"Ruact::UploadTooLargeError" => "Upload exceeded the configured size limit. Increase Ruact.config.max_upload_bytes or use Active Storage Direct Upload / a presigned S3 URL for large files."` — the table is frozen at class-load time; runtime mutation continues to be unsupported per the Story 8.4 surface decision.
+
+**(j) Guard fires BEFORE CSRF (standalone branch).** Because `prepend_before_action :__ruact_enforce_upload_limit!` is added LAST among the prepend_before_action calls in the source, it lands at the FRONT of the chain — running before `:resolve_ruact_entry!` AND before the conditional `verify_authenticity_token` callback. An oversized standalone request without a CSRF token returns 413, not 403. This is correct (cheaper reject; the attacker learns nothing about CSRF state from a 413) and pinned by `endpoint_controller_upload_spec.rb`'s Pitfall #4 example.
+
+**(k) `__ruact_render_action_error` action_name fallback.** Because the upload guard runs BEFORE `:resolve_ruact_entry!`, `@__ruact_name_sym` is nil when a 413 fires. The renderer falls back to `request.path_parameters[:name]` so the structured payload's `action_name` still carries the URL-routed name (`"upload_post"`) instead of `"(unknown)"`.
+
+**Append-only invariant preserved.** The Story 8.0 accessor lock is untouched. The runtime is unchanged (no new exports, no signature changes to `RuactActionError`, no new helper on `pickWirePayload` / `buildFetchInit`). The new wire surface is a refinement of what the existing `body` field can carry (one new optional dev-only key, `upload_limit`), gated by a discriminator pre-existing callers do not read.
+
+**Playground demo carve-out.** The playground demo + Active Storage end-to-end exercise (epic AC2/AC6) are deferred to Story 8.5a — a dedicated `rails new`-generated playground at `playgrounds/epic-8-server-actions/`. The existing `playgrounds/demo/` has no ActiveRecord / SQLite / `config/database.yml`, and retrofitting the DB layer would obscure this story's actual delta. The gem-side request-cycle specs in `endpoint_controller_upload_spec.rb` (controller-hosted + standalone branches, AC1/AC3/AC4 + Pitfalls #1/#4/#12) provide the empirical proof for the gem boundary; the Active Storage attach round-trip lives in 8.5a.
+

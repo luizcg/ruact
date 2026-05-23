@@ -17,7 +17,13 @@ module Ruact
         "ActiveRecord::RecordInvalid" =>
           "Validation failed — check the model's `validates` rules",
         "ActionController::InvalidAuthenticityToken" =>
-          "CSRF token mismatch — ensure the page was rendered after the most recent server restart and the session cookie is intact"
+          "CSRF token mismatch — ensure the page was rendered after the most recent server restart and the session cookie is intact",
+        # Story 8.5 — multipart-upload reject. Routes devs to either the
+        # config knob (for "raise the limit by a few MB") or the streaming
+        # upload pipelines (for "this should never have been a server-action
+        # request in the first place").
+        "Ruact::UploadTooLargeError" =>
+          "Upload exceeded the configured size limit. Increase Ruact.config.max_upload_bytes or use Active Storage Direct Upload / a presigned S3 URL for large files."
       }.freeze
 
       # Suggestion string for the given error, or nil for unknown classes.

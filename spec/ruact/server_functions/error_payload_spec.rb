@@ -157,6 +157,48 @@ module Ruact
         end
       end
 
+      describe "Story 8.5 — UploadTooLargeError gets a dev-only upload_limit block", :story_8_5 do
+        let(:error) { Ruact::UploadTooLargeError.new(received_bytes: 11_534_336, limit_bytes: 10_485_760) }
+
+        it "exposes received_bytes and limit_bytes under upload_limit (dev mode)" do
+          payload = described_class.build(action_name: :upload_post, error: error, mode: :development)
+          expect(payload["upload_limit"]).to eq(
+            "received_bytes" => 11_534_336,
+            "limit_bytes" => 10_485_760
+          )
+        end
+
+        it "carries error_class as Ruact::UploadTooLargeError" do
+          payload = described_class.build(action_name: :upload_post, error: error, mode: :development)
+          expect(payload["error_class"]).to eq("Ruact::UploadTooLargeError")
+        end
+
+        it "extracts the upload-too-large suggestion from ErrorSuggestion" do
+          payload = described_class.build(action_name: :upload_post, error: error, mode: :development)
+          expect(payload["suggestion"]).to include("Increase Ruact.config.max_upload_bytes")
+        end
+
+        it "does NOT include upload_limit in :production mode (four baseline keys only)" do
+          payload = described_class.build(action_name: :upload_post, error: error, mode: :production)
+          expect(payload).not_to have_key("upload_limit")
+          expect(payload.keys).to contain_exactly(
+            "_ruact_server_action_error",
+            "action_name",
+            "error_class",
+            "message"
+          )
+        end
+
+        it "is ABSENT (no key) when the error class is not UploadTooLargeError" do
+          payload = described_class.build(
+            action_name: :x,
+            error: RuntimeError.new("boom"),
+            mode: :development
+          )
+          expect(payload).not_to have_key("upload_limit")
+        end
+      end
+
       describe "backtrace edge cases (dev mode)" do
         it "is { app_frames: [], gem_frames: [] } when backtrace is nil" do
           err = StandardError.new("boom") # never raised => backtrace is nil

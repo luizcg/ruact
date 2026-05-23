@@ -309,6 +309,66 @@ module Ruact
       end
     end
 
+    describe "Story 8.5 — max_upload_bytes attribute", :story_8_5 do
+      it "defaults to 10 MB (10 * 1024 * 1024 bytes)" do
+        expect(Ruact.config.max_upload_bytes).to eq(10 * 1024 * 1024)
+      end
+
+      it "accepts an Integer inside Ruact.configure" do
+        Ruact.configure { |c| c.max_upload_bytes = 25 * 1024 * 1024 }
+        expect(Ruact.config.max_upload_bytes).to eq(25 * 1024 * 1024)
+      end
+
+      it "accepts nil to disable the gem-side guard" do
+        Ruact.configure { |c| c.max_upload_bytes = nil }
+        expect(Ruact.config.max_upload_bytes).to be_nil
+      end
+
+      it "is sealed by the standard freeze contract — direct mutation raises ConfigurationError" do
+        Ruact.configure { |c| c.max_upload_bytes = 5 * 1024 * 1024 }
+        expect { Ruact.config.max_upload_bytes = 9_000_000 }
+          .to raise_error(Ruact::ConfigurationError, /Ruact::Configuration#max_upload_bytes/)
+      end
+
+      it "is carried across atomic re-configuration (template clone)" do
+        Ruact.configure { |c| c.max_upload_bytes = 7 * 1024 * 1024 }
+        Ruact.configure { |c| c.suspense_timeout = 6.0 }
+        expect(Ruact.config.max_upload_bytes).to eq(7 * 1024 * 1024)
+      end
+
+      describe "writer-time validation (review patch)" do
+        it "accepts 0 (a degenerate but legal cap that rejects every multipart/urlencoded request)" do
+          expect { Ruact.configure { |c| c.max_upload_bytes = 0 } }.not_to raise_error
+          expect(Ruact.config.max_upload_bytes).to eq(0)
+        end
+
+        it "rejects negative Integer with ConfigurationError" do
+          expect { Ruact.configure { |c| c.max_upload_bytes = -1 } }
+            .to raise_error(Ruact::ConfigurationError, /must be nil or a non-negative Integer/)
+        end
+
+        it "rejects String with ConfigurationError naming the offending value + class" do
+          expect { Ruact.configure { |c| c.max_upload_bytes = "10485760" } }
+            .to raise_error(Ruact::ConfigurationError, /got "10485760" \(String\)/)
+        end
+
+        it "rejects Float with ConfigurationError" do
+          expect { Ruact.configure { |c| c.max_upload_bytes = 1024.0 } }
+            .to raise_error(Ruact::ConfigurationError, /must be nil or a non-negative Integer/)
+        end
+
+        it "rejects Symbol with ConfigurationError" do
+          expect { Ruact.configure { |c| c.max_upload_bytes = :unlimited } }
+            .to raise_error(Ruact::ConfigurationError, /must be nil or a non-negative Integer/)
+        end
+
+        it "rejects true/false with ConfigurationError" do
+          expect { Ruact.configure { |c| c.max_upload_bytes = true } }
+            .to raise_error(Ruact::ConfigurationError, /must be nil or a non-negative Integer/)
+        end
+      end
+    end
+
     describe "Story 8.4 — dev_error_payload_enabled attribute", :story_8_4 do
       it "defaults to nil so the endpoint controller can resolve to Rails env at request time" do
         expect(Ruact.config.dev_error_payload_enabled).to be_nil

@@ -12,7 +12,15 @@ module Ruact
   class Configuration
     # The set of public attributes; new attributes added here automatically
     # inherit the freeze contract via the `define_method` writer below.
-    ATTRIBUTES = %i[manifest_path strict_serialization suspense_timeout vite_dev_server current_user_resolver dev_error_payload_enabled].freeze
+    ATTRIBUTES = %i[
+      manifest_path
+      strict_serialization
+      suspense_timeout
+      vite_dev_server
+      current_user_resolver
+      dev_error_payload_enabled
+      max_upload_bytes
+    ].freeze
 
     # @!attribute [r] manifest_path
     #   @return [String, nil] Path to react-client-manifest.json.
@@ -51,6 +59,30 @@ module Ruact
     #     keeping the Configuration trivially constructible in non-Rails specs.
     #   @example Force production-shape errors in development
     #     Ruact.configure { |c| c.dev_error_payload_enabled = false }
+    #
+    # @!attribute [r] max_upload_bytes
+    #   @return [Integer, nil] Story 8.5 — upper bound (in bytes) on the
+    #     `Content-Length` of `multipart/form-data` and
+    #     `application/x-www-form-urlencoded` requests dispatched through
+    #     `POST /__ruact/fn/:name`. When the inbound `Content-Length` exceeds
+    #     this value, the endpoint controller raises
+    #     `Ruact::UploadTooLargeError` BEFORE Rack's multipart parser runs,
+    #     producing a 413 with the Story 8.4 structured error body.
+    #     Default: `10 * 1024 * 1024` (10 MB). Set to `nil` to disable the
+    #     gem-side guard — typical when a reverse proxy (`client_max_body_size`)
+    #     or host middleware already owns the operational cap. Chunked-transfer
+    #     requests (no `Content-Length` header) bypass the guard regardless of
+    #     this setting; the action body is responsible for any belt-and-suspenders
+    #     check via `params[:file].size` / `params[:file].byte_size` in that case.
+    #   @note This is a controller-level "fail fast at the boundary" knob, not
+    #     a stream-safety guarantee — Rack's multipart parser will still buffer
+    #     bodies up to its own limits before the guard rejects. For very large
+    #     uploads route through Active Storage Direct Upload or a presigned S3
+    #     URL; see `website/docs/api/server-actions.md` "File uploads" section.
+    #   @example Raise the limit to 25 MB
+    #     Ruact.configure { |c| c.max_upload_bytes = 25 * 1024 * 1024 }
+    #   @example Disable the gem-side guard (reverse proxy owns the cap)
+    #     Ruact.configure { |c| c.max_upload_bytes = nil }
     ATTRIBUTES.each do |attr|
       attr_reader attr
 
@@ -59,6 +91,7 @@ module Ruact
           location = caller_locations(1, 1).first
           raise Ruact::ConfigurationError, build_error_message(attr, location)
         end
+        validate_attribute_value!(attr, value)
         instance_variable_set("@#{attr}", value)
       end
     end
@@ -99,6 +132,7 @@ module Ruact
         @vite_dev_server      = "http://localhost:5173"
         @current_user_resolver = nil
         @dev_error_payload_enabled = nil
+        @max_upload_bytes = 10 * 1024 * 1024
       end
     end
 
@@ -140,6 +174,30 @@ module Ruact
         end
       end
       freeze
+    end
+
+    # Story 8.5 review patch — attribute-specific writer-time validation. The
+    # generic writer otherwise stores any value, which then surfaces as a
+    # generic 500 (`Integer <= String` etc.) on the FIRST in-flight request
+    # instead of a configuration-time error. Limit the surface to attributes
+    # whose runtime contract is narrower than "any value" — currently only
+    # `max_upload_bytes` (must be nil or a non-negative Integer). Other
+    # attributes keep their pre-existing "store any value" contract.
+    #
+    # Negative integers would otherwise turn into a global 413 — every
+    # request with a Content-Length above zero exceeds the configured limit.
+    # Booleans, Strings, Floats, Symbols turn into a non-comparable type
+    # error at request time. Both cases land here at boot/configure time
+    # with a legible message pointing at the offending value.
+    def validate_attribute_value!(attr, value)
+      return unless attr == :max_upload_bytes
+      return if value.nil?
+      return if value.is_a?(Integer) && value >= 0
+
+      raise Ruact::ConfigurationError,
+            "Ruact::Configuration#max_upload_bytes must be nil or a non-negative Integer; " \
+            "got #{value.inspect} (#{value.class.name}). " \
+            "Set to nil to disable the gem-side guard, or pass a positive Integer (bytes)."
     end
 
     def build_error_message(attr, location)

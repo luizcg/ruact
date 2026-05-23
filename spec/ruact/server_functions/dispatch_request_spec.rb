@@ -423,6 +423,26 @@ RSpec.describe "Story 8.1: POST /__ruact/fn/:name dispatch", :story_8_1 do
     # `<form action={fn}>` integration where CSRF is the user-visible path.
   end
 
+  describe "Story 8.5 — regression: multipart UploadedFile passes through ruact_action_raw_args", :story_8_5 do
+    # Regression guard against future refactors of the controller-hosted
+    # branch's multipart path (controller.rb `ruact_action_raw_args` →
+    # `request.request_parameters`). The full request-cycle coverage lives
+    # in endpoint_controller_upload_spec.rb; this single example pins the
+    # behavior here so the dispatch suite catches a regression even if the
+    # upload-spec file is renamed/relocated.
+    it "params[:cover] reaches the block as ActionDispatch::Http::UploadedFile" do
+      fixture_path = File.expand_path("../../support/fixtures/pixel.png", __dir__)
+      DispatchRequestSpecSupport::TestController.ruact_action(:upload_check) do |params|
+        { "klass" => params[:cover].class.name }
+      end
+
+      post "/__ruact/fn/upload_check",
+           { "cover" => Rack::Test::UploadedFile.new(fixture_path, "image/png") }
+      expect(last_response.status).to eq(200)
+      expect(JSON.parse(last_response.body).fetch("klass")).to eq("ActionDispatch::Http::UploadedFile")
+    end
+  end
+
   describe "Re-run-3 — before_action reads request.body (#3 raw_post fix)" do
     it "the action still sees the original body when a before_action already drained it" do
       # Pre-Re-run-3: the before_action's `body.read` advanced the IO to EOF;
