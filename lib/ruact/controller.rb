@@ -46,11 +46,12 @@ module Ruact
       url_options verified_request? verify_authenticity_token
     ].to_set.freeze
 
-    # Story 8.1 — class-level DSL surface. The `ruact_action` macro registers
-    # a server-callable symbol with `Ruact.action_registry` (so the Vite-plugin
-    # codegen from Story 8.0a picks it up at the next `config.to_prepare`) AND
-    # defines a matching public instance method that is reachable ONLY via the
-    # gem's `POST /__ruact/fn/:name` endpoint dispatch path. The defined method
+    # Story 8.1 / 9.1 — class-level DSL surface. Both `ruact_action` and
+    # `ruact_query` register a server-callable symbol on the appropriate
+    # `Ruact.*_registry` (so the Vite-plugin codegen from Story 8.0a picks it
+    # up at the next `config.to_prepare`) AND define a matching public
+    # instance method that is reachable ONLY via the gem's
+    # `POST /__ruact/fn/:name` endpoint dispatch path. The defined method
     # body checks a thread-local sentinel (`Thread.current[:__ruact_dispatching]`)
     # set by `Ruact::ServerFunctions::EndpointController#dispatch_action` and
     # raises `Ruact::Error` for any direct call from in-controller code, a
@@ -58,12 +59,20 @@ module Ruact
     # GET-without-CSRF attack surface that a host's `get ":controller/:action"`
     # route would otherwise create. If a developer needs the block body from
     # another controller method, they should refactor the body into a PORO that
-    # both the action and the controller call.
+    # both the action/query and the controller call.
+    #
+    # The validation surface is shared between the two macros via private
+    # class-method helpers (`__ruact_validate_symbol!`, `__ruact_validate_block!`,
+    # `__ruact_validate_no_clobber!`, `__ruact_install_method_added_hook!`,
+    # `__ruact_define_dispatch_method!`) so a future third kind of server
+    # function would only need to add a thin macro on top.
     #
     # Validation (naming-bridge rule + within-registry / cross-registry
     # collision detection) fires from {Ruact::ServerFunctions::Registry#register}
     # at controller-class load time — the failure is loud at boot, not at
-    # request-dispatch time.
+    # request-dispatch time. Cross-registry collisions (an action and a query
+    # both mapping to the same JS identifier) are caught by
+    # {Ruact::ServerFunctions::Snapshot.functions_payload}.
     class_methods do
       # @param symbol [Symbol] the action name (snake_case; bridged to JS
       #   camelCase by {Ruact::ServerFunctions::NameBridge}).
@@ -77,222 +86,234 @@ module Ruact
       #   registry (cross-registry collisions with `ruact_query` are caught
       #   later by {Ruact::ServerFunctions::Snapshot.functions_payload}).
       def ruact_action(symbol, &block)
-        # Re-run-2 (2026-05-14) — `ruact_action` strictly requires a Symbol.
-        # A String slips through the naming-bridge regex but stores a
-        # String key in `@entries`, while `EndpointController#dispatch_action`
-        # looks the entry up by `:name.to_sym` — net effect: silent 404 on
-        # every dispatch. Refuse Strings (and anything else) loudly.
-        unless symbol.is_a?(Symbol)
-          raise ArgumentError,
-                "ruact_action requires a Symbol argument, got " \
-                "#{symbol.inspect} (#{symbol.class}). Use " \
-                "`ruact_action :#{symbol}` not `ruact_action #{symbol.inspect}`."
-        end
-
-        unless block
-          raise ArgumentError,
-                "ruact_action :#{symbol} requires a block — declare the " \
-                "implementation with `ruact_action :#{symbol} do |params| ... end`"
-        end
-
-        # Re-run-4 (2026-05-15) — parameter-shape guard (replaces the
-        # earlier `block.arity` check). `block.arity` is negative for
-        # ALL signatures that include any optional/keyword/splat
-        # parameter — including footguns like `do |params, required:|`
-        # which would crash at dispatch time when the macro invokes the
-        # block with one positional argument and no keyword arguments.
-        # We use `block.parameters` for full inspection: the block must
-        # accept exactly one positional argument (`:req`, `:opt`, or
-        # `:rest`) AND have no required keyword parameters (`:keyreq`).
-        # Optional keyword params (`:key`) and double-splat (`:keyrest`)
-        # are fine.
-        # Re-run-5 (2026-05-15) — block must accept exactly one
-        # positional argument. The macro invokes the block with one
-        # positional arg (`instance_exec(args, &block)`), so:
-        #
-        #   - `do |a, b|` would have `b` silently set to `nil`.
-        #     Parameters report `[[:opt, :a], [:opt, :b]]` for blocks
-        #     (proc-arity-coercion). Reject `:opt+:req > 1`.
-        #   - `do |p, required:|` (kwarg case): block.arity stays
-        #     negative, dispatch later raises. Reject `:keyreq`.
-        #   - `do |*args|` accepts any count including 1; `:rest`
-        #     entry counts as 1.
-        #   - `do |params, opt: nil|` is fine (optional kwarg).
-        #
-        # Allowed shapes: `do |p|`, `do |*args|`, `do |p, key: nil|`.
-        # Rejected: `do ||`, `do |a, b|`, `do |p, required:|`.
-        req_count    = block.parameters.count { |kind, _| kind == :req }
-        opt_count    = block.parameters.count { |kind, _| kind == :opt }
-        rest_count   = block.parameters.count { |kind, _| kind == :rest }
-        named_positional = req_count + opt_count
-        positional_total = named_positional + rest_count
-        has_required_kwarg = block.parameters.any? { |kind, _| kind == :keyreq }
-        if positional_total.zero? || named_positional > 1 || has_required_kwarg
-          raise ArgumentError,
-                "ruact_action :#{symbol} block must accept exactly one " \
-                "positional parameter and no required keyword arguments " \
-                "(got parameters=#{block.parameters.inspect}). Use " \
-                "`ruact_action :#{symbol} do |params| ... end`."
-        end
-
-        # Review-batch 1 (2026-05-14) — framework-method-clobber guard.
-        # Refuse to define if the symbol matches one of the well-known
-        # ActionController instance methods that would corrupt request
-        # handling if overridden (the `:params`, `:render`, `:session`,
-        # `:redirect_to`, `:dispatch`, etc. footgun). The hardcoded list
-        # is the canonical set documented in the Rails Guides; it's used
-        # in place of a dynamic `ActionController::Base.method_defined?`
-        # check because (a) the gem can be loaded before ActionController
-        # (e.g., in a non-Rails context) and (b) the dynamic list would
-        # include too many low-risk inherited methods (`:object_id`,
-        # `:respond_to?`) and produce confusing error messages.
-        if FRAMEWORK_RESERVED_METHODS.include?(symbol)
-          raise Ruact::ConfigurationError,
-                "ruact_action :#{symbol} would clobber a framework method — " \
-                "#{symbol.inspect} is a reserved ActionController instance " \
-                "method. Pick a different symbol (e.g. :#{symbol}_action) so " \
-                "the host's CSRF / params / render plumbing remains intact."
-        end
-
-        # Re-run-6 (2026-05-15) — also reject ANY symbol that names a method
-        # inherited from `ActionController::Base` (or its ancestors UP TO but
-        # NOT INCLUDING `Object`). The hardcoded `FRAMEWORK_RESERVED_METHODS`
-        # list is the documented surface, but Rails keeps adding/renaming
-        # internal methods (`:status`, `:send_action`, `:render_to_string`,
-        # `:logger`, `:default_render`, …). Anything that lives on
-        # `ActionController::Base` but NOT on plain `Object` is, by
-        # definition, framework plumbing — overriding it is unsafe.
-        # We carve `Object`/`Kernel`/`BasicObject` off so genuinely-generic
-        # methods (`:object_id`, `:respond_to?`, `:hash`, `:tap`) don't
-        # trip the guard — those are safe to coexist with as block-arg
-        # shadow inside `instance_exec`.
-        baseline_class = defined?(ActionController::Base) ? ActionController::Base : nil
-        if baseline_class
-          object_methods = Object.instance_methods + Object.private_instance_methods
-          framework_methods = baseline_class.instance_methods + baseline_class.private_instance_methods
-          if (framework_methods - object_methods).include?(symbol)
-            raise Ruact::ConfigurationError,
-                  "ruact_action :#{symbol} would clobber an inherited " \
-                  "ActionController::Base method. Overriding framework " \
-                  "plumbing (`#{symbol.inspect}`) is unsafe — pick a " \
-                  "different symbol (e.g. :#{symbol}_action)."
-          end
-        end
-
-        # Re-run-2 (2026-05-14) — refuse to clobber a method ALREADY defined
-        # on the host controller class itself. Common case: a controller has
-        # a normal `def index` action and the dev mistakenly writes
-        # `ruact_action :index do ... end`. Pre-batch this silently
-        # overrode :index with the action body + thread-local guard — the
-        # standard `GET /widgets` would then raise the security guard, since
-        # it's not a /__ruact/fn/index call. We check `instance_methods(false)
-        # + private_instance_methods(false)` (own class only — inherited
-        # framework methods are already caught by FRAMEWORK_RESERVED_METHODS).
-        #
-        # A method previously defined BY `ruact_action` on this same class
-        # is NOT a clobber — re-registration is legitimate (dev-mode reload,
-        # test re-registration after registry reset). We track our own
-        # define_method calls in `@__ruact_defined_methods` and skip the
-        # guard for those.
-        @__ruact_defined_methods ||= Set.new
-        own_methods = instance_methods(false) + private_instance_methods(false)
-        if own_methods.include?(symbol) && !@__ruact_defined_methods.include?(symbol)
-          raise Ruact::ConfigurationError,
-                "ruact_action :#{symbol} would clobber an existing method " \
-                "on #{name || self}. If #{symbol.inspect} is meant to be " \
-                "a server action, remove the existing definition first; " \
-                "if it's a regular controller action, pick a different " \
-                "ruact_action symbol (e.g. :#{symbol}_remote)."
-        end
-
-        # Re-run-3 (2026-05-15) — refuse to clobber an INHERITED app helper.
-        # Common case: `ApplicationController` defines `current_user` /
-        # `authenticate_user!` / `authorize` and a subclass mistakenly
-        # writes `ruact_action :current_user`. The above own-class check
-        # misses these because the method lives on a superclass; the
-        # FRAMEWORK_RESERVED_METHODS check misses them because they are
-        # app-defined, not part of `ActionController::Base`. Detect by
-        # asking the class hierarchy MINUS the ActionController baseline:
-        # any method that responds on `self` but NOT on
-        # `ActionController::Base` is an app-defined helper inherited
-        # from `ApplicationController` (or a concern mixed in there).
-        baseline = defined?(ActionController::Base) ? ActionController::Base : nil
-        if baseline &&
-           (method_defined?(symbol) || private_method_defined?(symbol)) &&
-           !(baseline.method_defined?(symbol) || baseline.private_method_defined?(symbol)) &&
-           !@__ruact_defined_methods.include?(symbol)
-          raise Ruact::ConfigurationError,
-                "ruact_action :#{symbol} would clobber an inherited helper " \
-                "on #{name || self} (likely defined on " \
-                "ApplicationController or a concern). Overriding " \
-                "#{symbol.inspect} would break callers that rely on it — " \
-                "pick a different ruact_action symbol (e.g. :#{symbol}_remote)."
-        end
+        __ruact_validate_symbol!(symbol, dsl_name: :ruact_action)
+        __ruact_validate_block!(symbol, block, dsl_name: :ruact_action)
+        __ruact_validate_no_clobber!(symbol, dsl_name: :ruact_action)
+        __ruact_install_method_added_hook!
 
         Ruact.action_registry.register(symbol, kind: :action, controller: self, &block)
 
-        # Review-batch 1 (2026-05-14) — define `<symbol>` directly (no
-        # separate `__ruact_action_*` wrapper). This makes `before_action
-        # :foo, only: :create_post` match the actual action name. The
-        # method is public so `ActionController#process` dispatches to it
-        # through the standard callback chain.
-        #
-        # Defense in depth: the method body raises unless invoked under the
-        # gem's endpoint dispatch path (a thread-local sentinel set by
-        # `Ruact::ServerFunctions::EndpointController#dispatch_action`).
-        # Without the sentinel, a wildcard route like `get ":controller/
-        # :action"` could otherwise reach `create_post` as a GET (no CSRF).
-        @__ruact_defined_methods << symbol
+        __ruact_define_dispatch_method!(symbol, block, dsl_name: :ruact_action)
+      end
 
-        # Re-run-6 (2026-05-15) — install a `method_added` hook so a LATER
-        # `def #{symbol}; ...; end` in the same controller body (or a reopen)
-        # cannot silently override the macro-defined action method. Without
-        # this guard, the registry/codegen still export the symbol but
-        # `host_class.dispatch` would run the user's later definition,
-        # producing a confusing 500 (the sentinel check is gone) instead of
-        # a loud class-load-time error. The hook is installed once per class
-        # and ignores re-definitions performed by the macro itself
-        # (tracked via `@__ruact_being_defined_by_ruact_action`).
-        #
-        # Re-run-7 (2026-05-15) — install the hook by `prepend`-ing a Module
-        # into the host's singleton class instead of `define_method`-ing
-        # `:method_added` directly on it. `define_method` REPLACES any
-        # `def self.method_added` (or `class << self; def method_added`)
-        # the host or its concerns already defined; `super(meth)` would
-        # then chain to `Module#method_added` (the default no-op), not the
-        # original implementation — silently breaking instrumentation and
-        # DSL bookkeeping concerns. Prepending a hook module keeps the
-        # original `method_added` in the ancestor chain so `super(meth)`
-        # invokes it after our check.
-        unless @__ruact_method_added_hook_installed
-          @__ruact_method_added_hook_installed = true
-          ruact_class = self
-          hook = Module.new do
-            define_method(:method_added) do |meth|
-              defined_set = ruact_class.instance_variable_get(:@__ruact_defined_methods)
-              being_defined = ruact_class.instance_variable_get(:@__ruact_being_defined_by_ruact_action)
-              if defined_set&.include?(meth) && !being_defined
-                defined_set.delete(meth)
-                raise Ruact::ConfigurationError,
-                      "method :#{meth} on #{ruact_class.name || ruact_class} was " \
-                      "registered by `ruact_action :#{meth}` and then re-defined " \
-                      "in the same class body. The later definition would " \
-                      "silently shadow the macro-defined action and break " \
-                      "endpoint dispatch. Either remove the explicit `def " \
-                      "#{meth}` (the macro already defines it) or rename the " \
-                      "ruact_action."
-              end
-              super(meth)
-            end
-          end
-          singleton_class.prepend(hook)
+      # Story 9.1 — declares a server query. Same shape as `ruact_action`
+      # (registers on `Ruact.query_registry`; defines a thread-local-guarded
+      # public instance method dispatched via `POST /__ruact/fn/:name`) so
+      # the React side sees a single uniform import surface
+      # (`import { categories } from "@/.ruact/server-functions"`). The
+      # action-first / query-fallback resolution order is implemented by
+      # {Ruact::ServerFunctions::EndpointController#lookup_entry}; the
+      # cross-registry-collision detector at
+      # {Ruact::ServerFunctions::Snapshot.functions_payload} guarantees the
+      # two registries never see overlapping JS identifiers, so the order
+      # is invisible to a correctly-configured app.
+      #
+      # @param symbol [Symbol] the query name (snake_case; bridged to JS
+      #   camelCase by {Ruact::ServerFunctions::NameBridge}).
+      # @yield [params] the block runs via `instance_exec` on a fresh
+      #   controller instance at dispatch time; `params` shadows the
+      #   request's `params` accessor and is an `ActionController::Parameters`
+      #   instance wrapping the query-call arguments.
+      # @return [Ruact::ServerFunctions::RegistryEntry] the entry just registered.
+      # @raise [Ruact::ConfigurationError] when the symbol fails the
+      #   naming-bridge rule, collides with another `ruact_query` in this
+      #   registry, or collides with a `ruact_action` symbol via the JS
+      #   identifier bridge (the latter is caught at snapshot time).
+      def ruact_query(symbol, &block)
+        __ruact_validate_symbol!(symbol, dsl_name: :ruact_query)
+        __ruact_validate_block!(symbol, block, dsl_name: :ruact_query)
+        __ruact_validate_no_clobber!(symbol, dsl_name: :ruact_query)
+        __ruact_install_method_added_hook!
+
+        Ruact.query_registry.register(symbol, kind: :query, controller: self, &block)
+
+        __ruact_define_dispatch_method!(symbol, block, dsl_name: :ruact_query)
+      end
+
+      # @!visibility private
+
+      # Story 9.1 — shared validators. Each helper takes `dsl_name:` so the
+      # raised error messages stay byte-identical to the Story 8.1 spec
+      # assertions (`"ruact_action :foo ..."`) while still producing a
+      # distinguishable Story 9.1 wording (`"ruact_query :foo ..."`) for
+      # the query branch.
+
+      # Re-run-2 (2026-05-14) — both DSLs strictly require a Symbol. A String
+      # slips through the naming-bridge regex but stores a String key in
+      # `@entries`, while `EndpointController#dispatch_action` looks the
+      # entry up by `:name.to_sym` — net effect: silent 404 on every dispatch.
+      def __ruact_validate_symbol!(symbol, dsl_name:)
+        return if symbol.is_a?(Symbol)
+
+        raise ArgumentError,
+              "#{dsl_name} requires a Symbol argument, got " \
+              "#{symbol.inspect} (#{symbol.class}). Use " \
+              "`#{dsl_name} :#{symbol}` not `#{dsl_name} #{symbol.inspect}`."
+      end
+
+      # Re-run-4/5 (2026-05-15) — parameter-shape guard for the block. The
+      # macro invokes the block with one positional argument
+      # (`instance_exec(args, &block)`), so:
+      #
+      #   - `do |a, b|` → `b` silently set to `nil`. Reject `:opt+:req > 1`.
+      #   - `do |p, required:|` → block.arity stays negative, dispatch
+      #     later raises. Reject `:keyreq`.
+      #   - `do |*args|` → `:rest` entry counts as 1. Accepted.
+      #   - `do |params, opt: nil|` → optional kwarg is fine.
+      #
+      # Allowed shapes: `do |p|`, `do |*args|`, `do |p, key: nil|`.
+      # Rejected: `do ||`, `do |a, b|`, `do |p, required:|`.
+      def __ruact_validate_block!(symbol, block, dsl_name:)
+        unless block
+          raise ArgumentError,
+                "#{dsl_name} :#{symbol} requires a block — declare the " \
+                "implementation with `#{dsl_name} :#{symbol} do |params| ... end`"
         end
 
-        @__ruact_being_defined_by_ruact_action = true
+        req_count        = block.parameters.count { |kind, _| kind == :req }
+        opt_count        = block.parameters.count { |kind, _| kind == :opt }
+        rest_count       = block.parameters.count { |kind, _| kind == :rest }
+        named_positional = req_count + opt_count
+        positional_total = named_positional + rest_count
+        has_required_kwarg = block.parameters.any? { |kind, _| kind == :keyreq }
+        return unless positional_total.zero? || named_positional > 1 || has_required_kwarg
+
+        raise ArgumentError,
+              "#{dsl_name} :#{symbol} block must accept exactly one " \
+              "positional parameter and no required keyword arguments " \
+              "(got parameters=#{block.parameters.inspect}). Use " \
+              "`#{dsl_name} :#{symbol} do |params| ... end`."
+      end
+
+      # Review-batch / Re-run patches (2026-05-14/15) — full clobber surface:
+      #
+      #   1. FRAMEWORK_RESERVED_METHODS list (hardcoded canonical surface)
+      #   2. Any inherited `ActionController::Base` method minus the Object
+      #      baseline (Rails keeps adding/renaming framework methods)
+      #   3. A method ALREADY defined on the host class itself (`def index`
+      #      followed by `ruact_action :index`)
+      #   4. An INHERITED app helper (`current_user`, `authenticate_user!`)
+      #
+      # A method previously defined BY a ruact macro on this same class is
+      # NOT a clobber — re-registration is legitimate (dev-mode reload, test
+      # re-registration after registry reset). We track our own
+      # `define_method` calls in `@__ruact_defined_methods` (a Hash so we
+      # can recover the originating DSL name in the `method_added` hook's
+      # re-definition error) and skip the guard for those.
+      def __ruact_validate_no_clobber!(symbol, dsl_name:)
+        @__ruact_defined_methods ||= {}
+        __ruact_check_framework_clobber!(symbol, dsl_name: dsl_name)
+        __ruact_check_inherited_framework_clobber!(symbol, dsl_name: dsl_name)
+        __ruact_check_own_method_clobber!(symbol, dsl_name: dsl_name)
+        __ruact_check_inherited_helper_clobber!(symbol, dsl_name: dsl_name)
+      end
+
+      def __ruact_check_framework_clobber!(symbol, dsl_name:)
+        return unless FRAMEWORK_RESERVED_METHODS.include?(symbol)
+
+        suffix_word = (dsl_name == :ruact_query ? "query" : "action")
+        raise Ruact::ConfigurationError,
+              "#{dsl_name} :#{symbol} would clobber a framework method — " \
+              "#{symbol.inspect} is a reserved ActionController instance " \
+              "method. Pick a different symbol (e.g. :#{symbol}_#{suffix_word}) so " \
+              "the host's CSRF / params / render plumbing remains intact."
+      end
+
+      def __ruact_check_inherited_framework_clobber!(symbol, dsl_name:)
+        baseline = defined?(ActionController::Base) ? ActionController::Base : nil
+        return unless baseline
+
+        object_methods = Object.instance_methods + Object.private_instance_methods
+        framework_methods = baseline.instance_methods + baseline.private_instance_methods
+        return unless (framework_methods - object_methods).include?(symbol)
+
+        suffix_word = (dsl_name == :ruact_query ? "query" : "action")
+        raise Ruact::ConfigurationError,
+              "#{dsl_name} :#{symbol} would clobber an inherited " \
+              "ActionController::Base method. Overriding framework " \
+              "plumbing (`#{symbol.inspect}`) is unsafe — pick a " \
+              "different symbol (e.g. :#{symbol}_#{suffix_word})."
+      end
+
+      def __ruact_check_own_method_clobber!(symbol, dsl_name:)
+        own_methods = instance_methods(false) + private_instance_methods(false)
+        return unless own_methods.include?(symbol) && !@__ruact_defined_methods.key?(symbol)
+
+        kind_word = (dsl_name == :ruact_query ? "server query" : "server action")
+        raise Ruact::ConfigurationError,
+              "#{dsl_name} :#{symbol} would clobber an existing method " \
+              "on #{name || self}. If #{symbol.inspect} is meant to be " \
+              "a #{kind_word}, remove the existing definition first; " \
+              "if it's a regular controller action, pick a different " \
+              "#{dsl_name} symbol (e.g. :#{symbol}_remote)."
+      end
+
+      def __ruact_check_inherited_helper_clobber!(symbol, dsl_name:)
+        baseline = defined?(ActionController::Base) ? ActionController::Base : nil
+        return unless baseline &&
+                      (method_defined?(symbol) || private_method_defined?(symbol)) &&
+                      !(baseline.method_defined?(symbol) || baseline.private_method_defined?(symbol)) &&
+                      !@__ruact_defined_methods.key?(symbol)
+
+        raise Ruact::ConfigurationError,
+              "#{dsl_name} :#{symbol} would clobber an inherited helper " \
+              "on #{name || self} (likely defined on " \
+              "ApplicationController or a concern). Overriding " \
+              "#{symbol.inspect} would break callers that rely on it — " \
+              "pick a different #{dsl_name} symbol (e.g. :#{symbol}_remote)."
+      end
+
+      # Re-run-6/7 (2026-05-15) — install a `method_added` hook so a LATER
+      # `def #{symbol}; ...; end` in the same controller body (or a reopen)
+      # cannot silently override the macro-defined method. We `prepend` a
+      # Module into the host's singleton class (rather than
+      # `define_method`-ing `:method_added` directly on it) so the original
+      # `method_added` — installed by the host or a concern for
+      # instrumentation/bookkeeping — keeps firing via `super(meth)`.
+      def __ruact_install_method_added_hook!
+        @__ruact_defined_methods ||= {}
+        return if @__ruact_method_added_hook_installed
+
+        @__ruact_method_added_hook_installed = true
+        ruact_class = self
+        hook = Module.new do
+          define_method(:method_added) do |meth|
+            defined_set = ruact_class.instance_variable_get(:@__ruact_defined_methods)
+            being_defined = ruact_class.instance_variable_get(:@__ruact_being_defined_by_dsl)
+            if defined_set&.key?(meth) && !being_defined
+              dsl_name  = defined_set[meth]
+              kind_word = (dsl_name == :ruact_query ? "query" : "action")
+              defined_set.delete(meth)
+              raise Ruact::ConfigurationError,
+                    "method :#{meth} on #{ruact_class.name || ruact_class} was " \
+                    "registered by `#{dsl_name} :#{meth}` and then re-defined " \
+                    "in the same class body. The later definition would " \
+                    "silently shadow the macro-defined #{kind_word} and break " \
+                    "endpoint dispatch. Either remove the explicit `def " \
+                    "#{meth}` (the macro already defines it) or rename the " \
+                    "#{dsl_name}."
+            end
+            super(meth)
+          end
+        end
+        singleton_class.prepend(hook)
+      end
+
+      # Review-batch 1 (2026-05-14) — define `<symbol>` directly (no
+      # separate wrapper). This makes `before_action :foo, only: :create_post`
+      # match the actual action/query name. The method is public so
+      # `ActionController#process` dispatches it through the standard
+      # callback chain. Defense in depth: the body raises unless invoked
+      # under the gem's endpoint dispatch path (a thread-local sentinel set
+      # by `Ruact::ServerFunctions::EndpointController#dispatch_action`).
+      def __ruact_define_dispatch_method!(symbol, block, dsl_name:)
+        kind_phrase = (dsl_name == :ruact_query ? "ruact query" : "ruact action")
+        @__ruact_defined_methods[symbol] = dsl_name
+        @__ruact_being_defined_by_dsl = true
         define_method(symbol) do
           unless Thread.current[:__ruact_dispatching] == symbol
             raise Ruact::Error,
-                  "ruact action :#{symbol} can only be invoked through " \
+                  "#{kind_phrase} :#{symbol} can only be invoked through " \
                   "POST /__ruact/fn/:name. Direct method calls or wildcard " \
                   "routes are rejected for security reasons."
           end
@@ -300,13 +321,10 @@ module Ruact
             args = ruact_action_params
           rescue JSON::ParserError => e
             # Re-run-4 (2026-05-15) — return a structured 400 instead of
-            # surfacing the raw `JSON::ParserError`. The host's
-            # `rescue_from` chain may not have a handler for it (Rails'
-            # default is a 500), and even when it does the response
-            # shape is not the bad-request contract the JS runtime
-            # expects (`{error}` JSON body + 400 status).
+            # surfacing the raw `JSON::ParserError` to the host's `rescue_from`
+            # chain (whose default would be a 500 / non-`{error}` body).
             return render(
-              json: { error: "ruact action :#{symbol} received malformed JSON body: #{e.message}" },
+              json: { error: "#{kind_phrase} :#{symbol} received malformed JSON body: #{e.message}" },
               status: :bad_request
             )
           end
@@ -321,12 +339,12 @@ module Ruact
             render(json: result)
           end
         end
-        @__ruact_being_defined_by_ruact_action = false
+        @__ruact_being_defined_by_dsl = false
 
         # ActionController caches `action_methods` lazily; clear the cache so
-        # the newly-defined action is dispatchable in the same boot cycle
-        # (matters in tests and in dev where `ruact_action` declarations
-        # accumulate after the controller class first loads).
+        # the newly-defined method is dispatchable in the same boot cycle
+        # (matters in tests and in dev where DSL declarations accumulate
+        # after the controller class first loads).
         clear_action_methods! if respond_to?(:clear_action_methods!, true)
       end
     end

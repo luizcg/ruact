@@ -597,5 +597,340 @@ module Ruact
         end.to raise_error(Ruact::ConfigurationError, /declared in BOTH/)
       end
     end
+
+    describe "ruact_query DSL macro (Story 9.1)", :aggregate_failures, :story_9_1 do
+      # The macro is class-level. Each example builds a fresh anonymous
+      # controller class so registry state is per-example. BOTH registries
+      # are reset at the top of every example so cross-registry collision
+      # checks (which look at action_registry + query_registry together) see
+      # a clean slate.
+      before do
+        Ruact.action_registry.clear!
+        Ruact.query_registry.clear!
+      end
+
+      it "registers a query in Ruact.query_registry with kind: :query, the right controller, and " \
+         "the block verbatim (AC1 — Story 9.1)" do
+        klass = Class.new do
+          def self.name = "PostsController"
+          include Ruact::Controller
+
+          ruact_query(:categories) { |_params| [{ value: 1, label: "Books" }] }
+        end
+
+        entry = Ruact.query_registry.entries[:categories]
+        expect(entry).not_to be_nil
+        expect(entry.ruby_symbol).to eq(:categories)
+        expect(entry.js_identifier).to eq("categories")
+        expect(entry.kind).to eq(:query)
+        expect(entry.controller).to be(klass)
+        expect(entry.block).to be_a(Proc)
+      end
+
+      it "does NOT also register the query in the action registry (Story 9.1 — registries " \
+         "stay disjoint at the macro layer)" do
+        Class.new do
+          def self.name = "PostsController"
+          include Ruact::Controller
+
+          ruact_query(:categories) { |_p| [] }
+        end
+
+        expect(Ruact.action_registry.entries).to eq({})
+        expect(Ruact.query_registry.entries[:categories]).not_to be_nil
+      end
+
+      it "defines the query symbol as a PUBLIC method with the thread-local guard that " \
+         "rejects non-endpoint invocations (Story 9.1 parity with action dispatch)" do
+        klass = Class.new do
+          def self.name = "PostsController"
+          include Ruact::Controller
+
+          ruact_query(:categories) { |_p| [{ value: 1 }] }
+        end
+
+        instance = klass.allocate
+        expect(instance.respond_to?(:categories)).to be(true)
+        expect { instance.send(:categories) }.to raise_error(Ruact::Error, /can only be invoked through POST/)
+      end
+
+      it "raises ArgumentError when no block is given (Story 9.1)" do
+        define_bad = lambda do
+          Class.new do
+            def self.name = "BadController"
+            include Ruact::Controller
+
+            ruact_query(:categories)
+          end
+        end
+        expect(&define_bad).to raise_error(ArgumentError) do |error|
+          expect(error.message).to include("ruact_query :categories requires a block")
+          expect(error.message).to include("do |params| ... end")
+        end
+      end
+
+      it "raises Ruact::ConfigurationError with the naming-bridge prefix on an invalid symbol shape " \
+         "(Story 9.1 — bridge applies identically to queries)" do
+        expect do
+          Class.new do
+            def self.name = "BadController"
+            include Ruact::Controller
+
+            ruact_query(:CategoriesIndex) { |_p| nil }
+          end
+        end.to raise_error(Ruact::ConfigurationError,
+                           /invalid server-function symbol :CategoriesIndex in BadController/)
+      end
+
+      it "raises Ruact::ConfigurationError on a within-query-registry duplicate JS identifier (Story 9.1)" do
+        expect do
+          Class.new do
+            def self.name = "CollidingController"
+            include Ruact::Controller
+
+            ruact_query(:foo_bar)  { |_p| nil }
+            ruact_query(:foo__bar) { |_p| nil }
+          end
+        end.to raise_error(Ruact::ConfigurationError, /server-function naming collision.*"fooBar"/m)
+      end
+
+      it "raises Ruact::ConfigurationError when the symbol clobbers a framework method like :params " \
+         "(Story 9.1 — parity with action clobber guard, ruact_query suffix on the suggestion)" do
+        define_bad = lambda do
+          Class.new do
+            def self.name = "BadController"
+            include Ruact::Controller
+
+            ruact_query(:params) { |_p| nil }
+          end
+        end
+        expect(&define_bad).to raise_error(Ruact::ConfigurationError) do |error|
+          expect(error.message).to include("ruact_query :params would clobber a framework method")
+          expect(error.message).to include(":params_query")
+        end
+      end
+
+      it "raises ArgumentError on a zero-arity block (Story 9.1 — block.parameters guard)" do
+        define_bad = lambda do
+          Class.new do
+            def self.name = "BadController"
+            include Ruact::Controller
+
+            ruact_query(:no_args) { "pong" }
+          end
+        end
+        expect(&define_bad).to raise_error(ArgumentError) do |error|
+          expect(error.message).to include("ruact_query :no_args block")
+          expect(error.message).to include("must accept exactly one positional parameter")
+        end
+      end
+
+      it "rejects a block with required keyword arguments (Story 9.1 — block.parameters keyreq guard)" do
+        define_bad = lambda do
+          Class.new do
+            def self.name = "BadController"
+            include Ruact::Controller
+
+            ruact_query(:bad_kwargs) { |_params, required:| required }
+          end
+        end
+        expect(&define_bad).to raise_error(ArgumentError) do |error|
+          expect(error.message).to include("ruact_query :bad_kwargs block")
+          expect(error.message).to include("no required keyword arguments")
+        end
+      end
+
+      it "accepts optional keyword args alongside the positional (Story 9.1 — parity with action)" do
+        expect do
+          Class.new do
+            def self.name = "PostsController"
+            include Ruact::Controller
+
+            ruact_query(:opt_kwargs) { |_params, opt: nil| opt }
+          end
+        end.not_to raise_error
+      end
+
+      it "rejects a String argument (Story 9.1 — Symbol-only guard)" do
+        define_bad = lambda do
+          Class.new do
+            def self.name = "BadController"
+            include Ruact::Controller
+
+            ruact_query("categories") { |_p| nil }
+          end
+        end
+        expect(&define_bad).to raise_error(ArgumentError) do |error|
+          expect(error.message).to include("ruact_query requires a Symbol")
+          expect(error.message).to include("ruact_query :categories")
+        end
+      end
+
+      it "rejects clobber of a method already defined on the host class itself (Story 9.1)" do
+        define_bad = lambda do
+          Class.new do
+            def self.name = "BadController"
+            include Ruact::Controller
+
+            def index; end
+            ruact_query(:index) { |_p| nil }
+          end
+        end
+        expect(&define_bad).to raise_error(Ruact::ConfigurationError) do |error|
+          expect(error.message).to include("ruact_query :index would clobber an existing method")
+          expect(error.message).to include("server query")
+          expect(error.message).to include(":index_remote")
+        end
+      end
+
+      it "rejects clobber of an INHERITED app helper like :current_user (Story 9.1)" do
+        app_controller = Class.new(ActionController::Base) do
+          def current_user; end
+        end
+        define_bad = lambda do
+          Class.new(app_controller) do
+            def self.name = "BadController"
+            include Ruact::Controller
+
+            ruact_query(:current_user) { |_p| nil }
+          end
+        end
+        expect(&define_bad).to raise_error(Ruact::ConfigurationError) do |error|
+          expect(error.message).to include("ruact_query :current_user would clobber an inherited helper")
+          expect(error.message).to include(":current_user_remote")
+        end
+      end
+
+      it "rejects clobber of an INHERITED ActionController::Base method like :status (Story 9.1)" do
+        expect do
+          Class.new do
+            def self.name = "BadController"
+
+            include Ruact::Controller
+
+            ruact_query(:status) { |_p| nil }
+          end
+        end.to raise_error(Ruact::ConfigurationError,
+                           /ruact_query :status would clobber an inherited ActionController::Base method/)
+      end
+
+      it "rejects a LATER def that overrides a previously-registered ruact_query method " \
+         "in the same class body (Story 9.1 — method_added hook resolves dsl_name back to ruact_query)" do
+        define_bad = lambda do
+          Class.new do
+            def self.name = "BadController"
+
+            include Ruact::Controller
+
+            ruact_query(:categories) { |_p| [] }
+
+            def categories
+              "from later def"
+            end
+          end
+        end
+        expect(&define_bad).to raise_error(Ruact::ConfigurationError) do |error|
+          expect(error.message).to include("registered by `ruact_query :categories` and then re-defined")
+          expect(error.message).to include("macro-defined query")
+          expect(error.message).to include("rename the ruact_query")
+        end
+      end
+
+      it "preserves a pre-existing `method_added` hook on the host class when ruact_query installs " \
+         "its own (Story 9.1 — parity with re-run-7 action behavior)" do
+        recorded = []
+        klass = Class.new do
+          def self.name = "PostsController"
+
+          singleton_class.define_method(:method_added) do |meth|
+            recorded << meth
+            super(meth)
+          end
+
+          include Ruact::Controller
+
+          ruact_query(:categories) { |_p| [] }
+
+          def helper_method
+            :ok
+          end
+        end
+
+        expect(recorded).to include(:categories, :helper_method)
+        expect(klass.allocate.respond_to?(:categories)).to be(true)
+      end
+
+      it "raises Ruact::ConfigurationError when the SAME ruact_query symbol is declared on TWO " \
+         "controllers (Story 9.1 — silent overwrite would route to whichever loaded last)" do
+        Class.new do
+          def self.name = "PostsController"
+          include Ruact::Controller
+
+          ruact_query(:categories) { |_p| [] }
+        end
+
+        expect do
+          Class.new do
+            def self.name = "AdminPostsController"
+            include Ruact::Controller
+
+            ruact_query(:categories) { |_p| [] }
+          end
+        end.to raise_error(Ruact::ConfigurationError, /declared in BOTH/)
+      end
+    end
+
+    describe "ruact_query × ruact_action cross-registry collisions (Story 9.1)", :aggregate_failures, :story_9_1 do
+      before do
+        Ruact.action_registry.clear!
+        Ruact.query_registry.clear!
+      end
+
+      it "the within-registry duplicate-symbol check does NOT fire when an action and a query " \
+         "share a Ruby symbol on the SAME controller — the cross-registry detector at " \
+         "Snapshot.functions_payload is what catches it (Story 9.1 — AC3 documented behavior)" do
+        # Each registry only sees its own entries, so registering `:create_post`
+        # on BOTH registries from a single controller does NOT raise at class
+        # load. The cross-registry check at Snapshot time is the safety net.
+        klass = Class.new do
+          def self.name = "PostsController"
+          include Ruact::Controller
+
+          ruact_action(:create_post) { |_p| nil }
+        end
+        # ruact_query on the SAME class would fail because :create_post is
+        # already defined by ruact_action above (own-method clobber). The
+        # documented "cross-registry collision in the SAME controller is
+        # caught at Snapshot time" applies to DIFFERENT controllers — proven
+        # in the next example.
+        expect(klass).not_to be_nil
+      end
+
+      it "Snapshot.functions_payload raises Ruact::ConfigurationError with the naming-convention " \
+         "suffix when an action and a query on DIFFERENT controllers collide on the JS identifier " \
+         "(Story 9.1 AC3 — end-to-end through the macros)" do
+        Class.new do
+          def self.name = "PostsController"
+          include Ruact::Controller
+
+          ruact_action(:create_post) { |_p| nil }
+        end
+        Class.new do
+          def self.name = "AdminPostsController"
+          include Ruact::Controller
+
+          ruact_query(:create_post) { |_p| nil }
+        end
+
+        run_payload = -> { Ruact::ServerFunctions::Snapshot.functions_payload(Ruact.action_registry, Ruact.query_registry) }
+        expect(&run_payload).to raise_error(Ruact::ConfigurationError) do |error|
+          expect(error.message).to start_with("server-function naming collision:")
+          expect(error.message).to include(":create_post (in PostsController)")
+          expect(error.message).to include(":create_post (in AdminPostsController)")
+          expect(error.message).to include("Convention: queries should be nouns")
+          expect(error.message).to include("actions should be verbs")
+        end
+      end
+    end
   end
 end

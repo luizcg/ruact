@@ -223,15 +223,20 @@ module Ruact
       end
 
       def lookup_entry(name_sym)
-        # Story 8.1 only routes through the action registry. Story 9.1 will
-        # extend this lookup to also check the query registry; until then,
-        # query-only symbols return 404 here.
-        Ruact.action_registry.entries[name_sym]
+        # Story 9.1 — resolve actions first, queries second. Action-first
+        # because (a) actions outnumber queries in practice and (b) the
+        # cross-registry collision detector at
+        # {Ruact::ServerFunctions::Snapshot.functions_payload} guarantees no
+        # overlap at boot, so the order is observable ONLY for the
+        # not-yet-registered name (a 404 path). Returns the matching
+        # {Ruact::ServerFunctions::RegistryEntry} or nil when the name lives
+        # in neither registry.
+        Ruact.action_registry.entries[name_sym] || Ruact.query_registry.entries[name_sym]
       end
 
       def render_unknown(name_sym)
         render(
-          json: { error: "unknown ruact action: :#{name_sym}" },
+          json: { error: "unknown ruact action or query: :#{name_sym}" },
           status: :not_found
         )
       end

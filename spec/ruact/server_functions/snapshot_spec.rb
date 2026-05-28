@@ -186,6 +186,29 @@ module Ruact
           expect(JSON.parse(File.read(path))["version"]).to eq(1)
         end
       end
+
+      describe "cross-registry collision message — naming-convention suffix (Story 9.1)", :aggregate_failures,
+               :story_9_1 do
+        it "appends the queries-are-nouns / actions-are-verbs recommendation after the " \
+           "existing prefix so the 8.x prefix-grep specs stay green and devs get a " \
+           "directional fix hint" do
+          actions.register(:foo, kind: :action, controller: posts_controller)
+          queries.register(:foo, kind: :query, controller: cats_controller)
+
+          expect { described_class.functions_payload(actions, queries) }
+            .to raise_error(Ruact::ConfigurationError) do |error|
+              expect(error.message).to start_with("server-function naming collision:")
+              expect(error.message).to include(":foo (in PostsController)")
+              expect(error.message).to include(":foo (in CategoriesController)")
+              expect(error.message).to include('"foo"')
+              expect(error.message).to include("Convention: queries should be nouns or `_for_X` forms")
+              expect(error.message).to include("actions should be verbs")
+              expect(error.message).to include(":categories")
+              expect(error.message).to include(":create_post")
+              expect(error.message).to include("Rename one side so the JS identifiers no longer collide.")
+            end
+        end
+      end
     end
   end
 end

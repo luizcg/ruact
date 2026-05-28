@@ -120,10 +120,17 @@ module Ruact
           # The rake task wraps the bare message with "[ruact] error: " — keep
           # the prefix in sync with the within-registry message in
           # Registry#detect_collision! so the rake stdout reads identically
-          # for both kinds of collision.
+          # for both kinds of collision. Story 9.1 appends a naming-convention
+          # recommendation as a follow-up sentence — the existing prefix stays
+          # byte-identical so the 8.x snapshot specs that grep on it continue
+          # to pass.
           raise Ruact::ConfigurationError,
                 "server-function naming collision: " \
-                "#{parts.join(' and ')} both map to JS identifier \"#{js_id}\""
+                "#{parts.join(' and ')} both map to JS identifier \"#{js_id}\". " \
+                "Convention: queries should be nouns or `_for_X` forms " \
+                "(e.g., :categories, :options_for_form); actions should be " \
+                "verbs (e.g., :create_post, :delete_widget). Rename one " \
+                "side so the JS identifiers no longer collide."
         end
 
         def describe_controller(controller)

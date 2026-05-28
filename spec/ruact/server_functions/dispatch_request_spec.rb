@@ -281,7 +281,7 @@ RSpec.describe "Story 8.1: POST /__ruact/fn/:name dispatch", :story_8_1 do
     it "returns 404 with a structured error for an unknown action name" do
       post "/__ruact/fn/no_such_thing", "{}", { "CONTENT_TYPE" => "application/json" }
       expect(last_response.status).to eq(404)
-      expect(JSON.parse(last_response.body)).to eq("error" => "unknown ruact action: :no_such_thing")
+      expect(JSON.parse(last_response.body)).to eq("error" => "unknown ruact action or query: :no_such_thing")
     end
 
     it "accepts form-encoded request bodies (FormData / urlencoded)" do
@@ -474,7 +474,7 @@ RSpec.describe "Story 8.1: POST /__ruact/fn/:name dispatch", :story_8_1 do
       # Pre-Re-run-2 this raised ParseError on body parse before the lookup.
       post "/__ruact/fn/no_such_thing", "{ not json", { "CONTENT_TYPE" => "application/json" }
       expect(last_response.status).to eq(404)
-      expect(JSON.parse(last_response.body)).to eq("error" => "unknown ruact action: :no_such_thing")
+      expect(JSON.parse(last_response.body)).to eq("error" => "unknown ruact action or query: :no_such_thing")
     end
   end
 
@@ -756,6 +756,52 @@ RSpec.describe "Story 8.1: POST /__ruact/fn/:name dispatch", :story_8_1 do
         expect(body.fetch("action_name")).to eq("standalone_boom")
         expect(body.fetch("error_class")).to eq("RuntimeError")
         expect(body.fetch("message")).to eq("standalone explosion")
+      end
+    end
+
+    describe "Story 9.1 — POST /__ruact/fn/:name dispatches ruact_query entries", :aggregate_failures, :story_9_1 do
+      # The query is declared via `class_eval` so it re-registers on every
+      # example (spec_helper wipes the registries between examples, but the
+      # macro tracks @__ruact_defined_methods at the class level so the
+      # own-method clobber guard correctly identifies this as a re-register
+      # rather than a fresh definition).
+      before do
+        DispatchRequestSpecSupport::TestController.class_eval do
+          ruact_query(:list_categories) do |params|
+            { "categories" => [{ "value" => 1, "label" => params[:label] || "Default" }] }
+          end
+        end
+      end
+
+      it "dispatches a registered ruact_query by name, returns JSON 200, and runs the block " \
+         "with the request body shadowed into the `params` block-arg (AC4 — Story 9.1)" do
+        post "/__ruact/fn/list_categories",
+             { "label" => "Books" }.to_json,
+             { "CONTENT_TYPE" => "application/json" }
+        expect(last_response.status).to eq(200)
+        expect(last_response.headers["Content-Type"]).to include("application/json")
+        body = JSON.parse(last_response.body)
+        expect(body.fetch("categories")).to eq([{ "value" => 1, "label" => "Books" }])
+      end
+
+      it "returns 404 with the action-or-query error message when the URL :name " \
+         "lives in neither registry (Story 9.1 — render_unknown wording)" do
+        post "/__ruact/fn/no_such_thing", "{}", { "CONTENT_TYPE" => "application/json" }
+        expect(last_response.status).to eq(404)
+        body = JSON.parse(last_response.body)
+        expect(body.fetch("error")).to eq("unknown ruact action or query: :no_such_thing")
+      end
+
+      it "actions still resolve when a same-named symbol exists in NEITHER registry " \
+         "(Story 9.1 — proves the action-first / query-fallback order is observable only for 404s)" do
+        # `:echo` is registered as an action via the global before; the query
+        # `:list_categories` is also registered. Hitting :echo MUST still
+        # work — the action-first lookup wins.
+        post "/__ruact/fn/echo",
+             { "title" => "still-an-action" }.to_json,
+             { "CONTENT_TYPE" => "application/json" }
+        expect(last_response.status).to eq(200)
+        expect(JSON.parse(last_response.body)).to eq("echoed" => { "title" => "still-an-action" })
       end
     end
 
