@@ -130,8 +130,10 @@ module Ruact
         __ruact_define_dispatch_method!(symbol, block, dsl_name: :ruact_query)
       end
 
-      # @!visibility private
+      private
 
+      # @!visibility private
+      #
       # Story 9.1 — shared validators. Each helper takes `dsl_name:` so the
       # raised error messages stay byte-identical to the Story 8.1 spec
       # assertions (`"ruact_action :foo ..."`) while still producing a
@@ -202,10 +204,37 @@ module Ruact
       # re-definition error) and skip the guard for those.
       def __ruact_validate_no_clobber!(symbol, dsl_name:)
         @__ruact_defined_methods ||= {}
+        __ruact_check_cross_dsl_clobber!(symbol, dsl_name: dsl_name)
         __ruact_check_framework_clobber!(symbol, dsl_name: dsl_name)
         __ruact_check_inherited_framework_clobber!(symbol, dsl_name: dsl_name)
         __ruact_check_own_method_clobber!(symbol, dsl_name: dsl_name)
         __ruact_check_inherited_helper_clobber!(symbol, dsl_name: dsl_name)
+      end
+
+      # F2 (Story 9.1 review) — when a controller declares BOTH
+      # `ruact_action :foo` and `ruact_query :foo` (in either order), the
+      # second declaration would, without this guard, pass the own-method
+      # clobber check (because `@__ruact_defined_methods[:foo]` is already
+      # set by the first DSL) and then silently overwrite the dispatch
+      # method via `define_method(:foo)`. The cross-registry collision
+      # detector at {Ruact::ServerFunctions::Snapshot.functions_payload}
+      # would still catch it at snapshot time, but the controller class is
+      # left in a transiently-broken state until then (the action-registry
+      # entry's intended dispatch is overwritten by the query body). Raise
+      # loudly at class-load time instead.
+      def __ruact_check_cross_dsl_clobber!(symbol, dsl_name:)
+        existing_dsl = @__ruact_defined_methods[symbol]
+        return if existing_dsl.nil? || existing_dsl == dsl_name
+
+        raise Ruact::ConfigurationError,
+              "#{dsl_name} :#{symbol} would clobber the dispatch method " \
+              "already defined on #{name || self} by `#{existing_dsl} :#{symbol}`. " \
+              "Declare the symbol with only one of `ruact_action` or " \
+              "`ruact_query` — the cross-registry collision detector at " \
+              "Snapshot time would otherwise catch this LATER, but the " \
+              "controller method gets transiently overwritten in between. " \
+              "Convention: queries are nouns or `_for_X` forms; actions " \
+              "are verbs — rename one side."
       end
 
       def __ruact_check_framework_clobber!(symbol, dsl_name:)
@@ -310,36 +339,46 @@ module Ruact
         kind_phrase = (dsl_name == :ruact_query ? "ruact query" : "ruact action")
         @__ruact_defined_methods[symbol] = dsl_name
         @__ruact_being_defined_by_dsl = true
-        define_method(symbol) do
-          unless Thread.current[:__ruact_dispatching] == symbol
-            raise Ruact::Error,
-                  "#{kind_phrase} :#{symbol} can only be invoked through " \
-                  "POST /__ruact/fn/:name. Direct method calls or wildcard " \
-                  "routes are rejected for security reasons."
-          end
-          begin
-            args = ruact_action_params
-          rescue JSON::ParserError => e
-            # Re-run-4 (2026-05-15) — return a structured 400 instead of
-            # surfacing the raw `JSON::ParserError` to the host's `rescue_from`
-            # chain (whose default would be a 500 / non-`{error}` body).
-            return render(
-              json: { error: "#{kind_phrase} :#{symbol} received malformed JSON body: #{e.message}" },
-              status: :bad_request
-            )
-          end
-          result = instance_exec(args, &block)
-          return if performed?
+        begin
+          # F5 (Story 9.1 review) — `define_method` itself raises if the
+          # `method_added` hook decides to (e.g., a host concern installed
+          # its own `method_added` that vetoes the symbol). Wrap in
+          # begin/ensure so the `@__ruact_being_defined_by_dsl` sentinel
+          # cannot leak `true` into the next macro call on the same class
+          # (which would silently disarm the re-definition guard for ANY
+          # subsequent `def #{symbol}` in the host body).
+          define_method(symbol) do
+            unless Thread.current[:__ruact_dispatching] == symbol
+              raise Ruact::Error,
+                    "#{kind_phrase} :#{symbol} can only be invoked through " \
+                    "POST /__ruact/fn/:name. Direct method calls or wildcard " \
+                    "routes are rejected for security reasons."
+            end
+            begin
+              args = ruact_action_params
+            rescue JSON::ParserError => e
+              # Re-run-4 (2026-05-15) — return a structured 400 instead of
+              # surfacing the raw `JSON::ParserError` to the host's `rescue_from`
+              # chain (whose default would be a 500 / non-`{error}` body).
+              return render(
+                json: { error: "#{kind_phrase} :#{symbol} received malformed JSON body: #{e.message}" },
+                status: :bad_request
+              )
+            end
+            result = instance_exec(args, &block)
+            return if performed?
 
-          # AC2: a nil block return renders 204 No Content (no body). A non-nil
-          # return renders 200 + JSON.
-          if result.nil?
-            head(:no_content)
-          else
-            render(json: result)
+            # AC2: a nil block return renders 204 No Content (no body). A non-nil
+            # return renders 200 + JSON.
+            if result.nil?
+              head(:no_content)
+            else
+              render(json: result)
+            end
           end
+        ensure
+          @__ruact_being_defined_by_dsl = false
         end
-        @__ruact_being_defined_by_dsl = false
 
         # ActionController caches `action_methods` lazily; clear the cache so
         # the newly-defined method is dispatchable in the same boot cycle

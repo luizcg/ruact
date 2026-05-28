@@ -860,6 +860,42 @@ module Ruact
         expect(klass.allocate.respond_to?(:categories)).to be(true)
       end
 
+      it "resets `@__ruact_being_defined_by_dsl` even when `define_method` raises " \
+         "(Story 9.1 F5 — ensure-block prevents the sentinel from leaking `true` into the next " \
+         "macro call and silently disarming the re-definition guard)" do
+        # Simulate `define_method` raising mid-flight by giving the host a
+        # `method_added` hook that vetoes a specific symbol. Without the
+        # ensure, the gem's @__ruact_being_defined_by_dsl would stay `true`
+        # and the very next `def #{symbol}` in the class body would no
+        # longer trip the gem's re-definition raise.
+        klass = Class.new do
+          def self.name = "PostsController"
+
+          singleton_class.define_method(:method_added) do |meth|
+            raise "host veto" if meth == :poisoned
+
+            super(meth)
+          end
+
+          include Ruact::Controller
+        end
+
+        expect do
+          klass.ruact_query(:poisoned) { |_p| [] }
+        end.to raise_error(RuntimeError, /host veto/)
+
+        # Sentinel must be `false` so a SUBSEQUENT macro call observes the
+        # correct state for its own re-definition guard.
+        expect(klass.instance_variable_get(:@__ruact_being_defined_by_dsl)).to be(false)
+
+        # Independent registration of a different symbol must continue to
+        # work normally — proves the host class is not corrupted.
+        expect do
+          klass.ruact_query(:tags) { |_p| [] }
+        end.not_to raise_error
+        expect(Ruact.query_registry.entries[:tags]).not_to be_nil
+      end
+
       it "raises Ruact::ConfigurationError when the SAME ruact_query symbol is declared on TWO " \
          "controllers (Story 9.1 — silent overwrite would route to whichever loaded last)" do
         Class.new do
@@ -886,24 +922,60 @@ module Ruact
         Ruact.query_registry.clear!
       end
 
-      it "the within-registry duplicate-symbol check does NOT fire when an action and a query " \
-         "share a Ruby symbol on the SAME controller — the cross-registry detector at " \
-         "Snapshot.functions_payload is what catches it (Story 9.1 — AC3 documented behavior)" do
-        # Each registry only sees its own entries, so registering `:create_post`
-        # on BOTH registries from a single controller does NOT raise at class
-        # load. The cross-registry check at Snapshot time is the safety net.
+      it "raises Ruact::ConfigurationError at class load when the SAME controller declares " \
+         "both `ruact_action :foo` and `ruact_query :foo` (Story 9.1 F2 — without this guard the " \
+         "second declaration silently overwrote the dispatch method; the Snapshot collision " \
+         "detector would catch it LATER but the class is transiently broken in between)" do
+        define_both = lambda do
+          Class.new do
+            def self.name = "PostsController"
+            include Ruact::Controller
+
+            ruact_action(:create_post) { |_p| { ok: "from action" } }
+            ruact_query(:create_post)  { |_p| { ok: "from query"  } }
+          end
+        end
+
+        expect(&define_both).to raise_error(Ruact::ConfigurationError) do |error|
+          expect(error.message).to include("ruact_query :create_post")
+          expect(error.message).to include("`ruact_action :create_post`")
+          expect(error.message).to include("PostsController")
+          expect(error.message).to include("queries are nouns")
+          expect(error.message).to include("actions are verbs")
+        end
+      end
+
+      it "the cross-DSL guard also catches the opposite order — `ruact_query` first, then " \
+         "`ruact_action` (Story 9.1 F2 — order-independent)" do
+        define_both = lambda do
+          Class.new do
+            def self.name = "PostsController"
+            include Ruact::Controller
+
+            ruact_query(:create_post)  { |_p| nil }
+            ruact_action(:create_post) { |_p| nil }
+          end
+        end
+
+        expect(&define_both).to raise_error(Ruact::ConfigurationError) do |error|
+          expect(error.message).to include("ruact_action :create_post")
+          expect(error.message).to include("`ruact_query :create_post`")
+        end
+      end
+
+      it "re-registering the SAME DSL with the SAME symbol on the SAME controller is NOT a " \
+         "clobber (legitimate dev-mode reload after registry clear; Story 9.1 F2 — guard only " \
+         "fires when DSL kind differs)" do
         klass = Class.new do
           def self.name = "PostsController"
           include Ruact::Controller
 
           ruact_action(:create_post) { |_p| nil }
         end
-        # ruact_query on the SAME class would fail because :create_post is
-        # already defined by ruact_action above (own-method clobber). The
-        # documented "cross-registry collision in the SAME controller is
-        # caught at Snapshot time" applies to DIFFERENT controllers — proven
-        # in the next example.
-        expect(klass).not_to be_nil
+
+        expect do
+          klass.class_eval { ruact_action(:create_post) { |_p| nil } }
+        end.not_to raise_error
       end
 
       it "Snapshot.functions_payload raises Ruact::ConfigurationError with the naming-convention " \

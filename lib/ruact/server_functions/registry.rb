@@ -43,7 +43,7 @@ module Ruact
       def register(symbol, kind:, controller: nil, &block)
         validate_kind!(symbol, kind, controller)
         js_identifier = translate_symbol(symbol, controller)
-        detect_collision!(symbol, js_identifier, controller)
+        detect_collision!(symbol, js_identifier, controller, kind)
 
         entry = RegistryEntry.new(
           ruby_symbol: symbol,
@@ -102,7 +102,7 @@ module Ruact
               "invalid server-function symbol :#{symbol} in #{describe_controller(controller)} — #{e.message}"
       end
 
-      def detect_collision!(symbol, js_identifier, controller)
+      def detect_collision!(symbol, js_identifier, controller, kind)
         # Re-run-3 (2026-05-15) — TWO failure shapes:
         #
         # (a) Different Ruby symbols, same JS identifier (`:foo_bar` and
@@ -117,11 +117,19 @@ module Ruact
         #     `controller` against the one trying to register.
         existing = @entries[symbol]
         if existing && existing.controller != controller
+          # F4 (Story 9.1 review) — the Registry is generic and backs BOTH
+          # `ruact_action` (Story 8.1) and `ruact_query` (Story 9.1), so the
+          # message must not hard-code "ruact_action". Use the entry's kind
+          # to derive the DSL name on each side; when both kinds match, name
+          # the single DSL; otherwise refer to "server-function" generically.
+          existing_dsl = (existing.kind == :query ? "ruact_query" : "ruact_action")
+          new_dsl      = (kind == :query ? "ruact_query" : "ruact_action")
+          dsl_label    = (existing_dsl == new_dsl ? "Each `#{existing_dsl}`" : "Each server-function")
           raise Ruact::ConfigurationError,
                 "server-function naming collision: " \
                 ":#{symbol} is declared in BOTH " \
                 "#{describe_controller(existing.controller)} and " \
-                "#{describe_controller(controller)}. Each `ruact_action` " \
+                "#{describe_controller(controller)}. #{dsl_label} " \
                 "symbol must be unique across the whole registry — pick a " \
                 "more specific name (e.g. :admin_create_post) on one side."
         end
