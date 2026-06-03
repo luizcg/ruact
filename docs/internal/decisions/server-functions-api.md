@@ -854,3 +854,203 @@ The endpoint's `rescue_from StandardError` is the OUTERMOST catch — it only fi
 
 **Playground demo carve-out.** The playground demo + Active Storage end-to-end exercise (epic AC2/AC6) are deferred to Story 8.5a — a dedicated `rails new`-generated playground at `playgrounds/epic-8-server-actions/`. The existing `playgrounds/demo/` has no ActiveRecord / SQLite / `config/database.yml`, and retrofitting the DB layer would obscure this story's actual delta. The gem-side request-cycle specs in `endpoint_controller_upload_spec.rb` (controller-hosted + standalone branches, AC1/AC3/AC4 + Pitfalls #1/#4/#12) provide the empirical proof for the gem boundary; the Active Storage attach round-trip lives in 8.5a.
 
+### 2026-06-02 — Story 9-0 — Server Functions API redesign (route-driven) — supersedes the authoring + dispatch layers
+
+**Trigger.** Correct Course run, 2026-06-02 (workspace artifact:
+`_bmad-output/planning-artifacts/sprint-change-proposal-2026-06-02.md`). Story 9.1's
+seven re-run review rounds — nearly all spent on cross-registry collision /
+rollback / atomicity machinery — exposed that the block-DSL + synthetic-endpoint
+substrate fights itself, and that `POST /__ruact/fn/:name` is a parallel routing
+mechanism that contradicts the project thesis ("Rails routes are the single
+source of truth"). Approved scope: **Major**. Epic 9 was repurposed as "Server
+Functions (route-driven redesign)" (Scheme A — Epic 8 stays `done` as the
+historical record of the v1 design; no downstream epic renumber). This addendum
+is the Story 9-0 re-spike deliverable: it locks the v2 contract the redesigned
+Epic 9 stories implement. Per the append-only rule, the superseded sections
+below remain in the body for history.
+
+**What survives (reaffirmed).**
+
+- **Option C accessor — UNCHANGED.** Named imports from the generated module:
+  `import { createPost, categories } from "@/.ruact/server-functions"`. The
+  entire React-side import surface is untouched; everything in this addendum is
+  about the Ruby authoring layer and the wire dispatch layer.
+- **NameBridge** snake_case → camelCase rule + reserved-word guards — now applied
+  to route-derived action names and query-method names instead of DSL symbols.
+- **`useQuery(reference, params?) → { data, loading, error }`** (the Story 9.2
+  shape from clarification #4) — consumes query-class references unchanged.
+- **Salvaged subsystems** (migrate, do not rewrite): structured error payload +
+  `ErrorSuggestion` table + `BacktraceCleaner` (Story 8.4); `max_upload_bytes`
+  guard + `UploadTooLargeError` + 413 mapping (Story 8.5); the runtime fetch
+  core (`_makeRef`'s FormData branching, CSRF meta-tag injection, text-first
+  parsing, `RuactActionError`, `redirect: "error"` handling); `revalidate()`;
+  serialization via `ruact_props` / `Ruact::Serializable`.
+
+**What is superseded.**
+
+- The `ruact_action` / `ruact_query` controller block-DSL macros (Stories 8.1 /
+  9.1). Implementation Surface row #2 is void.
+- The gem-mounted synthetic endpoint `POST /__ruact/fn/:name` (Implementation
+  Surface row #3) AND the 2026-05-13 clarification #3 ("POST for everything").
+  Mutations ride real REST routes; queries ride explicitly mounted GET routes
+  (Decision 2). Queries regain HTTP GET semantics; reads no longer carry CSRF.
+- The dual `Ruact.action_registry` / `Ruact.query_registry` and the
+  cross-registry collision detector (`Snapshot.functions_payload`'s
+  cross-registry branch, `__ruact_check_cross_dsl_clobber!`). Single-namespace
+  validation moves into codegen, over the route table + query classes.
+- **Standalone actions (Story 8.3, PRD FR63) — DROPPED from the v0.1.0 MVP.**
+  Mutations belong to controllers; the standalone module host loses its
+  rationale (its `current_user_resolver` pattern is also superseded by
+  Decision 2's host-controller dispatch). Revisit post-signal (≥ 1 external
+  issue requesting it). `Ruact::ServerAction`, `StandaloneDispatcher`,
+  `StandaloneContext`, `current_user_resolver` are removed with it.
+
+**Decision 1 — Mutations are normal controller actions.**
+
+```ruby
+class PostsController < ApplicationController
+  include Ruact::Server          # the ONLY marker — no per-action declaration
+
+  def new;  end                  # GET → page (implicit render via default_render)
+  def show; @post = Post.find(params[:id]); end   # GET → page
+
+  def create                     # non-GET routed action → callable server function
+    @post = Post.create!(title: params[:title])
+    @post.cover.attach(params[:cover]) if params[:cover].present?
+    redirect_to @post
+  end
+end
+```
+
+- **Verb rule, no per-action marker:** on a controller that includes
+  `Ruact::Server`, every **non-GET routed** action (POST/PATCH/PUT/DELETE,
+  RESTful or custom member/collection routes) is exposed as a callable server
+  function in codegen. GET routes are pages, reached by navigation — never
+  emitted as callables.
+- **`routes.rb` carries nothing ruact-specific for mutations.** Standard
+  `resources :posts`. The Rails route table is the single source of truth.
+- **Data flows via instance variables** — standard Rails. No `render json:`
+  required, no `respond_to`, no block params.
+- **The full host controller chain runs natively** (`before_action`,
+  `rescue_from`, Pundit, `protect_from_forgery`) because these ARE controller
+  actions. The Story 8.4 structured-error rendering and the Story 8.5 upload
+  guard migrate from `EndpointController` into the `Ruact::Server` concern
+  (`rescue_from` + `prepend_before_action`), preserving the wire contract
+  (discriminator, status table, dev/prod payload split) byte-for-byte where
+  possible.
+
+**Decision 2 — Queries are classes under `app/queries/`, mounted explicitly, dispatched through a host controller.**
+
+```ruby
+# app/queries/catalog_query.rb
+class CatalogQuery < ApplicationQuery        # ApplicationQuery < Ruact::Query
+  def categories
+    Category.active.pluck(:id, :name).map { |id, name| { value: id, label: name } }
+  end
+
+  def my_categories
+    current_user.categories.pluck(:id, :name)
+  end
+
+  def search_users(q:, limit: 10)
+    User.search(q).limit(limit)
+  end
+end
+```
+
+```ruby
+# config/routes.rb — explicit mount (decision A = option b)
+Rails.application.routes.draw do
+  ruact_queries CatalogQuery                 # draws named GET routes, visible in `rails routes`
+  resources :posts
+end
+```
+
+- **Authoring:** plain public `def` methods on a `Ruact::Query` subclass — each
+  method is one query. No block DSL, no mandatory unused params. Method keyword
+  args are the query's parameters (consumed by the Story 9.3 sanitization
+  contract).
+- **Transport (A = b):** the `ruact_queries` router macro draws one **named GET
+  route per public method** (default path scheme `GET /q/<jsIdentifier>`,
+  prefix configurable) pointing at the gem's internal dispatch controller. The
+  route table knows every query — thesis-aligned, no hidden endpoint.
+- **Security context (B = ii):** the internal dispatch controller **inherits
+  from the host's parent controller** (`Ruact.config.query_parent_controller`,
+  default `"ApplicationController"` — the Devise `parent_controller` pattern).
+  The request therefore runs the host's REAL callback chain
+  (`authenticate_user!`, tenant scoping, Pundit) **before** the gem
+  instantiates the query class and injects the context. The dev never sees this
+  controller. This replaces old Story 9.4's controller-hosted-block contract
+  AND Story 8.3's resolver-lambda pattern.
+- **Context injection:** `Ruact::Query#initialize(context)` receives a context
+  object exposing `current_user`, `params`, `request`, `session` — delegating
+  to the dispatching controller instance. Queries are unit-testable as
+  `CatalogQuery.new(fake_context).categories` with no Rails boot.
+- **Per-request instance** (like controllers) → thread-safe (NFR8).
+
+**Decision 3 — Dual-bucket response negotiation on the same action.**
+
+One mutation action serves both interaction models, discriminated by how it was
+called, reading the same instance variables:
+
+| Bucket | Caller | `Accept` | Response |
+| --- | --- | --- | --- |
+| 1 — form / navigation | `<form>` submit, link navigation | `text/x-component` | Flight re-render or Flight redirect — **the existing Story 3.3 / 3.4 mechanism, unchanged** |
+| 2 — imperative | `await createPost(formData)` via the generated ref | `application/json` | Exposed ivars serialized (Decision 5); `redirect_to` surfaces as `{ "$redirect": "<path>" }` for the caller to follow (precedent: Story 8.1's `redirect: "error"` runtime handling) |
+
+Bucket 1 requires no new code — it is Phase 1 behavior. Bucket 2 is the genuine
+Epic-8 delta and is what the generated refs target (real route + verb instead of
+`/__ruact/fn/:name`).
+
+**Decision 4 — Codegen reads the route table + query classes.**
+
+- **Sources:** (a) `Rails.application.routes` filtered to non-GET routes whose
+  controller includes `Ruact::Server`; (b) `Ruact::Query` subclasses under
+  `app/queries/` (their public instance methods). The JSON bridge →
+  `server-functions.ts` pipeline (Story 8.0a) survives with its sources swapped;
+  write-if-changed and `config.to_prepare` regeneration are retained.
+- **Naming (decision D):** action names derive from the route —
+  `posts#create` → `createPost` (action verb + singularized resource;
+  collection routes keep the resource plural where natural, e.g.
+  `posts#publish_all` → `publishAllPosts`). Query names derive from the method
+  name via NameBridge (`search_users` → `searchUsers`). Any collision in the
+  merged JS namespace fails codegen loudly at boot (same failure mode as
+  today's collision detector) and requires an explicit per-action/per-method
+  rename via an override macro (exact macro name owned by the implementing
+  story; the override is the escape hatch, not the default).
+- **Signatures:** actions keep the Story 8.2 intersection type (FormData +
+  args-object callable); queries keep `() => Promise<unknown>` /
+  `(params) => Promise<unknown>`. Per-function return-type precision remains a
+  Phase 3 candidate (unchanged from clarification #1).
+
+**Decision 5 — Bucket-2 return payload (decision C).**
+
+The imperative response body serializes **all exposed instance variables**
+(everything not `@_`-prefixed, the same filter Rails uses for view assigns) as
+a JSON object keyed by ivar name without the `@` (`{ "post": {...} }`),
+each value serialized through the existing `ruact_props` /
+`Ruact::Serializable` / `strict_serialization` rules. No single-ivar magic
+unwrap — predictable over clever. An action that sets no ivars and does not
+redirect returns `204 No Content` → the ref resolves `null` (matching the
+runtime's existing empty-body contract from Story 8.1).
+
+**Open items the implementing stories must resolve (not contract-level).**
+
+1. Per-query callback opt-out (e.g. a public query on an app whose
+   `ApplicationController` forces `authenticate_user!`) — sketch: class-level
+   macro on `Ruact::Query` forwarded to the internal controller's
+   `skip_before_action`. Owned by the query-dispatch story.
+2. Query route path scheme + prefix configuration default (`/q/...` proposed).
+3. The exact rename-override macro name for JS-identifier collisions
+   (Decision 4).
+4. Whether `include Ruact::Server` is implied by `ruact_render` usage or always
+   explicit (explicit proposed — one line, no magic).
+
+**Append-only invariant preserved.** The Option C accessor lock (named imports
+from `app/javascript/.ruact/server-functions.ts`) is untouched — React code
+written against Epics 8/9 imports does not change its import statements. The
+superseded body sections and prior decision-log entries remain verbatim above;
+where they conflict with this addendum, this addendum governs. Deviations
+during the redesigned Epic 9 implementation require a further dated addendum
+here before merge.
+
