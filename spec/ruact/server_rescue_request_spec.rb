@@ -172,7 +172,8 @@ RSpec.describe "Story 9.1: Ruact::Server concern — salvaged rescue_from chain"
   end
 
   describe "AC3 — function-call request: structured payload, wire contract preserved" do
-    it "RecordInvalid on a bare host renders 422 + the full dev-mode payload (A1/A2/A5/A6/A9)" do
+    it "RecordInvalid on a bare host renders 422 + the full dev-mode payload (A1/A2/A5/A6/A9)",
+       :aggregate_failures do
       post "/server_rescue/record_invalid", "{}", function_call_headers
       expect(last_response.status).to eq(422)
       body = JSON.parse(last_response.body)
@@ -188,7 +189,7 @@ RSpec.describe "Story 9.1: Ruact::Server concern — salvaged rescue_from chain"
       expect(body).to have_key("gem_frames")
     end
 
-    it "ArgumentError renders 500 + structured payload with null suggestion (A9)" do
+    it "ArgumentError renders 500 + structured payload with null suggestion (A9)", :aggregate_failures do
       post "/server_rescue/argument_error", "{}", function_call_headers
       expect(last_response.status).to eq(500)
       body = JSON.parse(last_response.body)
@@ -286,7 +287,8 @@ RSpec.describe "Story 9.1: Ruact::Server concern — salvaged rescue_from chain"
       expect(body.fetch("_ruact_server_action_error")).to be(true)
       expect(body.fetch("error_class")).to eq("ActionController::InvalidAuthenticityToken")
       expect(body.fetch("suggestion")).to eq(
-        "CSRF token mismatch — ensure the page was rendered after the most recent server restart and the session cookie is intact"
+        "CSRF token mismatch — ensure the page was rendered after the most recent server restart " \
+        "and the session cookie is intact"
       )
     end
   end
