@@ -1,5 +1,13 @@
 inherit_from: .rubocop_todo.yml
 
+# Merge (union) Exclude arrays across .rubocop_todo.yml and this file —
+# without this, a cop that declares its own Exclude below (e.g.
+# Metrics/ModuleLength) would silently DISCARD the todo file's frozen
+# exclusions for that cop (RuboCop's per-parameter override semantics).
+inherit_mode:
+  merge:
+    - Exclude
+
 require:
   - rubocop/cop/ruact
 
