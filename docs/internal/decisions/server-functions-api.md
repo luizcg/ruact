@@ -1054,3 +1054,64 @@ where they conflict with this addendum, this addendum governs. Deviations
 during the redesigned Epic 9 implementation require a further dated addendum
 here before merge.
 
+
+### 2026-06-05 — Story 9.1 — `Ruact::Server` concern lands (Phase A salvage transplant) — in-story decisions
+
+**Scope.** Implements the Phase A salvage transplant from the 2026-06-02
+addendum: the `Ruact::Server` concern (`gem/lib/ruact/server.rb`, loaded by
+the Railtie's `ruact.load_controller` initializer alongside
+`Ruact::Controller`) becomes the v2 home of the Story 8.4 structured-error
+chain and the Story 8.5 upload guard, installed on the host controller's own
+callback chain. The v1 `EndpointController` stays alive untouched as the
+strangler-fig safety net (removed in Story 9.9). At this story the concern is
+a pure marker + salvage host: it registers nothing, emits nothing to codegen
+(Story 9.3), and performs no dual-bucket response negotiation (Story 9.2).
+
+**Shared core.** Both homes include
+`Ruact::ServerFunctions::ErrorRendering` — the extracted 8.4/8.5 bodies
+(structured renderer, status mapping, payload-mode resolution, logging,
+upload guard). Behavioral differences are expressed ONLY through three
+private hooks (`__ruact_error_action_name`,
+`__ruact_render_structured_error?`, `__ruact_upload_guard_applicable?`),
+whose defaults preserve v1 endpoint semantics. The wire contract is therefore
+byte-for-byte identical across both homes by construction. Story 9.9 deletes
+the endpoint home; the module survives as the concern's implementation.
+
+**Decisions taken in this story (delegated by the epic / 2026-06-02 addendum):**
+
+1. **Predicate name + semantics (AC2).** The function-call discrimination
+   point is the private helper **`Ruact::Server#__ruact_function_call?`**:
+   true iff the raw `Accept` request header contains `application/json`
+   (the exact shape the 8.1 runtime sends on every `_makeRef` fetch).
+   Deliberately NOT `request.format` — Rails' format negotiation is
+   influenced by path extensions (`/posts.json`) and `params[:format]`,
+   neither of which may flip the bucket. Story 9.2 MUST reuse this helper
+   verbatim as the dual-bucket discriminator; it lives in one place only.
+2. **D1 — structured-render gating.** The concern's rescue handler renders
+   the structured payload only when `__ruact_function_call?` is true;
+   otherwise it re-raises, so non-function-call requests keep stock Rails
+   error behavior (AC1 byte-for-byte). ONE documented exception:
+   `Ruact::UploadTooLargeError` renders the structured 413 for EVERY request
+   shape — the guard only exists on requests that opted into the concern,
+   and a meaningful 413 beats a re-raised 500 for native multipart form
+   submits. Pinned by `server_upload_request_spec.rb` ("D1 — a native form
+   submit…").
+3. **D2 — upload-guard verb gate.** On host controllers the guard skips
+   GET/HEAD requests (`__ruact_upload_guard_applicable?`); the v1 endpoint
+   was POST-only so this carve-out is new surface, required by the AC1
+   byte-for-byte rule for page actions. All non-GET actions are guarded
+   regardless of bucket (AC4 says "non-GET action", not "function call").
+4. **Open item 4 (2026-06-02 addendum) — RESOLVED: explicit include.**
+   `include Ruact::Server` is always explicit — one line, no magic, never
+   implied by `ruact_render` usage. The concern is also independent of
+   `Ruact::Controller` (neither includes the other); hosts include both.
+
+**Spec re-anchoring.** The 8.4/8.5 behavior matrix moved to
+`spec/ruact/server_spec.rb` + `server_rescue_request_spec.rb` +
+`server_upload_request_spec.rb` (tagged `:story_9_1`), mounted on REAL host
+routes on the shared Story-7.9 Rails app — no `/__ruact/fn/` anywhere, no
+dependency on the v1 spec files that Story 9.9 demolishes. The superseded
+`endpoint_controller_rescue_spec.rb` / `endpoint_controller_upload_spec.rb`
+were removed in the same commit; the v1 endpoint's observable contract
+remains covered by `dispatch_request_spec.rb` / `csrf_request_spec.rb` until
+9.9.
