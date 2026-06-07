@@ -2,6 +2,14 @@
 
 require "active_support/concern"
 
+# Review patch (2026-06-07) — a direct `require "ruact/server"` (without the
+# host having required "ruact" first) must still resolve everything the
+# salvaged chains touch at request time: `Ruact.config` (defined in ruact.rb,
+# not configuration.rb), `Ruact::UploadTooLargeError`, the ErrorPayload
+# pipeline. The gem root never requires this file back (the bare
+# `require "ruact"` path stays ActionController-free; the Railtie loads the
+# concern), so this is acyclic by construction.
+require_relative "../ruact"
 require_relative "server_functions/error_rendering"
 
 module Ruact
@@ -32,11 +40,12 @@ module Ruact
   #   renders the structured JSON payload (discriminator
   #   `_ruact_server_action_error: true`, four baseline fields, dev/prod split
   #   via `Ruact.config.dev_error_payload_enabled`, status mapping 422/403/
-  #   413/500). On every other request shape the handler re-raises, so GET
+  #   413/500). On every other request shape — including GET/HEAD requests
+  #   regardless of their Accept header — the handler re-raises, so GET
   #   pages, `default_render`, and Phase-1 behavior stay byte-for-byte
-  #   untouched. Host `rescue_from` declarations land later in the class body
-  #   and therefore keep precedence — the chain only catches what the host
-  #   did not.
+  #   untouched. Host `rescue_from` declarations — whether inherited from a
+  #   parent class or declared in the host's own body — keep precedence:
+  #   the chain only catches what the host did not.
   # - **Story 8.5 upload guard** — `prepend_before_action` enforcing
   #   `Ruact.config.max_upload_bytes` against the wire `Content-Length`
   #   BEFORE Rack's multipart parser and BEFORE CSRF verification (an
@@ -67,8 +76,18 @@ module Ruact
       # generic StandardError entry first, the explicit
       # InvalidAuthenticityToken entry second so it wins Rails'
       # most-recently-registered handler walk for CSRF failures.
+      #
+      # Review patch (2026-06-07) — handlers the host INHERITED from a parent
+      # class must keep precedence too, not just ones declared after the
+      # include: Rails walks `rescue_handlers` most-recently-registered
+      # first, and a plain `rescue_from` here would land the concern's
+      # entries AFTER the inherited ones. The concern's entries are therefore
+      # moved to the FRONT of the array, so every host handler — inherited or
+      # declared later in the class body — stays more recent and wins.
+      inherited_handlers = rescue_handlers
       rescue_from StandardError, with: :__ruact_render_action_error
       rescue_from ActionController::InvalidAuthenticityToken, with: :__ruact_render_action_error
+      self.rescue_handlers = (rescue_handlers - inherited_handlers) + inherited_handlers
     end
 
     private
@@ -89,15 +108,25 @@ module Ruact
       request.headers["Accept"]&.include?("application/json") || false
     end
 
-    # D1 — render the structured payload only for function-call requests,
-    # with one documented exception: `Ruact::UploadTooLargeError` renders the
+    # D1 (amended by the 2026-06-07 review patch) — render the structured
+    # payload only for NON-GET/HEAD function-call requests, with one
+    # documented exception: `Ruact::UploadTooLargeError` renders the
     # structured 413 for every request shape. The guard only exists on
     # requests that opted into the concern, and a meaningful 413 beats a
     # re-raised 500 for a native multipart form submit. Everything else
     # re-raises so non-function-call requests keep Rails' default error
     # behavior (AC1 byte-for-byte).
+    #
+    # The verb gate lives HERE, not in the predicate: function calls are
+    # non-GET by the verb rule (epic contract decision #1), so a GET/HEAD
+    # carrying `Accept: application/json` (a fetch() against a page action,
+    # an API probe) is NOT a function call and must keep stock Rails error
+    # behavior — while `__ruact_function_call?` itself stays the raw-Accept
+    # discriminator Story 9.2 reuses verbatim.
     def __ruact_render_structured_error?(error)
-      __ruact_function_call? || error.is_a?(Ruact::UploadTooLargeError)
+      return true if error.is_a?(Ruact::UploadTooLargeError)
+
+      __ruact_function_call? && !(request.get? || request.head?)
     end
 
     # D2 — the v1 endpoint was POST-only so the guard never saw GETs; on a

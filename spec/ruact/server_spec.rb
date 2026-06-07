@@ -20,6 +20,7 @@
 require "action_controller/railtie"
 
 require "spec_helper"
+require "open3"
 
 require "ruact/server"
 
@@ -63,6 +64,40 @@ RSpec.describe Ruact::Server, :story_9_1 do
     it "registers nothing in the v1 registries (codegen exposure is Story 9.3, not 9.1)" do
       expect(Ruact.action_registry.entries).to be_empty
       expect(Ruact.query_registry.entries).to be_empty
+    end
+
+    it "keeps INHERITED host rescue_from handlers more recent than its own (review patch)",
+       :aggregate_failures do
+      # Rails resolves handlers by walking `rescue_handlers` from the most
+      # recently registered entry backwards. The concern therefore places its
+      # entries at the FRONT of the array, so every host handler — inherited
+      # from a parent class or declared after the include — stays more recent
+      # and keeps precedence.
+      parent = Class.new(ActionController::Base) do
+        rescue_from ArgumentError, with: :host_handler
+      end
+      child = Class.new(parent) { include Ruact::Server }
+      expect(child.rescue_handlers.map(&:first)).to eq(
+        ["StandardError", "ActionController::InvalidAuthenticityToken", "ArgumentError"]
+      )
+      # The parent's own registry is untouched (class_attribute write lands
+      # on the child only).
+      expect(parent.rescue_handlers.map(&:first)).to eq(["ArgumentError"])
+    end
+  end
+
+  describe "Story 9.1 — standalone load path (review patch)" do
+    it "a direct require \"ruact/server\" resolves Ruact.config and the error constants" do
+      lib = File.expand_path("../../lib", __dir__)
+      script = <<~RUBY
+        require "ruact/server"
+        exit 1 unless defined?(Ruact::Server)
+        exit 2 unless defined?(Ruact::UploadTooLargeError)
+        exit 3 unless Ruact.config.respond_to?(:max_upload_bytes)
+        exit 4 unless defined?(Ruact::ServerFunctions::ErrorRendering)
+      RUBY
+      _stdout, stderr, status = Open3.capture3(RbConfig.ruby, "-I", lib, "-e", script)
+      expect(status).to be_success, "standalone require failed (exit #{status.exitstatus}): #{stderr}"
     end
   end
 

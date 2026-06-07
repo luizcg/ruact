@@ -107,6 +107,34 @@ module ServerRescueSpecSupport
     def page
       render plain: "plain page body"
     end
+
+    def erroring_page
+      raise "boom on GET"
+    end
+  end
+
+  # Parent WITHOUT the concern that catches RecordInvalid; the child includes
+  # `Ruact::Server`. Proves the concern's chain does not preempt handlers the
+  # host INHERITED either (review patch — `rescue_handlers` walks
+  # most-recently-registered first, and a naive include lands the concern's
+  # entries after the parent's).
+  class ParentRescuingController < ActionController::Base
+    rescue_from ActiveRecord::RecordInvalid do |error|
+      render(
+        json: { caught_by_parent: true, error_class: error.class.name },
+        status: :unprocessable_entity
+      )
+    end
+  end
+
+  class InheritedCaughtServerController < ParentRescuingController
+    include Ruact::Server
+
+    def record_invalid
+      record = RescuePost.new
+      record.valid?
+      raise ActiveRecord::RecordInvalid, record
+    end
   end
 
   # Host that catches RecordInvalid itself — proves the concern's chain does
@@ -149,12 +177,15 @@ if defined?(ControllerRequestSpecSupport) &&
   ControllerRequestSpecSupport.instance_variable_set(:@__ruact_server_rescue_routes_appended, true)
   ControllerRequestSpecSupport.app_class.routes.append do
     get  "/server_rescue/page",                  to: "server_rescue_spec_support/bare_server#page"
+    get  "/server_rescue/erroring_page",         to: "server_rescue_spec_support/bare_server#erroring_page"
     post "/server_rescue/record_invalid",        to: "server_rescue_spec_support/bare_server#record_invalid"
     post "/server_rescue/argument_error",        to: "server_rescue_spec_support/bare_server#argument_error"
     post "/server_rescue/runtime_error",         to: "server_rescue_spec_support/bare_server#runtime_error"
     post "/server_rescue/create_ok",             to: "server_rescue_spec_support/bare_server#create_ok"
     post "/server_rescue/caught_record_invalid", to: "server_rescue_spec_support/caught_server#record_invalid"
     post "/server_rescue/protected",             to: "server_rescue_spec_support/forgery_server#create_protected"
+    post "/server_rescue/inherited_caught_record_invalid",
+         to: "server_rescue_spec_support/inherited_caught_server#record_invalid"
   end
 end
 
@@ -221,6 +252,14 @@ RSpec.describe "Story 9.1: Ruact::Server concern — salvaged rescue_from chain"
       expect(last_response.status).to eq(422)
       body = JSON.parse(last_response.body)
       expect(body.fetch("caught_by_host")).to be(true)
+      expect(body).not_to have_key("_ruact_server_action_error")
+    end
+
+    it "RecordInvalid handled by an INHERITED parent handler also wins over the concern (review patch)" do
+      post "/server_rescue/inherited_caught_record_invalid", "{}", function_call_headers
+      expect(last_response.status).to eq(422)
+      body = JSON.parse(last_response.body)
+      expect(body.fetch("caught_by_parent")).to be(true)
       expect(body).not_to have_key("_ruact_server_action_error")
     end
   end
@@ -317,6 +356,21 @@ RSpec.describe "Story 9.1: Ruact::Server concern — salvaged rescue_from chain"
                "HTTP_ACCEPT" => "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
              }
       end.to raise_error(RuntimeError, "boom")
+    end
+
+    it "a raise on a GET with Accept: application/json propagates — stock Rails behavior (review patch)" do
+      # Function calls are non-GET by the verb rule (epic contract decision
+      # #1); a GET carrying a JSON Accept (fetch() to a page action, API
+      # probes) must NOT be swallowed into the structured payload.
+      expect do
+        get "/server_rescue/erroring_page", {}, { "HTTP_ACCEPT" => "application/json" }
+      end.to raise_error(RuntimeError, "boom on GET")
+    end
+
+    it "a raise on a HEAD with Accept: application/json also propagates (review patch)" do
+      expect do
+        head "/server_rescue/erroring_page", {}, { "HTTP_ACCEPT" => "application/json" }
+      end.to raise_error(RuntimeError, "boom on GET")
     end
   end
 end

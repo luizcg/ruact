@@ -1115,3 +1115,44 @@ dependency on the v1 spec files that Story 9.9 demolishes. The superseded
 were removed in the same commit; the v1 endpoint's observable contract
 remains covered by `dispatch_request_spec.rb` / `csrf_request_spec.rb` until
 9.9.
+
+### 2026-06-07 — Story 9.1 — code-review patches (D1 verb gate, inherited precedence, standalone load path)
+
+Three patches from the Story 9.1 code review (gem PR #2), amending the
+2026-06-05 in-story decisions. All three were resolved with Luiz on
+2026-06-06; spec-pinned and landed on the same PR as follow-up commits
+(GitHub Flow — no amend/force-push).
+
+1. **D1 amended — GET/HEAD excluded from structured error rendering.**
+   `__ruact_render_structured_error?` now requires a non-GET/HEAD verb in
+   addition to the function-call predicate. Function calls are non-GET by
+   the verb rule (epic contract decision #1), so a GET/HEAD carrying
+   `Accept: application/json` (a `fetch()` against a page action, an API
+   probe) is NOT a function call — an error there keeps stock Rails
+   behavior instead of being swallowed into the structured payload.
+   **`__ruact_function_call?` itself is UNCHANGED** (raw `Accept` header,
+   verb-agnostic) — Story 9.2 still reuses it verbatim as the dual-bucket
+   discriminator; the verb gate lives only in the error-rendering scope.
+   The `UploadTooLargeError` exception is unaffected (the guard already
+   skips GET/HEAD per D2, so the combination is unreachable).
+2. **Inherited host `rescue_from` precedence.** The 2026-06-05 "host wins"
+   claim only held for handlers declared in the host's own class body AFTER
+   the include — handlers inherited from a parent class sat EARLIER in
+   `rescue_handlers` and lost Rails' most-recently-registered walk to the
+   concern's `StandardError` entry. The concern now moves its two entries to
+   the FRONT of the array at include time
+   (`self.rescue_handlers = (rescue_handlers - inherited) + inherited`), so
+   every host handler — inherited or declared after the include — stays more
+   recent and keeps precedence. The concern-internal Pitfall #1 order
+   (StandardError before InvalidAuthenticityToken) is preserved; the parent
+   class's own registry is untouched (class_attribute write lands on the
+   child). Idempotent under repeated include along an inheritance chain.
+3. **Standalone load path.** `lib/ruact/server.rb` now does
+   `require_relative "../ruact"` so a direct `require "ruact/server"`
+   resolves everything the salvaged chains touch at request time
+   (`Ruact.config` is defined in `ruact.rb`, not `configuration.rb`;
+   `Ruact::UploadTooLargeError`; the ErrorPayload pipeline). Acyclic by
+   construction: the gem root never requires `server.rb` back (the bare
+   `require "ruact"` path stays ActionController-free; the Railtie loads the
+   concern). Pinned by a subprocess spec (`ruby -I lib -e 'require
+   "ruact/server"'`).
