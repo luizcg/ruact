@@ -1156,3 +1156,51 @@ Three patches from the Story 9.1 code review (gem PR #2), amending the
    `require "ruact"` path stays ActionController-free; the Railtie loads the
    concern). Pinned by a subprocess spec (`ruby -I lib -e 'require
    "ruact/server"'`).
+
+### 2026-06-08 — Story 9.1 — code-review patches, round 2 (predicate split, GET/HEAD upload-error gate, CSRF-ordering invariant)
+
+Three further patches from the Story 9.1 code review (gem PR #2), refining the
+2026-06-07 round. Spec-pinned (red→green), landed as a follow-up commit on the
+same PR (GitHub Flow — no amend/force-push).
+
+1. **Predicate split — raw header vs. semantic function-call.** The 2026-06-07
+   round left `__ruact_function_call?` keyed purely on the raw `Accept` header
+   (verb-agnostic) while the verb gate lived only inside
+   `__ruact_render_structured_error?`. But the addendum also designated
+   `__ruact_function_call?` as THE helper Story 9.2 reuses — so the helper
+   encoded the wrong contract (a GET carrying `Accept: application/json` would
+   read as a function call). Now split in two:
+   - `__ruact_json_accept?` — the raw, verb-agnostic header check.
+   - `__ruact_function_call?` — the SEMANTIC predicate:
+     `__ruact_json_accept? && !(request.get? || request.head?)`.
+   The verb rule (function calls are non-GET, epic contract decision #1) now
+   lives in ONE place — the predicate itself — so Story 9.2 inherits the
+   correct contract verbatim. This SUPERSEDES the 2026-06-07 note that
+   "`__ruact_function_call?` itself is UNCHANGED"; the raw check survives under
+   its new name.
+2. **GET/HEAD upload-error gate.** `__ruact_render_structured_error?` now checks
+   the verb FIRST (`return false if request.get? || request.head?`), so the
+   `UploadTooLargeError` exception to the re-raise rule is also verb-gated. The
+   guard never produces that error on a GET/HEAD (it skips them — D2), so the
+   only way one reaches the handler on a GET is a manual `raise` inside a page
+   action — which must keep stock Rails behavior (AC1 byte-for-byte), not be
+   swallowed into a structured 413. The non-GET case is unchanged: a
+   `UploadTooLargeError` from a native multipart form submit (Bucket 1, no JSON
+   Accept) still renders a meaningful 413.
+3. **CSRF-ordering invariant made executable (AC4 / Pitfall #4).** The upload
+   guard is `prepend_before_action`, so it normally beats
+   `verify_authenticity_token`. But a host can re-order CSRF ahead of it with
+   `protect_from_forgery prepend: true`, after which an oversized tokenless
+   multipart request is 403'd before the intended 413 — silently breaking AC4.
+   Rather than document this as the host's responsibility, the concern now
+   detects the inversion in the compiled callback chain
+   (`__ruact_csrf_precedes_upload_guard?` — pure, unit-testable inspection) and
+   fails loudly with a `Ruact::ConfigurationError` from
+   `__ruact_verify_upload_guard_precedence!` (a new no-op hook on
+   `ErrorRendering`, overridden by the concern, invoked before the guard's
+   verb short-circuit). Because CSRF verification is a no-op for GET/HEAD, the
+   guard still runs on page loads, so a misordered controller fails on its
+   first request in development. Note the limit: an oversized tokenless POST to
+   an already-misordered controller is still 403'd at request time (CSRF runs
+   first; the guard cannot run) — the detection makes the misconfiguration
+   impossible to ship unnoticed, it does not silently repair the ordering.

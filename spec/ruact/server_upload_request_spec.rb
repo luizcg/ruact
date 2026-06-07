@@ -61,6 +61,25 @@ module ServerUploadSpecSupport
       render json: { "ok" => true }
     end
   end
+
+  # Review patch (2026-06-08) — pathological host that re-orders CSRF ahead of
+  # the prepended upload guard via `protect_from_forgery prepend: true`. The
+  # concern must detect the inversion and fail loudly rather than silently
+  # 403 an oversized tokenless request before the intended 413 (AC4).
+  class InvertedGuardUploadsController < ActionController::Base
+    include Ruact::Server
+
+    protect_from_forgery with: :exception, prepend: true
+
+    # A GET page action: CSRF verification is a no-op for GET, so the prepended
+    # guard still runs and surfaces the ordering inversion immediately — the
+    # realistic "fail on the first page load" path (an oversized tokenless POST
+    # would already be 403'd by the misordered CSRF check before the guard, the
+    # very breakage this detection exists to prevent in development).
+    def page
+      render plain: "should never render on an inverted host"
+    end
+  end
 end
 
 if defined?(ControllerRequestSpecSupport) &&
@@ -69,6 +88,7 @@ if defined?(ControllerRequestSpecSupport) &&
   ControllerRequestSpecSupport.app_class.routes.append do
     post "/server_upload",           to: "server_upload_spec_support/uploads_server#create_upload"
     post "/server_upload/protected", to: "server_upload_spec_support/forgery_uploads_server#create_protected_upload"
+    get  "/server_upload/inverted",  to: "server_upload_spec_support/inverted_guard_uploads#page"
   end
 end
 
@@ -188,6 +208,19 @@ RSpec.describe "Story 9.1: Ruact::Server concern — salvaged upload guard", :st
         expect(last_response.status).to eq(413)
         expect(JSON.parse(last_response.body).fetch("error_class")).to eq("Ruact::UploadTooLargeError")
       end
+    end
+  end
+
+  describe "upload guard must precede CSRF — inverted host fails loudly (AC4 / Pitfall #4, review patch)" do
+    it "raises Ruact::ConfigurationError on the first GET page load instead of silently mis-ordering" do
+      # CSRF verification is a no-op for GET, so the prepended guard still runs
+      # and detects that :verify_authenticity_token was prepended ahead of it.
+      # The ConfigurationError re-raises (GET → stock Rails handling) and, under
+      # show_exceptions = :none, propagates to the caller — the loud failure
+      # that makes the misordering impossible to ship unnoticed.
+      expect do
+        get "/server_upload/inverted"
+      end.to raise_error(Ruact::ConfigurationError, /upload guard/)
     end
   end
 

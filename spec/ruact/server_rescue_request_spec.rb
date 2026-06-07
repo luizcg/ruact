@@ -111,6 +111,15 @@ module ServerRescueSpecSupport
     def erroring_page
       raise "boom on GET"
     end
+
+    # Review patch (2026-06-08) — a host action that manually raises
+    # UploadTooLargeError on a GET. The structured-413 exception to the
+    # re-raise rule must NOT fire here: GET/HEAD always keep stock Rails
+    # behavior (the guard itself never produces this on a GET — D2 — so a
+    # structured 413 here could only come from a manual raise).
+    def upload_error_on_get
+      raise Ruact::UploadTooLargeError.new(received_bytes: 10, limit_bytes: 5)
+    end
   end
 
   # Parent WITHOUT the concern that catches RecordInvalid; the child includes
@@ -178,6 +187,7 @@ if defined?(ControllerRequestSpecSupport) &&
   ControllerRequestSpecSupport.app_class.routes.append do
     get  "/server_rescue/page",                  to: "server_rescue_spec_support/bare_server#page"
     get  "/server_rescue/erroring_page",         to: "server_rescue_spec_support/bare_server#erroring_page"
+    get  "/server_rescue/upload_error_on_get",   to: "server_rescue_spec_support/bare_server#upload_error_on_get"
     post "/server_rescue/record_invalid",        to: "server_rescue_spec_support/bare_server#record_invalid"
     post "/server_rescue/argument_error",        to: "server_rescue_spec_support/bare_server#argument_error"
     post "/server_rescue/runtime_error",         to: "server_rescue_spec_support/bare_server#runtime_error"
@@ -371,6 +381,16 @@ RSpec.describe "Story 9.1: Ruact::Server concern — salvaged rescue_from chain"
       expect do
         head "/server_rescue/erroring_page", {}, { "HTTP_ACCEPT" => "application/json" }
       end.to raise_error(RuntimeError, "boom on GET")
+    end
+
+    it "a manual UploadTooLargeError raised on a GET propagates — no structured 413 swallow (review patch)" do
+      # The UploadTooLargeError exception to the re-raise rule is gated behind
+      # the verb check: on a GET (where the guard never fires — D2) a manual
+      # raise keeps stock Rails behavior instead of rendering the structured
+      # 413, so GET pages stay byte-for-byte untouched (AC1).
+      expect do
+        get "/server_rescue/upload_error_on_get", {}, { "HTTP_ACCEPT" => "application/json" }
+      end.to raise_error(Ruact::UploadTooLargeError)
     end
   end
 end

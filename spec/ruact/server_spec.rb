@@ -101,7 +101,11 @@ RSpec.describe Ruact::Server, :story_9_1 do
     end
   end
 
-  describe "Story 9.1 — __ruact_function_call? predicate matrix (AC2 / D3)" do
+  # Review patch (2026-06-08) — the raw `Accept: application/json` detection is
+  # now its own helper, distinct from the SEMANTIC function-call predicate.
+  # `__ruact_json_accept?` is the verb-agnostic header check; the matrix that
+  # used to live on `__ruact_function_call?` belongs here.
+  describe "Story 9.1 — __ruact_json_accept? raw-header matrix (AC2 / D3, review patch)" do
     let(:controller) { ServerConcernUnitSupport::ConcernController.new }
 
     def stub_accept_header(value)
@@ -112,27 +116,117 @@ RSpec.describe Ruact::Server, :story_9_1 do
 
     it "is true for the runtime's exact shape (Accept: application/json)" do
       stub_accept_header("application/json")
-      expect(controller.send(:__ruact_function_call?)).to be(true)
+      expect(controller.send(:__ruact_json_accept?)).to be(true)
     end
 
     it "is true when application/json appears in a composite Accept (axios-style)" do
       stub_accept_header("application/json, text/plain, */*")
-      expect(controller.send(:__ruact_function_call?)).to be(true)
+      expect(controller.send(:__ruact_json_accept?)).to be(true)
     end
 
     it "is false for browser navigation Accept headers" do
       stub_accept_header("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-      expect(controller.send(:__ruact_function_call?)).to be(false)
+      expect(controller.send(:__ruact_json_accept?)).to be(false)
     end
 
     it "is false for Flight requests (Accept: text/x-component)" do
       stub_accept_header("text/x-component")
-      expect(controller.send(:__ruact_function_call?)).to be(false)
+      expect(controller.send(:__ruact_json_accept?)).to be(false)
     end
 
     it "is false when the Accept header is absent (strict boolean, not nil)" do
       stub_accept_header(nil)
+      expect(controller.send(:__ruact_json_accept?)).to be(false)
+    end
+  end
+
+  # Review patch (2026-06-08) — `__ruact_function_call?` is now the SEMANTIC
+  # predicate Story 9.2 reuses: a JSON-Accept request that is ALSO non-GET/HEAD
+  # (function calls are non-GET by the verb rule, epic contract decision #1).
+  # The verb gate moved off the error-renderer and into the predicate itself,
+  # so 9.2 inherits the correct contract from one place.
+  describe "Story 9.1 — __ruact_function_call? semantic predicate (verb-gated, review patch)" do
+    let(:controller) { ServerConcernUnitSupport::ConcernController.new }
+
+    def stub_request(accept:, verb: "POST")
+      request = instance_double(
+        ActionDispatch::Request,
+        headers: { "Accept" => accept },
+        get?: verb == "GET",
+        head?: verb == "HEAD"
+      )
+      allow(controller).to receive(:request).and_return(request)
+    end
+
+    it "is true for a non-GET JSON request (THE Story 9.2 discrimination point)" do
+      stub_request(accept: "application/json", verb: "POST")
+      expect(controller.send(:__ruact_function_call?)).to be(true)
+    end
+
+    it "is false for a GET carrying Accept: application/json (verb rule — not a function call)" do
+      stub_request(accept: "application/json", verb: "GET")
       expect(controller.send(:__ruact_function_call?)).to be(false)
+    end
+
+    it "is false for a HEAD carrying Accept: application/json" do
+      stub_request(accept: "application/json", verb: "HEAD")
+      expect(controller.send(:__ruact_function_call?)).to be(false)
+    end
+
+    it "is false for a non-GET request without a JSON Accept (Bucket-1 form submit)" do
+      stub_request(accept: "text/html", verb: "POST")
+      expect(controller.send(:__ruact_function_call?)).to be(false)
+    end
+  end
+
+  # Review patch (2026-06-08) — AC4 / Pitfall #4 made executable. A host that
+  # re-orders CSRF ahead of the prepended upload guard via
+  # `protect_from_forgery prepend: true` would 403 an oversized tokenless
+  # multipart request before the intended 413. The concern detects the
+  # inversion in the compiled callback chain and fails loudly rather than
+  # documenting it as the host's responsibility.
+  describe "Story 9.1 — upload guard must precede CSRF verification (AC4 / Pitfall #4, review patch)" do
+    let(:inverted_controller_class) do
+      Class.new(ActionController::Base) do
+        include Ruact::Server
+
+        protect_from_forgery with: :exception, prepend: true
+      end
+    end
+
+    let(:ordered_controller_class) do
+      Class.new(ActionController::Base) do
+        include Ruact::Server
+
+        protect_from_forgery with: :exception
+      end
+    end
+
+    it "detects the inversion when verify_authenticity_token is prepended ahead of the guard" do
+      expect(inverted_controller_class.new.send(:__ruact_csrf_precedes_upload_guard?)).to be(true)
+    end
+
+    it "does not flag a controller whose CSRF check follows the prepended guard" do
+      expect(ordered_controller_class.new.send(:__ruact_csrf_precedes_upload_guard?)).to be(false)
+    end
+
+    it "does not flag a controller without CSRF protection at all" do
+      expect(
+        ServerConcernUnitSupport::ConcernController.new.send(:__ruact_csrf_precedes_upload_guard?)
+      ).to be(false)
+    end
+
+    it "raises Ruact::ConfigurationError when the guard runs on an inverted controller" do
+      controller = inverted_controller_class.new
+      expect { controller.send(:__ruact_enforce_upload_limit!) }
+        .to raise_error(Ruact::ConfigurationError, /verify_authenticity_token before/)
+    end
+
+    it "does NOT raise when the guard runs on a correctly-ordered controller" do
+      controller = ordered_controller_class.new
+      request = instance_double(ActionDispatch::Request, get?: true, head?: false)
+      allow(controller).to receive(:request).and_return(request)
+      expect { controller.send(:__ruact_enforce_upload_limit!) }.not_to raise_error
     end
   end
 end

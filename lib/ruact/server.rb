@@ -92,41 +92,57 @@ module Ruact
 
     private
 
-    # Story 9.1 AC2 — THE discrimination point: "is this request a function
-    # call?". Keyed on the raw `Accept` header containing `application/json`,
-    # which is exactly what the 8.1 runtime sends on every `_makeRef` fetch
-    # (Bucket 2 — imperative `await createPost(...)`). Browser navigation and
-    # `<form>` submits never include `application/json` in their Accept
-    # header, and Flight requests send `text/x-component` — both fall through
-    # to Bucket 1 / Phase-1 behavior.
+    # Raw discriminator (review patch, 2026-06-08) — does the request's
+    # `Accept` header contain `application/json`? This is exactly what the 8.1
+    # runtime sends on every `_makeRef` fetch (Bucket 2 — imperative
+    # `await createPost(...)`). Browser navigation and `<form>` submits never
+    # include `application/json` in their Accept header, and Flight requests
+    # send `text/x-component`.
     #
     # Deliberately NOT `request.format`: the Rails format negotiation is
     # influenced by path extensions (`/posts.json`) and `params[:format]`,
-    # neither of which may flip the bucket. Story 9.2 reuses this helper
-    # verbatim as the dual-bucket discriminator — it lives in one place only.
-    def __ruact_function_call?
+    # neither of which may flip the bucket. This is the verb-AGNOSTIC header
+    # check; the semantic predicate {#__ruact_function_call?} layers the verb
+    # rule on top.
+    def __ruact_json_accept?
       request.headers["Accept"]&.include?("application/json") || false
     end
 
-    # D1 (amended by the 2026-06-07 review patch) — render the structured
-    # payload only for NON-GET/HEAD function-call requests, with one
-    # documented exception: `Ruact::UploadTooLargeError` renders the
-    # structured 413 for every request shape. The guard only exists on
-    # requests that opted into the concern, and a meaningful 413 beats a
-    # re-raised 500 for a native multipart form submit. Everything else
-    # re-raises so non-function-call requests keep Rails' default error
-    # behavior (AC1 byte-for-byte).
+    # Story 9.1 AC2 — THE discrimination point: "is this request a function
+    # call?". A function call is a JSON-Accept request that is ALSO non-GET/
+    # HEAD: function calls are non-GET by the verb rule (epic contract
+    # decision #1), so a GET/HEAD carrying `Accept: application/json` (a
+    # `fetch()` against a page action, an API probe) is NOT one.
     #
-    # The verb gate lives HERE, not in the predicate: function calls are
-    # non-GET by the verb rule (epic contract decision #1), so a GET/HEAD
-    # carrying `Accept: application/json` (a fetch() against a page action,
-    # an API probe) is NOT a function call and must keep stock Rails error
-    # behavior — while `__ruact_function_call?` itself stays the raw-Accept
-    # discriminator Story 9.2 reuses verbatim.
-    def __ruact_render_structured_error?(error)
-      return true if error.is_a?(Ruact::UploadTooLargeError)
+    # Review patch (2026-06-08) — the verb gate that used to live only in
+    # {#__ruact_render_structured_error?} now lives HERE, in the predicate
+    # itself, so Story 9.2 reuses the CORRECT contract verbatim as the
+    # dual-bucket discriminator (the raw header check is {#__ruact_json_accept?}).
+    # The predicate lives in one place only.
+    def __ruact_function_call?
+      __ruact_json_accept? && !(request.get? || request.head?)
+    end
 
-      __ruact_function_call? && !(request.get? || request.head?)
+    # D1 (amended by the 2026-06-07 / 2026-06-08 review patches) — render the
+    # structured payload only for NON-GET/HEAD requests; within those, for a
+    # function call ({#__ruact_function_call?}) or any
+    # `Ruact::UploadTooLargeError`. Everything else re-raises so
+    # non-function-call requests keep Rails' default error behavior (AC1
+    # byte-for-byte).
+    #
+    # The verb gate is the FIRST thing checked so it covers the
+    # `UploadTooLargeError` branch too (2026-06-08 patch): the guard never
+    # produces that error on a GET/HEAD (it skips those — D2), so the only way
+    # one reaches this handler on a GET is a manual `raise` inside a page
+    # action — which must keep stock Rails behavior, not be swallowed into a
+    # structured 413. For the non-GET case the documented exception still
+    # holds: a `UploadTooLargeError` from a native multipart form submit
+    # (Bucket 1, no JSON Accept) renders a meaningful 413 rather than a
+    # re-raised 500.
+    def __ruact_render_structured_error?(error)
+      return false if request.get? || request.head?
+
+      error.is_a?(Ruact::UploadTooLargeError) || __ruact_function_call?
     end
 
     # D2 — the v1 endpoint was POST-only so the guard never saw GETs; on a
@@ -137,6 +153,50 @@ module Ruact
     # from).
     def __ruact_upload_guard_applicable?
       !(request.get? || request.head?)
+    end
+
+    # Review patch (2026-06-08) — AC4 / Pitfall #4 made executable. The upload
+    # guard is installed via `prepend_before_action`, so it normally wins the
+    # callback race against `verify_authenticity_token`. But a host can
+    # re-order CSRF ahead of it with `protect_from_forgery prepend: true`
+    # (which PREPENDS `verify_authenticity_token`), in which case an oversized
+    # multipart request WITHOUT a CSRF token is rejected with 403 before the
+    # intended 413 — silently violating AC4. Rather than document this as the
+    # host's responsibility, the concern detects the inversion in the compiled
+    # callback chain and fails loudly.
+    #
+    # The check runs for every verb (it is invoked before the
+    # {#__ruact_upload_guard_applicable?} short-circuit), so it surfaces on the
+    # first request of any kind — GET/HEAD reach the guard because CSRF
+    # verification is a no-op for them, making page loads fail immediately in
+    # development when the order is wrong.
+    def __ruact_verify_upload_guard_precedence!
+      return unless __ruact_csrf_precedes_upload_guard?
+
+      raise Ruact::ConfigurationError,
+            "#{self.class} orders :verify_authenticity_token before Ruact::Server's " \
+            "upload guard (:__ruact_enforce_upload_limit!), most likely via " \
+            "`protect_from_forgery prepend: true`. The upload guard must run first so " \
+            "an oversized multipart request rejects with 413 before CSRF verification " \
+            "can return 403 (AC4 / Pitfall #4). Remove `prepend: true` from " \
+            "protect_from_forgery, or move `include Ruact::Server` after the " \
+            "protect_from_forgery call."
+    end
+
+    # Pure inspection of the compiled before-callback chain — no request state,
+    # so it is unit-testable in isolation (the review patch's "prepend: true
+    # edge case is detected" spec calls it directly). Returns true only when
+    # BOTH callbacks are present AND `verify_authenticity_token` is ordered
+    # ahead of the upload guard.
+    def __ruact_csrf_precedes_upload_guard?
+      before_filters = self.class._process_action_callbacks
+                           .select { |callback| callback.kind == :before }
+                           .map(&:filter)
+      guard_index = before_filters.index(:__ruact_enforce_upload_limit!)
+      csrf_index = before_filters.index(:verify_authenticity_token)
+      return false if guard_index.nil? || csrf_index.nil?
+
+      csrf_index < guard_index
     end
   end
 end

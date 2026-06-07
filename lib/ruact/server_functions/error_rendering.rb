@@ -58,6 +58,7 @@ module Ruact
       # default has enough headroom that this is invisible for the common
       # case; the docs page calls it out for the edge.
       def __ruact_enforce_upload_limit!
+        __ruact_verify_upload_guard_precedence!
         return unless __ruact_upload_guard_applicable?
 
         limit = Ruact.config.max_upload_bytes
@@ -117,6 +118,14 @@ module Ruact
       def __ruact_upload_guard_applicable?
         true
       end
+
+      # Hook — assert any precondition the upload guard depends on BEFORE the
+      # size check (runs for every verb, including the GET/HEAD requests that
+      # {#__ruact_upload_guard_applicable?} later short-circuits). The v1
+      # endpoint owns its callback chain end-to-end and has nothing to verify;
+      # {Ruact::Server} overrides this to fail loudly when a host re-orders
+      # CSRF ahead of the guard (AC4 / Pitfall #4).
+      def __ruact_verify_upload_guard_precedence!; end
 
       # Story 8.4 — Status mapping per AC1:
       # - `ActiveRecord::RecordInvalid` → 422
