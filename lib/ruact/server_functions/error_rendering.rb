@@ -89,6 +89,16 @@ module Ruact
       # handling — debug page in development, public 500 in production —
       # proceeds exactly as if the concern were not installed.
       def __ruact_render_action_error(error)
+        # Review patch (2026-06-08, round 3) — re-assert the upload-guard
+        # ordering invariant here too. On an inverted host (CSRF prepended
+        # ahead of the guard via `protect_from_forgery prepend: true`) an
+        # oversized tokenless POST is rejected by `verify_authenticity_token`
+        # BEFORE the guard can run, so the guard's own precedence check never
+        # fires. Running it in the rescue path means the misconfiguration
+        # surfaces loudly on that request too — the inverted controller cannot
+        # serve a single request. A no-op for the v1 endpoint (default hook)
+        # and for correctly-ordered hosts.
+        __ruact_verify_upload_guard_precedence!
         raise error unless __ruact_render_structured_error?(error)
 
         action_name = __ruact_error_action_name

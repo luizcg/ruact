@@ -104,8 +104,41 @@ module Ruact
     # neither of which may flip the bucket. This is the verb-AGNOSTIC header
     # check; the semantic predicate {#__ruact_function_call?} layers the verb
     # rule on top.
+    #
+    # Review patch (2026-06-08, round 3) — the Accept header is parsed into
+    # media ranges instead of a raw `include?("application/json")` substring
+    # test, which mistook `application/jsonp` and `application/json;q=0` for a
+    # JSON-Accept request and was case-sensitive. A request counts as
+    # JSON-Accept only when it carries an `application/json` media range (matched
+    # case-insensitively on token boundaries) with a positive q-value. Because
+    # {#__ruact_function_call?} feeds Story 9.2's discriminator, a loose match
+    # here would route ordinary requests into Ruact's structured payload.
     def __ruact_json_accept?
-      request.headers["Accept"]&.include?("application/json") || false
+      accept = request.headers["Accept"]
+      return false if accept.nil? || accept.empty?
+
+      accept.split(",").any? { |range| __ruact_json_media_range?(range) }
+    end
+
+    # Does a single Accept media range name `application/json` with a positive
+    # q-value? Media types are matched case-insensitively on token boundaries,
+    # so `application/jsonp` is rejected; `q=0` means "explicitly not
+    # acceptable" and is rejected too.
+    def __ruact_json_media_range?(range)
+      media_type, *parameters = range.split(";").map(&:strip)
+      return false if media_type.nil? || media_type.empty?
+      return false unless media_type.casecmp?("application/json")
+
+      __ruact_accept_quality(parameters).positive?
+    end
+
+    # Extract a media range's q-value (relative quality), defaulting to 1.0
+    # when absent and to 0.0 when malformed.
+    def __ruact_accept_quality(parameters)
+      q_param = parameters.find { |parameter| parameter.downcase.start_with?("q=") }
+      return 1.0 if q_param.nil?
+
+      Float(q_param.split("=", 2).last, exception: false) || 0.0
     end
 
     # Story 9.1 AC2 — THE discrimination point: "is this request a function
@@ -139,8 +172,16 @@ module Ruact
     # holds: a `UploadTooLargeError` from a native multipart form submit
     # (Bucket 1, no JSON Accept) renders a meaningful 413 rather than a
     # re-raised 500.
+    # Review patch (2026-06-08, round 3) — `Ruact::ConfigurationError` is never
+    # rendered as a structured server-action error: configuration invariants
+    # (most notably the upload-guard ordering check) must stay LOUD setup
+    # failures. Folding one into an ordinary `_ruact_server_action_error` 500
+    # on a JSON function call would disguise a deploy-blocking misconfiguration
+    # as a transient runtime error. It re-raises so Rails' default error
+    # handling surfaces it.
     def __ruact_render_structured_error?(error)
       return false if request.get? || request.head?
+      return false if error.is_a?(Ruact::ConfigurationError)
 
       error.is_a?(Ruact::UploadTooLargeError) || __ruact_function_call?
     end
@@ -170,6 +211,13 @@ module Ruact
     # first request of any kind — GET/HEAD reach the guard because CSRF
     # verification is a no-op for them, making page loads fail immediately in
     # development when the order is wrong.
+    #
+    # Review patch (2026-06-08, round 3) — it is ALSO invoked from
+    # {Ruact::ServerFunctions::ErrorRendering#__ruact_render_action_error}, so
+    # the inversion surfaces even on the request shape that never reaches the
+    # guard: an oversized tokenless POST on an inverted host is rejected by
+    # CSRF first, but the rescue chain re-asserts this invariant and the
+    # `ConfigurationError` propagates rather than a quiet 403.
     def __ruact_verify_upload_guard_precedence!
       return unless __ruact_csrf_precedes_upload_guard?
 
@@ -186,17 +234,35 @@ module Ruact
     # Pure inspection of the compiled before-callback chain — no request state,
     # so it is unit-testable in isolation (the review patch's "prepend: true
     # edge case is detected" spec calls it directly). Returns true only when
-    # BOTH callbacks are present AND `verify_authenticity_token` is ordered
-    # ahead of the upload guard.
+    # BOTH callbacks are present AND an UNCONDITIONAL `verify_authenticity_token`
+    # is ordered ahead of the upload guard.
+    #
+    # Review patch (2026-06-08, round 3) — the earlier version reduced
+    # callbacks to raw filter names and ignored `if`/`unless`/`only`/`except`,
+    # so a CSRF callback that can never run on a reachable request (e.g.
+    # `protect_from_forgery prepend: true, if: -> { false }`) still produced a
+    # spurious `ConfigurationError`. Only an UNCONDITIONAL CSRF callback is
+    # flagged now; the genuine `protect_from_forgery prepend: true` misconfig
+    # carries no condition, so it is still caught.
     def __ruact_csrf_precedes_upload_guard?
-      before_filters = self.class._process_action_callbacks
-                           .select { |callback| callback.kind == :before }
-                           .map(&:filter)
-      guard_index = before_filters.index(:__ruact_enforce_upload_limit!)
-      csrf_index = before_filters.index(:verify_authenticity_token)
+      before_callbacks = self.class._process_action_callbacks
+                             .select { |callback| callback.kind == :before }
+      filters = before_callbacks.map(&:filter)
+      guard_index = filters.index(:__ruact_enforce_upload_limit!)
+      csrf_index = filters.index(:verify_authenticity_token)
       return false if guard_index.nil? || csrf_index.nil?
+      return false unless csrf_index < guard_index
 
-      csrf_index < guard_index
+      __ruact_unconditional_callback?(before_callbacks[csrf_index])
+    end
+
+    # A compiled before-callback is unconditional when it carries no `if`/
+    # `unless` conditions. Rails translates `only:`/`except:` into `if`/`unless`
+    # `AbstractController::Callbacks::ActionFilter` entries, so inspecting these
+    # two arrays covers all four condition forms.
+    def __ruact_unconditional_callback?(callback)
+      callback.instance_variable_get(:@if).empty? &&
+        callback.instance_variable_get(:@unless).empty?
     end
   end
 end

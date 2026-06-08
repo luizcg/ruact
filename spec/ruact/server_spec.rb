@@ -138,6 +138,31 @@ RSpec.describe Ruact::Server, :story_9_1 do
       stub_accept_header(nil)
       expect(controller.send(:__ruact_json_accept?)).to be(false)
     end
+
+    # Review patch (2026-06-08, round 3) — the predicate now parses media
+    # ranges and token boundaries instead of a raw substring match, so it no
+    # longer mistakes near-misses for JSON-Accept. Because `__ruact_function_call?`
+    # feeds Story 9.2's discriminator, a substring false-positive would route
+    # ordinary requests into Ruact's structured payload.
+    it "is false for application/jsonp (token boundary, not a substring match)" do
+      stub_accept_header("application/jsonp")
+      expect(controller.send(:__ruact_json_accept?)).to be(false)
+    end
+
+    it "is false for application/json;q=0 (explicitly NOT acceptable)" do
+      stub_accept_header("text/html, application/json;q=0")
+      expect(controller.send(:__ruact_json_accept?)).to be(false)
+    end
+
+    it "is true for Application/JSON (media types are case-insensitive)" do
+      stub_accept_header("Application/JSON")
+      expect(controller.send(:__ruact_json_accept?)).to be(true)
+    end
+
+    it "is true for application/json;q=0.5 (positive q-value)" do
+      stub_accept_header("application/json;q=0.5, text/plain")
+      expect(controller.send(:__ruact_json_accept?)).to be(true)
+    end
   end
 
   # Review patch (2026-06-08) — `__ruact_function_call?` is now the SEMANTIC
@@ -214,6 +239,45 @@ RSpec.describe Ruact::Server, :story_9_1 do
       expect(
         ServerConcernUnitSupport::ConcernController.new.send(:__ruact_csrf_precedes_upload_guard?)
       ).to be(false)
+    end
+
+    # Review patch (2026-06-08, round 3) — the detector reduced callbacks to
+    # raw filter names and ignored `if`/`unless`/`only`/`except`, so a CSRF
+    # callback that can NEVER run on a real request still produced a spurious
+    # ConfigurationError. The detector now narrows to UNCONDITIONAL CSRF
+    # callbacks (the genuine `protect_from_forgery prepend: true` misconfig is
+    # unconditional, so it is still caught).
+    context "with a CONDITIONAL CSRF callback (review patch round 3)" do
+      let(:disabled_if_class) do
+        Class.new(ActionController::Base) do
+          include Ruact::Server
+
+          protect_from_forgery with: :exception, prepend: true, if: -> { false }
+        end
+      end
+
+      let(:action_scoped_class) do
+        Class.new(ActionController::Base) do
+          include Ruact::Server
+
+          protect_from_forgery with: :exception, prepend: true, only: [:never_routed]
+        end
+      end
+
+      it "does NOT flag a prepended-but-disabled CSRF callback (if: -> { false })" do
+        expect(disabled_if_class.new.send(:__ruact_csrf_precedes_upload_guard?)).to be(false)
+      end
+
+      it "does NOT flag a prepended CSRF callback scoped to other actions (only:)" do
+        expect(action_scoped_class.new.send(:__ruact_csrf_precedes_upload_guard?)).to be(false)
+      end
+
+      it "does NOT raise when the guard runs on a controller with a conditional CSRF callback" do
+        controller = disabled_if_class.new
+        request = instance_double(ActionDispatch::Request, get?: true, head?: false)
+        allow(controller).to receive(:request).and_return(request)
+        expect { controller.send(:__ruact_enforce_upload_limit!) }.not_to raise_error
+      end
     end
 
     it "raises Ruact::ConfigurationError when the guard runs on an inverted controller" do

@@ -1204,3 +1204,55 @@ same PR (GitHub Flow — no amend/force-push).
    an already-misordered controller is still 403'd at request time (CSRF runs
    first; the guard cannot run) — the detection makes the misconfiguration
    impossible to ship unnoticed, it does not silently repair the ordering.
+
+### 2026-06-08 — Story 9.1 — code-review patches, round 3 (ordering invariant on the POST path, ConfigurationError stays loud, conditional-CSRF detector, Accept parsing)
+
+Five further patches from the Story 9.1 code review (gem PR #2), refining the
+round-2 work. Spec-pinned (red→green), landed as a follow-up commit on the same
+PR (GitHub Flow — no amend/force-push).
+
+1. **Ordering invariant now covers the oversized tokenless POST.** Round 2
+   detected the `protect_from_forgery prepend: true` inversion from inside the
+   upload guard, which only runs when reachable — so the exact broken shape
+   (an oversized multipart POST without a CSRF token) still 403'd before the
+   413, because CSRF runs first and aborts the chain before the guard.
+   `__ruact_verify_upload_guard_precedence!` is now ALSO invoked at the top of
+   `ErrorRendering#__ruact_render_action_error`, so the rescue chain
+   re-asserts the invariant on the request shape the guard never sees. Net
+   effect: an inverted controller fails loudly (`Ruact::ConfigurationError`)
+   on EVERY request — GET page loads (guard runs, CSRF no-ops), tokenless
+   POSTs (CSRF raises → rescue re-checks), and valid-token POSTs (guard runs)
+   alike. The misconfiguration can serve no request, which supersedes the
+   round-2 note that "an oversized tokenless POST … is still 403'd at request
+   time". Pinned by a request spec for an oversized tokenless POST on the
+   inverted host.
+2. **`Ruact::ConfigurationError` is never rendered as a structured error.**
+   With the ordering verifier raising `Ruact::ConfigurationError` and the
+   concern's `rescue_from StandardError` chain rendering structured JSON for
+   JSON function calls, a valid-token `Accept: application/json` POST on an
+   inverted host could fold the configuration failure into an ordinary
+   `_ruact_server_action_error` 500. `__ruact_render_structured_error?` now
+   returns false for `Ruact::ConfigurationError` (any source), so configuration
+   invariants stay loud setup failures. Pinned by a non-GET JSON request spec.
+3. **Detector narrowed to UNCONDITIONAL CSRF callbacks.**
+   `__ruact_csrf_precedes_upload_guard?` reduced callbacks to raw filter names
+   and ignored `if`/`unless`/`only`/`except`, so
+   `protect_from_forgery prepend: true, if: -> { false }` (CSRF can never run)
+   still raised. The detector now inspects the compiled before-callback's
+   `@if`/`@unless` arrays (Rails compiles `only:`/`except:` into these) and
+   only flags an unconditional CSRF callback. The genuine misconfig is
+   unconditional, so it is still caught; false positives on conditional CSRF
+   are eliminated. Pinned by `if: -> { false }` and `only:` specs.
+4. **`Accept` header parsed into media ranges.** `__ruact_json_accept?` used
+   `include?("application/json")`, which matched `application/jsonp` and
+   `application/json;q=0` and was case-sensitive. It now parses comma-separated
+   media ranges, matches `application/json` case-insensitively on token
+   boundaries, and requires a positive q-value. This matters because
+   `__ruact_function_call?` feeds Story 9.2's discriminator — a loose match
+   would route ordinary requests into Ruact's structured payload. Pinned by
+   `application/jsonp`, `application/json;q=0`, `Application/JSON`, and
+   `application/json;q=0.5` specs.
+5. **CHANGELOG corrected.** The `[Unreleased]` `Ruact::Server` note now states
+   that function calls are non-GET/HEAD JSON-Accept requests and that the
+   structured 413 applies to non-GET guarded requests (not "every caller
+   shape"), matching the verb-gated round-2/round-3 behavior.

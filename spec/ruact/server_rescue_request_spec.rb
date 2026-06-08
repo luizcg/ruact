@@ -120,6 +120,15 @@ module ServerRescueSpecSupport
     def upload_error_on_get
       raise Ruact::UploadTooLargeError.new(received_bytes: 10, limit_bytes: 5)
     end
+
+    # Review patch (2026-06-08, round 3) — a host action that raises
+    # Ruact::ConfigurationError on a function-call request. Configuration
+    # invariants must stay LOUD setup failures: the structured-error renderer
+    # must re-raise instead of folding the failure into an ordinary
+    # `_ruact_server_action_error` 500.
+    def config_error
+      raise Ruact::ConfigurationError, "config invariant violated"
+    end
   end
 
   # Parent WITHOUT the concern that catches RecordInvalid; the child includes
@@ -192,6 +201,7 @@ if defined?(ControllerRequestSpecSupport) &&
     post "/server_rescue/argument_error",        to: "server_rescue_spec_support/bare_server#argument_error"
     post "/server_rescue/runtime_error",         to: "server_rescue_spec_support/bare_server#runtime_error"
     post "/server_rescue/create_ok",             to: "server_rescue_spec_support/bare_server#create_ok"
+    post "/server_rescue/config_error",          to: "server_rescue_spec_support/bare_server#config_error"
     post "/server_rescue/caught_record_invalid", to: "server_rescue_spec_support/caught_server#record_invalid"
     post "/server_rescue/protected",             to: "server_rescue_spec_support/forgery_server#create_protected"
     post "/server_rescue/inherited_caught_record_invalid",
@@ -381,6 +391,16 @@ RSpec.describe "Story 9.1: Ruact::Server concern — salvaged rescue_from chain"
       expect do
         head "/server_rescue/erroring_page", {}, { "HTTP_ACCEPT" => "application/json" }
       end.to raise_error(RuntimeError, "boom on GET")
+    end
+
+    it "a Ruact::ConfigurationError on a function-call request propagates — config stays loud (review patch round 3)" do
+      # Configuration invariants (e.g. the upload-guard ordering check) must
+      # NOT be folded into a structured 500 just because the request is a
+      # function call: a swallowed ConfigurationError reads as a transient
+      # server error instead of the setup mistake it is.
+      expect do
+        post "/server_rescue/config_error", "{}", function_call_headers
+      end.to raise_error(Ruact::ConfigurationError, "config invariant violated")
     end
 
     it "a manual UploadTooLargeError raised on a GET propagates — no structured 413 swallow (review patch)" do

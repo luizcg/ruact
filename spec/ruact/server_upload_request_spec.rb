@@ -79,6 +79,16 @@ module ServerUploadSpecSupport
     def page
       render plain: "should never render on an inverted host"
     end
+
+    # Review patch (2026-06-08, round 3) — the exact broken shape the reviewer
+    # named: an oversized multipart POST without a CSRF token. On an inverted
+    # host Rails runs verify_authenticity_token BEFORE the prepended guard, so
+    # the guard never gets to 413. The concern must still fail loudly here
+    # (via the rescue chain re-asserting the precedence invariant) rather than
+    # quietly 403-ing — the misconfiguration cannot serve a single request.
+    def create
+      render json: { "ok" => true }
+    end
   end
 end
 
@@ -89,6 +99,7 @@ if defined?(ControllerRequestSpecSupport) &&
     post "/server_upload",           to: "server_upload_spec_support/uploads_server#create_upload"
     post "/server_upload/protected", to: "server_upload_spec_support/forgery_uploads_server#create_protected_upload"
     get  "/server_upload/inverted",  to: "server_upload_spec_support/inverted_guard_uploads#page"
+    post "/server_upload/inverted",  to: "server_upload_spec_support/inverted_guard_uploads#create"
   end
 end
 
@@ -221,6 +232,34 @@ RSpec.describe "Story 9.1: Ruact::Server concern — salvaged upload guard", :st
       expect do
         get "/server_upload/inverted"
       end.to raise_error(Ruact::ConfigurationError, /upload guard/)
+    end
+  end
+
+  describe "inverted host — oversized tokenless POST also fails loudly (AC4 / Pitfall #4, review patch round 3)" do
+    around do |example|
+      previous = ServerUploadSpecSupport::InvertedGuardUploadsController.allow_forgery_protection
+      ServerUploadSpecSupport::InvertedGuardUploadsController.allow_forgery_protection = true
+      example.run
+    ensure
+      ServerUploadSpecSupport::InvertedGuardUploadsController.allow_forgery_protection = previous
+    end
+
+    before { cap_max_upload_bytes(1024) }
+
+    it "raises Ruact::ConfigurationError instead of silently 403-ing before the 413" do
+      # CSRF (prepended ahead) raises InvalidAuthenticityToken before the guard
+      # ever runs, so the inversion cannot surface from the guard itself. The
+      # rescue chain re-asserts the precedence invariant and propagates the
+      # ConfigurationError — the misconfigured controller serves NO request.
+      with_oversized_tempfile do |large|
+        expect do
+          post "/server_upload/inverted",
+               {
+                 "title" => "oversized, no token",
+                 "cover" => Rack::Test::UploadedFile.new(large.path, "application/octet-stream")
+               }
+        end.to raise_error(Ruact::ConfigurationError, /upload guard/)
+      end
     end
   end
 
