@@ -117,28 +117,56 @@ module Ruact
       accept = request.headers["Accept"]
       return false if accept.nil? || accept.empty?
 
-      accept.split(",").any? { |range| __ruact_json_media_range?(range) }
+      __ruact_split_unquoted(accept, ",").any? { |range| __ruact_json_media_range?(range) }
     end
 
-    # Does a single Accept media range name `application/json` with a positive
+    # Does a single Accept media range name `application/json` with a usable
     # q-value? Media types are matched case-insensitively on token boundaries,
-    # so `application/jsonp` is rejected; `q=0` means "explicitly not
-    # acceptable" and is rejected too.
+    # so `application/jsonp` is rejected; the q-value must lie within
+    # `0.0 < q <= 1.0` (review patch round 4), so `q=0` ("explicitly not
+    # acceptable") and out-of-range/malformed q-values (`q=2`, `q=1.5`,
+    # `q=abc`) are all rejected.
     def __ruact_json_media_range?(range)
-      media_type, *parameters = range.split(";").map(&:strip)
+      media_type, *parameters = __ruact_split_unquoted(range, ";").map(&:strip)
       return false if media_type.nil? || media_type.empty?
       return false unless media_type.casecmp?("application/json")
 
-      __ruact_accept_quality(parameters).positive?
+      quality = __ruact_accept_quality(parameters)
+      quality.positive? && quality <= 1.0
     end
 
     # Extract a media range's q-value (relative quality), defaulting to 1.0
-    # when absent and to 0.0 when malformed.
+    # when absent and to a rejecting 0.0 when malformed.
     def __ruact_accept_quality(parameters)
       q_param = parameters.find { |parameter| parameter.downcase.start_with?("q=") }
       return 1.0 if q_param.nil?
 
       Float(q_param.split("=", 2).last, exception: false) || 0.0
+    end
+
+    # Split `string` on `delimiter`, ignoring delimiters that appear inside a
+    # double-quoted span (review patch round 4). An HTTP Accept parameter value
+    # may be a quoted-string containing commas or semicolons
+    # (`application/json;note="a,b";q=0`); a naive `String#split` would break it
+    # apart and let a fragment masquerade as a JSON media range with a default
+    # q of 1.0.
+    def __ruact_split_unquoted(string, delimiter)
+      parts = []
+      current = +""
+      in_quotes = false
+      string.each_char do |char|
+        if char == '"'
+          in_quotes = !in_quotes
+          current << char
+        elsif char == delimiter && !in_quotes
+          parts << current
+          current = +""
+        else
+          current << char
+        end
+      end
+      parts << current
+      parts
     end
 
     # Story 9.1 AC2 — THE discrimination point: "is this request a function
@@ -219,6 +247,12 @@ module Ruact
     # CSRF first, but the rescue chain re-asserts this invariant and the
     # `ConfigurationError` propagates rather than a quiet 403.
     def __ruact_verify_upload_guard_precedence!
+      # Review patch (2026-06-08, round 4) — `max_upload_bytes = nil` is the
+      # documented carve-out that disables the gem-side cap, so there is no
+      # 413-before-CSRF invariant left to protect. Skip the ordering check
+      # entirely rather than failing an inverted host that has intentionally
+      # opted out of the guard.
+      return if Ruact.config.max_upload_bytes.nil?
       return unless __ruact_csrf_precedes_upload_guard?
 
       raise Ruact::ConfigurationError,
@@ -231,19 +265,22 @@ module Ruact
             "protect_from_forgery call."
     end
 
-    # Pure inspection of the compiled before-callback chain — no request state,
-    # so it is unit-testable in isolation (the review patch's "prepend: true
-    # edge case is detected" spec calls it directly). Returns true only when
-    # BOTH callbacks are present AND an UNCONDITIONAL `verify_authenticity_token`
-    # is ordered ahead of the upload guard.
+    # Inspection of the compiled before-callback chain for the CURRENT request/
+    # action. Returns true only when BOTH callbacks are present, the
+    # `verify_authenticity_token` callback is ordered ahead of the upload
+    # guard, AND that CSRF callback actually APPLIES to this request.
     #
-    # Review patch (2026-06-08, round 3) — the earlier version reduced
-    # callbacks to raw filter names and ignored `if`/`unless`/`only`/`except`,
-    # so a CSRF callback that can never run on a reachable request (e.g.
-    # `protect_from_forgery prepend: true, if: -> { false }`) still produced a
-    # spurious `ConfigurationError`. Only an UNCONDITIONAL CSRF callback is
-    # flagged now; the genuine `protect_from_forgery prepend: true` misconfig
-    # carries no condition, so it is still caught.
+    # Review patch (2026-06-08, round 4) — round 3 narrowed detection to
+    # UNCONDITIONAL CSRF callbacks to avoid false positives, but that created a
+    # false NEGATIVE: a conditional callback that DOES apply to the current
+    # action (`protect_from_forgery prepend: true, only: [:create]` on
+    # `create`, or `if: -> { true }`) still runs ahead of the guard yet went
+    # unflagged. The detector now evaluates the callback's `if`/`unless`
+    # conditions against the controller, so an active condition is caught and
+    # an inactive one (`only: [:other]`, `if: -> { false }`) is not. This is no
+    # longer purely static — it reads `action_name` and any request-derived
+    # state the conditions touch — but both call sites (the guard and the
+    # rescue path) run inside a live request.
     def __ruact_csrf_precedes_upload_guard?
       before_callbacks = self.class._process_action_callbacks
                              .select { |callback| callback.kind == :before }
@@ -253,16 +290,36 @@ module Ruact
       return false if guard_index.nil? || csrf_index.nil?
       return false unless csrf_index < guard_index
 
-      __ruact_unconditional_callback?(before_callbacks[csrf_index])
+      __ruact_callback_applies?(before_callbacks[csrf_index])
     end
 
-    # A compiled before-callback is unconditional when it carries no `if`/
-    # `unless` conditions. Rails translates `only:`/`except:` into `if`/`unless`
-    # `AbstractController::Callbacks::ActionFilter` entries, so inspecting these
-    # two arrays covers all four condition forms.
-    def __ruact_unconditional_callback?(callback)
-      callback.instance_variable_get(:@if).empty? &&
-        callback.instance_variable_get(:@unless).empty?
+    # Does a compiled before-callback apply to the current request/action? All
+    # of its `@if` conditions must hold and none of its `@unless` conditions
+    # may. Rails compiles `only:`/`except:` into
+    # `AbstractController::Callbacks::ActionFilter` entries in these same
+    # arrays, so this covers all four condition forms.
+    def __ruact_callback_applies?(callback)
+      callback.instance_variable_get(:@if).all? { |condition| __ruact_condition_met?(condition) } &&
+        callback.instance_variable_get(:@unless).none? { |condition| __ruact_condition_met?(condition) }
+    end
+
+    # Evaluate a single callback condition against this controller. Symbols are
+    # sent as methods, Procs are `instance_exec`'d (arity-aware), and
+    # `ActionFilter` (and any condition object responding to `match?`/`call`)
+    # is asked whether it matches the current action.
+    def __ruact_condition_met?(condition)
+      case condition
+      when Symbol then send(condition)
+      when Proc   then condition.arity.zero? ? instance_exec(&condition) : instance_exec(self, &condition)
+      else
+        if condition.respond_to?(:match?)
+          condition.match?(self)
+        elsif condition.respond_to?(:call)
+          condition.call(self)
+        else
+          condition
+        end
+      end
     end
   end
 end

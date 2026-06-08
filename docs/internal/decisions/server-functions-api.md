@@ -1256,3 +1256,50 @@ PR (GitHub Flow — no amend/force-push).
    that function calls are non-GET/HEAD JSON-Accept requests and that the
    structured 413 applies to non-GET guarded requests (not "every caller
    shape"), matching the verb-gated round-2/round-3 behavior.
+
+### 2026-06-08 — Story 9.1 — code-review patches, round 4 (applicability-aware CSRF detector, nil-limit no-op, stricter Accept parser, v1 smoke spec)
+
+Four further patches from the Story 9.1 code review (gem PR #2), refining the
+round-3 work. Spec-pinned (red→green), landed as a follow-up commit on the same
+PR (GitHub Flow — no amend/force-push).
+
+1. **CSRF-order detector evaluates applicability (supersedes round 3's
+   "unconditional only").** Round 3 narrowed `__ruact_csrf_precedes_upload_guard?`
+   to UNCONDITIONAL CSRF callbacks to kill false positives, but that created a
+   false NEGATIVE: `protect_from_forgery with: :exception, prepend: true,
+   only: [:create]` (on `create`) or `if: -> { true }` still runs CSRF ahead of
+   the guard yet went unflagged. The detector now evaluates the CSRF callback's
+   compiled `@if`/`@unless` conditions against the controller for the current
+   request/action (`__ruact_callback_applies?` / `__ruact_condition_met?` —
+   Symbol → `send`, Proc → arity-aware `instance_exec`, `ActionFilter` →
+   `match?(self)`). An ACTIVE condition is caught; an inactive one
+   (`only: [:other]`, `if: -> { false }`) is not. The detector is no longer
+   purely static (it reads `action_name` / request-derived state), but both
+   call sites — the guard and the rescue path — run inside a live request.
+   Pinned: `only: [:create]` on `create` (flagged) vs on `index` (not flagged),
+   `if: -> { true }` (flagged), plus the round-3 inactive cases.
+2. **Ordering verifier is a no-op when `max_upload_bytes` is `nil`.** A nil cap
+   is the documented carve-out that disables the gem-side guard, so there is no
+   413-before-CSRF invariant to enforce — failing an inverted host that has
+   intentionally opted out is wrong. `__ruact_verify_upload_guard_precedence!`
+   now returns early when `Ruact.config.max_upload_bytes.nil?`. Pinned: a GET
+   page load on an inverted host with `max_upload_bytes = nil` renders normally
+   instead of raising `Ruact::ConfigurationError`.
+3. **Stricter, quote-aware Accept parser.** The round-3 parser still accepted
+   out-of-range q-values (`q=2`, `q=1.5`) and split on commas without respecting
+   quoted-strings (`application/json;note="a,b";q=0` split before the q-value
+   and defaulted to 1.0). The q-value must now lie within `0.0 < q <= 1.0`, and
+   media ranges / parameters are split with a quote-aware tokenizer
+   (`__ruact_split_unquoted`). This matters because `__ruact_function_call?`
+   feeds Story 9.2's discriminator — a malformed or explicitly-refused JSON
+   Accept must not misclassify a request. Pinned: `q=2`, `q=1.5`, and a quoted
+   comma before `q=0` (all rejected); quoted comma with `q=0.9` (accepted).
+4. **v1 endpoint upload-limit smoke spec.** The v1 endpoint stays alive as the
+   strangler-fig safety net until Story 9.9 and still shares the salvaged upload
+   guard, but the deep upload matrix was re-anchored on the v2 concern (and
+   `endpoint_controller_upload_spec.rb` removed). A minimal observable-contract
+   smoke spec now pins the v1 413 path (oversized multipart
+   `POST /__ruact/fn/:name` → 413 + `_ruact_server_action_error` +
+   `upload_limit`) in `dispatch_request_spec.rb`, so the safety net cannot
+   regress before demolition. Not the old implementation-coupled matrix — just
+   the wire-visible contract.

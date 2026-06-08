@@ -163,6 +163,29 @@ RSpec.describe Ruact::Server, :story_9_1 do
       stub_accept_header("application/json;q=0.5, text/plain")
       expect(controller.send(:__ruact_json_accept?)).to be(true)
     end
+
+    # Review patch (2026-06-08, round 4) — q-values must lie within 0.0..1.0,
+    # and comma splitting must be quote-aware so a quoted comma inside a
+    # parameter cannot smuggle a fragment past the q-value.
+    it "is false for application/json;q=2 (q above the 0..1 range)" do
+      stub_accept_header("application/json;q=2")
+      expect(controller.send(:__ruact_json_accept?)).to be(false)
+    end
+
+    it "is false for application/json;q=1.5 (q above the 0..1 range)" do
+      stub_accept_header("application/json;q=1.5")
+      expect(controller.send(:__ruact_json_accept?)).to be(false)
+    end
+
+    it "is false for application/json with a quoted comma before q=0 (quote-aware split)" do
+      stub_accept_header('application/json;note="a,b";q=0')
+      expect(controller.send(:__ruact_json_accept?)).to be(false)
+    end
+
+    it "is true for application/json with a quoted comma and a positive q (quote-aware split)" do
+      stub_accept_header('application/json;note="a,b";q=0.9')
+      expect(controller.send(:__ruact_json_accept?)).to be(true)
+    end
   end
 
   # Review patch (2026-06-08) — `__ruact_function_call?` is now the SEMANTIC
@@ -277,6 +300,46 @@ RSpec.describe Ruact::Server, :story_9_1 do
         request = instance_double(ActionDispatch::Request, get?: true, head?: false)
         allow(controller).to receive(:request).and_return(request)
         expect { controller.send(:__ruact_enforce_upload_limit!) }.not_to raise_error
+      end
+    end
+
+    # Review patch (2026-06-08, round 4) — round 3's "unconditional only"
+    # narrowing created a false NEGATIVE: a conditional CSRF callback that DOES
+    # apply to the current action (e.g. `only: [:create]` on `create`, or
+    # `if: -> { true }`) still runs ahead of the guard, but was not flagged.
+    # The detector now evaluates callback applicability for the current
+    # action/request, so an ACTIVE condition is caught.
+    context "with an ACTIVE conditional CSRF callback (review patch round 4)" do
+      let(:only_create_class) do
+        Class.new(ActionController::Base) do
+          include Ruact::Server
+
+          protect_from_forgery with: :exception, prepend: true, only: [:create]
+        end
+      end
+
+      let(:if_true_class) do
+        Class.new(ActionController::Base) do
+          include Ruact::Server
+
+          protect_from_forgery with: :exception, prepend: true, if: -> { true }
+        end
+      end
+
+      it "flags only: [:create] when the current action IS :create" do
+        controller = only_create_class.new
+        allow(controller).to receive(:action_name).and_return("create")
+        expect(controller.send(:__ruact_csrf_precedes_upload_guard?)).to be(true)
+      end
+
+      it "does NOT flag only: [:create] when the current action is a different one" do
+        controller = only_create_class.new
+        allow(controller).to receive(:action_name).and_return("index")
+        expect(controller.send(:__ruact_csrf_precedes_upload_guard?)).to be(false)
+      end
+
+      it "flags an active if: -> { true } condition" do
+        expect(if_true_class.new.send(:__ruact_csrf_precedes_upload_guard?)).to be(true)
       end
     end
 

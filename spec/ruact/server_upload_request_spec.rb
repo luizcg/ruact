@@ -77,7 +77,7 @@ module ServerUploadSpecSupport
     # would already be 403'd by the misordered CSRF check before the guard, the
     # very breakage this detection exists to prevent in development).
     def page
-      render plain: "should never render on an inverted host"
+      render plain: "inverted host page"
     end
 
     # Review patch (2026-06-08, round 3) — the exact broken shape the reviewer
@@ -260,6 +260,19 @@ RSpec.describe "Story 9.1: Ruact::Server concern — salvaged upload guard", :st
                }
         end.to raise_error(Ruact::ConfigurationError, /upload guard/)
       end
+    end
+  end
+
+  describe "inverted host with max_upload_bytes = nil — no invariant to enforce (review patch round 4)" do
+    # When the gem-side cap is disabled there is no 413-before-CSRF invariant
+    # for Ruact to protect, so the ordering verifier must NOT fire — the
+    # request follows stock Rails behavior even on an otherwise-inverted host.
+    before { cap_max_upload_bytes(nil) }
+
+    it "a GET page load renders normally instead of raising Ruact::ConfigurationError" do
+      get "/server_upload/inverted"
+      expect(last_response.status).to eq(200)
+      expect(last_response.body).to eq("inverted host page")
     end
   end
 
