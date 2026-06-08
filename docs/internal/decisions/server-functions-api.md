@@ -1303,3 +1303,42 @@ PR (GitHub Flow — no amend/force-push).
    `upload_limit`) in `dispatch_request_spec.rb`, so the safety net cannot
    regress before demolition. Not the old implementation-coupled matrix — just
    the wire-visible contract.
+
+### 2026-06-08 — Story 9.1 — code-review patches, round 5 (escape-aware Accept tokenizer, strict qvalue grammar, GET/HEAD verifier no-op)
+
+Three further patches from the Story 9.1 code review (gem PR #2), refining the
+round-4 work. Spec-pinned (red→green), landed as a follow-up commit on the same
+PR (GitHub Flow — no amend/force-push).
+
+1. **Escape-aware Accept tokenizer + unterminated-range rejection.** Round 4's
+   quote-aware split toggled quote state on every `"` and ignored HTTP
+   quoted-pair (`\"`) escaping and unterminated quoted strings:
+   `application/json;note="a\",b";q=0` read as JSON-acceptable (the escaped
+   quote ended the quoted-string early, the comma split the range, and the
+   `q=0` was lost → default 1.0). `__ruact_split_unquoted` now honors backslash
+   escapes inside quoted spans, and `__ruact_json_media_range?` rejects a range
+   whose quotes are unbalanced (`__ruact_balanced_quotes?`) rather than parsing
+   it as default-quality JSON. Pinned: escaped quote before `q=0` (rejected),
+   escaped quote with positive q (accepted), unterminated quote hiding `q=0`
+   (rejected).
+2. **Strict RFC 7231 qvalue grammar.** Round 4's `Float`-range check accepted
+   malformed q-values (`q=.5`, `q=01`, `q=1e-1`, `q=0.1234`). The value is now
+   validated against the qvalue grammar (`QVALUE_FORMAT` — `0` / `0.`+≤3 digits
+   / `1` / `1.`+≤3 zeros) before conversion; anything else is a rejecting 0.0.
+   Pinned: leading-dot, leading-zero, exponent, and over-precision values (all
+   rejected).
+3. **Ordering verifier is a no-op on GET/HEAD (supersedes round-2 GET
+   surfacing).** D2 says the upload guard never fires on GET/HEAD, and AC1 says
+   GET page behavior stays byte-for-byte — but the round-2/3 verifier still ran
+   on those verbs, so `protect_from_forgery prepend: true, only: [:index]` on a
+   GET `index` raised `Ruact::ConfigurationError` even though no upload guard
+   could fire. `__ruact_verify_upload_guard_precedence!` now returns early when
+   `__ruact_upload_guard_applicable?` is false. The loud failure is preserved
+   for guarded (non-GET) requests — including the oversized tokenless POST via
+   the rescue path (round 3) — so the misordering still cannot ship unnoticed;
+   it simply surfaces on the first NON-GET (function-call) request instead of
+   on a page load. This SUPERSEDES the round-2 note that GET page loads fail
+   immediately on a misordered host. Pinned: GET on an unconditionally-inverted
+   host renders (200); GET whose CSRF is scoped to the GET action (`only:`)
+   renders (200); non-GET inverted specs still fail loudly; unit GET/HEAD
+   no-raise + nil-limit non-GET no-raise.

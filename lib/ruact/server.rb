@@ -67,6 +67,12 @@ module Ruact
 
     include Ruact::ServerFunctions::ErrorRendering
 
+    # The RFC 7231 §5.3.1 qvalue grammar: `0`, `0.` + up to three digits, `1`,
+    # or `1.` + up to three zeros. Anything else (leading dot, leading zero,
+    # exponent, over-precision, out-of-range) is malformed.
+    QVALUE_FORMAT = /\A(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)\z/
+    private_constant :QVALUE_FORMAT
+
     included do
       # Story 8.5 salvage — prepended so the size check wins the race against
       # every other callback, including `verify_authenticity_token`.
@@ -122,40 +128,52 @@ module Ruact
 
     # Does a single Accept media range name `application/json` with a usable
     # q-value? Media types are matched case-insensitively on token boundaries,
-    # so `application/jsonp` is rejected; the q-value must lie within
-    # `0.0 < q <= 1.0` (review patch round 4), so `q=0` ("explicitly not
-    # acceptable") and out-of-range/malformed q-values (`q=2`, `q=1.5`,
-    # `q=abc`) are all rejected.
+    # so `application/jsonp` is rejected. A range with unbalanced/unterminated
+    # quotes is rejected outright (review patch round 5) rather than being
+    # treated as default-quality JSON. The q-value must be a valid HTTP qvalue
+    # ({QVALUE_FORMAT}) AND positive, so `q=0`, out-of-range (`q=2`, `q=1.5`),
+    # and malformed (`q=.5`, `q=01`, `q=1e-1`, `q=0.1234`) values are rejected.
     def __ruact_json_media_range?(range)
+      return false unless __ruact_balanced_quotes?(range)
+
       media_type, *parameters = __ruact_split_unquoted(range, ";").map(&:strip)
       return false if media_type.nil? || media_type.empty?
       return false unless media_type.casecmp?("application/json")
 
-      quality = __ruact_accept_quality(parameters)
-      quality.positive? && quality <= 1.0
+      __ruact_accept_quality(parameters).positive?
     end
 
-    # Extract a media range's q-value (relative quality), defaulting to 1.0
-    # when absent and to a rejecting 0.0 when malformed.
+    # Extract a media range's q-value (relative quality). Absent → 1.0; present
+    # but not a valid qvalue → a rejecting 0.0.
     def __ruact_accept_quality(parameters)
       q_param = parameters.find { |parameter| parameter.downcase.start_with?("q=") }
       return 1.0 if q_param.nil?
 
-      Float(q_param.split("=", 2).last, exception: false) || 0.0
+      value = q_param.split("=", 2).last
+      return 0.0 unless value.match?(QVALUE_FORMAT)
+
+      value.to_f
     end
 
-    # Split `string` on `delimiter`, ignoring delimiters that appear inside a
-    # double-quoted span (review patch round 4). An HTTP Accept parameter value
-    # may be a quoted-string containing commas or semicolons
-    # (`application/json;note="a,b";q=0`); a naive `String#split` would break it
-    # apart and let a fragment masquerade as a JSON media range with a default
-    # q of 1.0.
+    # Split `string` on `delimiter`, ignoring delimiters inside a double-quoted
+    # span and honoring HTTP quoted-pair (`\`) escaping (review patches rounds
+    # 4–5). An HTTP Accept parameter value may be a quoted-string containing
+    # commas/semicolons or an escaped quote (`application/json;note="a\",b";q=0`);
+    # a naive split would break it apart and let a fragment masquerade as a JSON
+    # media range with a default q of 1.0.
     def __ruact_split_unquoted(string, delimiter)
       parts = []
       current = +""
       in_quotes = false
+      escaped = false
       string.each_char do |char|
-        if char == '"'
+        if escaped
+          current << char
+          escaped = false
+        elsif char == "\\" && in_quotes
+          current << char
+          escaped = true
+        elsif char == '"'
           in_quotes = !in_quotes
           current << char
         elsif char == delimiter && !in_quotes
@@ -167,6 +185,24 @@ module Ruact
       end
       parts << current
       parts
+    end
+
+    # Are all double quotes in `string` balanced (quoted-pair `\"` aware)? A
+    # range with an unterminated quoted string is malformed and must not be
+    # parsed as a default-quality JSON media range (review patch round 5).
+    def __ruact_balanced_quotes?(string)
+      in_quotes = false
+      escaped = false
+      string.each_char do |char|
+        if escaped
+          escaped = false
+        elsif char == "\\" && in_quotes
+          escaped = true
+        elsif char == '"'
+          in_quotes = !in_quotes
+        end
+      end
+      !in_quotes
     end
 
     # Story 9.1 AC2 — THE discrimination point: "is this request a function
@@ -234,19 +270,28 @@ module Ruact
     # host's responsibility, the concern detects the inversion in the compiled
     # callback chain and fails loudly.
     #
-    # The check runs for every verb (it is invoked before the
-    # {#__ruact_upload_guard_applicable?} short-circuit), so it surfaces on the
-    # first request of any kind — GET/HEAD reach the guard because CSRF
-    # verification is a no-op for them, making page loads fail immediately in
-    # development when the order is wrong.
-    #
     # Review patch (2026-06-08, round 3) — it is ALSO invoked from
     # {Ruact::ServerFunctions::ErrorRendering#__ruact_render_action_error}, so
     # the inversion surfaces even on the request shape that never reaches the
     # guard: an oversized tokenless POST on an inverted host is rejected by
     # CSRF first, but the rescue chain re-asserts this invariant and the
     # `ConfigurationError` propagates rather than a quiet 403.
+    #
+    # Review patch (2026-06-08, round 5) — gated on
+    # {#__ruact_upload_guard_applicable?}: GET/HEAD requests (where the guard
+    # never fires — D2) no longer raise, keeping page loads byte-for-byte (AC1)
+    # even on an inverted host. The misordering surfaces on the first NON-GET
+    # (guarded) request instead. This supersedes the round-2 "fail on the first
+    # GET page load" behavior noted above.
     def __ruact_verify_upload_guard_precedence!
+      # Review patch (2026-06-08, round 5) — D2/AC1: the upload guard never
+      # fires on GET/HEAD, so there is no 413-before-CSRF invariant to enforce
+      # on those requests. Skipping the check here keeps GET page loads
+      # byte-for-byte even on an otherwise-inverted host; the misordering
+      # surfaces loudly on the first NON-GET (guarded) request instead. This
+      # SUPERSEDES the round-2 "fail on the first GET page load" behavior.
+      return unless __ruact_upload_guard_applicable?
+
       # Review patch (2026-06-08, round 4) — `max_upload_bytes = nil` is the
       # documented carve-out that disables the gem-side cap, so there is no
       # 413-before-CSRF invariant left to protect. Skip the ordering check

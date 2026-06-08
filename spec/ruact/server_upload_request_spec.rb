@@ -90,6 +90,21 @@ module ServerUploadSpecSupport
       render json: { "ok" => true }
     end
   end
+
+  # Review patch (2026-06-08, round 5) — a host whose CSRF check is prepended
+  # ahead of the guard but SCOPED to a GET action (`only: [:index]`). The CSRF
+  # callback IS applicable to the GET, so the detector flags it, but the upload
+  # guard never fires on a GET (D2) — so the verifier must NOT raise, and the
+  # page renders byte-for-byte (AC1).
+  class ScopedCsrfUploadsController < ActionController::Base
+    include Ruact::Server
+
+    protect_from_forgery with: :exception, prepend: true, only: [:index]
+
+    def index
+      render plain: "scoped csrf page"
+    end
+  end
 end
 
 if defined?(ControllerRequestSpecSupport) &&
@@ -100,6 +115,7 @@ if defined?(ControllerRequestSpecSupport) &&
     post "/server_upload/protected", to: "server_upload_spec_support/forgery_uploads_server#create_protected_upload"
     get  "/server_upload/inverted",  to: "server_upload_spec_support/inverted_guard_uploads#page"
     post "/server_upload/inverted",  to: "server_upload_spec_support/inverted_guard_uploads#create"
+    get  "/server_upload/scoped_csrf", to: "server_upload_spec_support/scoped_csrf_uploads#index"
   end
 end
 
@@ -222,16 +238,24 @@ RSpec.describe "Story 9.1: Ruact::Server concern — salvaged upload guard", :st
     end
   end
 
-  describe "upload guard must precede CSRF — inverted host fails loudly (AC4 / Pitfall #4, review patch)" do
-    it "raises Ruact::ConfigurationError on the first GET page load instead of silently mis-ordering" do
-      # CSRF verification is a no-op for GET, so the prepended guard still runs
-      # and detects that :verify_authenticity_token was prepended ahead of it.
-      # The ConfigurationError re-raises (GET → stock Rails handling) and, under
-      # show_exceptions = :none, propagates to the caller — the loud failure
-      # that makes the misordering impossible to ship unnoticed.
-      expect do
-        get "/server_upload/inverted"
-      end.to raise_error(Ruact::ConfigurationError, /upload guard/)
+  describe "upload guard precedence — GET/HEAD stay byte-for-byte on an inverted host (D2/AC1, round 5)" do
+    # SUPERSEDES the round-2 "fail on the first GET page load" behavior: D2 says
+    # the upload guard never fires on GET/HEAD, so there is no 413-before-CSRF
+    # invariant to enforce on those requests — raising there would break AC1.
+    # The misordering instead surfaces loudly on the first non-GET request (see
+    # the oversized tokenless POST spec below).
+    it "a GET page load on an unconditionally-inverted host renders normally (no ConfigurationError)" do
+      get "/server_upload/inverted"
+      expect(last_response.status).to eq(200)
+      expect(last_response.body).to eq("inverted host page")
+    end
+
+    it "a GET page load whose CSRF check is scoped to the GET action (only:) still renders" do
+      # The CSRF callback IS applicable to this GET, so the detector flags it,
+      # but the guard is not applicable on a GET — the verifier must no-op.
+      get "/server_upload/scoped_csrf"
+      expect(last_response.status).to eq(200)
+      expect(last_response.body).to eq("scoped csrf page")
     end
   end
 

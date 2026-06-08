@@ -186,6 +186,48 @@ RSpec.describe Ruact::Server, :story_9_1 do
       stub_accept_header('application/json;note="a,b";q=0.9')
       expect(controller.send(:__ruact_json_accept?)).to be(true)
     end
+
+    # Review patch (2026-06-08, round 5) — the tokenizer must honor HTTP
+    # quoted-pair (`\"`) escaping and reject unterminated quoted strings, so an
+    # escaped quote cannot end a quoted-string early and let a rejecting q-value
+    # leak past, and a malformed open quote cannot hide a later q-value.
+    it "is false for an escaped quote inside a quoted param before q=0 (quoted-pair)" do
+      stub_accept_header('application/json;note="a\",b";q=0')
+      expect(controller.send(:__ruact_json_accept?)).to be(false)
+    end
+
+    it "is true for an escaped quote inside a quoted param with a positive q" do
+      stub_accept_header('application/json;note="a\",b";q=0.9')
+      expect(controller.send(:__ruact_json_accept?)).to be(true)
+    end
+
+    it "is false for an unterminated quoted string that hides q=0" do
+      stub_accept_header('application/json;note="open;q=0')
+      expect(controller.send(:__ruact_json_accept?)).to be(false)
+    end
+
+    # Review patch (2026-06-08, round 5) — q-values must match the RFC 7231
+    # qvalue grammar, not just "a Float in 0..1". Malformed q-values must not
+    # opt a request into Bucket 2.
+    it "is false for a leading-dot q-value (q=.5)" do
+      stub_accept_header("application/json;q=.5")
+      expect(controller.send(:__ruact_json_accept?)).to be(false)
+    end
+
+    it "is false for a leading-zero q-value (q=01)" do
+      stub_accept_header("application/json;q=01")
+      expect(controller.send(:__ruact_json_accept?)).to be(false)
+    end
+
+    it "is false for an exponent q-value (q=1e-1)" do
+      stub_accept_header("application/json;q=1e-1")
+      expect(controller.send(:__ruact_json_accept?)).to be(false)
+    end
+
+    it "is false for an over-precision q-value (q=0.1234)" do
+      stub_accept_header("application/json;q=0.1234")
+      expect(controller.send(:__ruact_json_accept?)).to be(false)
+    end
   end
 
   # Review patch (2026-06-08) — `__ruact_function_call?` is now the SEMANTIC
@@ -343,17 +385,58 @@ RSpec.describe Ruact::Server, :story_9_1 do
       end
     end
 
-    it "raises Ruact::ConfigurationError when the guard runs on an inverted controller" do
+    it "raises Ruact::ConfigurationError when the guard runs on an inverted controller (non-GET)" do
       controller = inverted_controller_class.new
+      request = instance_double(ActionDispatch::Request, get?: false, head?: false)
+      allow(controller).to receive(:request).and_return(request)
       expect { controller.send(:__ruact_enforce_upload_limit!) }
         .to raise_error(Ruact::ConfigurationError, /verify_authenticity_token before/)
     end
 
     it "does NOT raise when the guard runs on a correctly-ordered controller" do
       controller = ordered_controller_class.new
-      request = instance_double(ActionDispatch::Request, get?: true, head?: false)
+      # Non-GET so the guard IS applicable (exercises the detector path);
+      # content_mime_type nil makes the guard body short-circuit cleanly.
+      request = instance_double(ActionDispatch::Request, get?: false, head?: false, content_mime_type: nil)
       allow(controller).to receive(:request).and_return(request)
       expect { controller.send(:__ruact_enforce_upload_limit!) }.not_to raise_error
+    end
+
+    # Review patch (2026-06-08, round 5) — D2/AC1: the upload guard never fires
+    # on GET/HEAD, so there is no 413-before-CSRF invariant to enforce on those
+    # requests. The precedence verifier must be a no-op when the guard is not
+    # applicable, even on an inverted host (the misconfig surfaces on the first
+    # non-GET request instead — see the request specs).
+    context "when the request is GET/HEAD and the upload guard is not applicable (review patch round 5)" do
+      it "does NOT raise on an inverted host for a GET request (guard not applicable)" do
+        controller = inverted_controller_class.new
+        request = instance_double(ActionDispatch::Request, get?: true, head?: false)
+        allow(controller).to receive(:request).and_return(request)
+        expect { controller.send(:__ruact_enforce_upload_limit!) }.not_to raise_error
+      end
+
+      it "does NOT raise on an inverted host for a HEAD request (guard not applicable)" do
+        controller = inverted_controller_class.new
+        request = instance_double(ActionDispatch::Request, get?: false, head?: true)
+        allow(controller).to receive(:request).and_return(request)
+        expect { controller.send(:__ruact_enforce_upload_limit!) }.not_to raise_error
+      end
+    end
+
+    # Review patch (2026-06-08, round 4 → confirmed round 5) — nil cap disables
+    # the guard, so the verifier must not fire even on a guarded (non-GET)
+    # request on an inverted host.
+    it "does NOT raise on an inverted host when max_upload_bytes is nil (non-GET)" do
+      Ruact.instance_variable_set(:@config, nil)
+      Ruact.instance_variable_set(:@configured_at_least_once, false)
+      Ruact.configure { |c| c.max_upload_bytes = nil }
+      controller = inverted_controller_class.new
+      request = instance_double(ActionDispatch::Request, get?: false, head?: false)
+      allow(controller).to receive(:request).and_return(request)
+      expect { controller.send(:__ruact_enforce_upload_limit!) }.not_to raise_error
+    ensure
+      Ruact.instance_variable_set(:@config, nil)
+      Ruact.instance_variable_set(:@configured_at_least_once, false)
     end
   end
 end
