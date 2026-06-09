@@ -1054,3 +1054,314 @@ where they conflict with this addendum, this addendum governs. Deviations
 during the redesigned Epic 9 implementation require a further dated addendum
 here before merge.
 
+
+### 2026-06-05 — Story 9.1 — `Ruact::Server` concern lands (Phase A salvage transplant) — in-story decisions
+
+**Scope.** Implements the Phase A salvage transplant from the 2026-06-02
+addendum: the `Ruact::Server` concern (`gem/lib/ruact/server.rb`, loaded by
+the Railtie's `ruact.load_controller` initializer alongside
+`Ruact::Controller`) becomes the v2 home of the Story 8.4 structured-error
+chain and the Story 8.5 upload guard, installed on the host controller's own
+callback chain. The v1 `EndpointController` stays alive untouched as the
+strangler-fig safety net (removed in Story 9.9). At this story the concern is
+a pure marker + salvage host: it registers nothing, emits nothing to codegen
+(Story 9.3), and performs no dual-bucket response negotiation (Story 9.2).
+
+**Shared core.** Both homes include
+`Ruact::ServerFunctions::ErrorRendering` — the extracted 8.4/8.5 bodies
+(structured renderer, status mapping, payload-mode resolution, logging,
+upload guard). Behavioral differences are expressed ONLY through three
+private hooks (`__ruact_error_action_name`,
+`__ruact_render_structured_error?`, `__ruact_upload_guard_applicable?`),
+whose defaults preserve v1 endpoint semantics. The wire contract is therefore
+byte-for-byte identical across both homes by construction. Story 9.9 deletes
+the endpoint home; the module survives as the concern's implementation.
+
+**Decisions taken in this story (delegated by the epic / 2026-06-02 addendum):**
+
+1. **Predicate name + semantics (AC2).** The function-call discrimination
+   point is the private helper **`Ruact::Server#__ruact_function_call?`**:
+   true iff the raw `Accept` request header contains `application/json`
+   (the exact shape the 8.1 runtime sends on every `_makeRef` fetch).
+   Deliberately NOT `request.format` — Rails' format negotiation is
+   influenced by path extensions (`/posts.json`) and `params[:format]`,
+   neither of which may flip the bucket. Story 9.2 MUST reuse this helper
+   verbatim as the dual-bucket discriminator; it lives in one place only.
+2. **D1 — structured-render gating.** The concern's rescue handler renders
+   the structured payload only when `__ruact_function_call?` is true;
+   otherwise it re-raises, so non-function-call requests keep stock Rails
+   error behavior (AC1 byte-for-byte). ONE documented exception:
+   `Ruact::UploadTooLargeError` renders the structured 413 for EVERY request
+   shape — the guard only exists on requests that opted into the concern,
+   and a meaningful 413 beats a re-raised 500 for native multipart form
+   submits. Pinned by `server_upload_request_spec.rb` ("D1 — a native form
+   submit…").
+3. **D2 — upload-guard verb gate.** On host controllers the guard skips
+   GET/HEAD requests (`__ruact_upload_guard_applicable?`); the v1 endpoint
+   was POST-only so this carve-out is new surface, required by the AC1
+   byte-for-byte rule for page actions. All non-GET actions are guarded
+   regardless of bucket (AC4 says "non-GET action", not "function call").
+4. **Open item 4 (2026-06-02 addendum) — RESOLVED: explicit include.**
+   `include Ruact::Server` is always explicit — one line, no magic, never
+   implied by `ruact_render` usage. The concern is also independent of
+   `Ruact::Controller` (neither includes the other); hosts include both.
+
+**Spec re-anchoring.** The 8.4/8.5 behavior matrix moved to
+`spec/ruact/server_spec.rb` + `server_rescue_request_spec.rb` +
+`server_upload_request_spec.rb` (tagged `:story_9_1`), mounted on REAL host
+routes on the shared Story-7.9 Rails app — no `/__ruact/fn/` anywhere, no
+dependency on the v1 spec files that Story 9.9 demolishes. The superseded
+`endpoint_controller_rescue_spec.rb` / `endpoint_controller_upload_spec.rb`
+were removed in the same commit; the v1 endpoint's observable contract
+remains covered by `dispatch_request_spec.rb` / `csrf_request_spec.rb` until
+9.9.
+
+### 2026-06-07 — Story 9.1 — code-review patches (D1 verb gate, inherited precedence, standalone load path)
+
+Three patches from the Story 9.1 code review (gem PR #2), amending the
+2026-06-05 in-story decisions. All three were resolved with Luiz on
+2026-06-06; spec-pinned and landed on the same PR as follow-up commits
+(GitHub Flow — no amend/force-push).
+
+1. **D1 amended — GET/HEAD excluded from structured error rendering.**
+   `__ruact_render_structured_error?` now requires a non-GET/HEAD verb in
+   addition to the function-call predicate. Function calls are non-GET by
+   the verb rule (epic contract decision #1), so a GET/HEAD carrying
+   `Accept: application/json` (a `fetch()` against a page action, an API
+   probe) is NOT a function call — an error there keeps stock Rails
+   behavior instead of being swallowed into the structured payload.
+   **`__ruact_function_call?` itself is UNCHANGED** (raw `Accept` header,
+   verb-agnostic) — Story 9.2 still reuses it verbatim as the dual-bucket
+   discriminator; the verb gate lives only in the error-rendering scope.
+   The `UploadTooLargeError` exception is unaffected (the guard already
+   skips GET/HEAD per D2, so the combination is unreachable).
+2. **Inherited host `rescue_from` precedence.** The 2026-06-05 "host wins"
+   claim only held for handlers declared in the host's own class body AFTER
+   the include — handlers inherited from a parent class sat EARLIER in
+   `rescue_handlers` and lost Rails' most-recently-registered walk to the
+   concern's `StandardError` entry. The concern now moves its two entries to
+   the FRONT of the array at include time
+   (`self.rescue_handlers = (rescue_handlers - inherited) + inherited`), so
+   every host handler — inherited or declared after the include — stays more
+   recent and keeps precedence. The concern-internal Pitfall #1 order
+   (StandardError before InvalidAuthenticityToken) is preserved; the parent
+   class's own registry is untouched (class_attribute write lands on the
+   child). Idempotent under repeated include along an inheritance chain.
+3. **Standalone load path.** `lib/ruact/server.rb` now does
+   `require_relative "../ruact"` so a direct `require "ruact/server"`
+   resolves everything the salvaged chains touch at request time
+   (`Ruact.config` is defined in `ruact.rb`, not `configuration.rb`;
+   `Ruact::UploadTooLargeError`; the ErrorPayload pipeline). Acyclic by
+   construction: the gem root never requires `server.rb` back (the bare
+   `require "ruact"` path stays ActionController-free; the Railtie loads the
+   concern). Pinned by a subprocess spec (`ruby -I lib -e 'require
+   "ruact/server"'`).
+
+### 2026-06-08 — Story 9.1 — code-review patches, round 2 (predicate split, GET/HEAD upload-error gate, CSRF-ordering invariant)
+
+Three further patches from the Story 9.1 code review (gem PR #2), refining the
+2026-06-07 round. Spec-pinned (red→green), landed as a follow-up commit on the
+same PR (GitHub Flow — no amend/force-push).
+
+1. **Predicate split — raw header vs. semantic function-call.** The 2026-06-07
+   round left `__ruact_function_call?` keyed purely on the raw `Accept` header
+   (verb-agnostic) while the verb gate lived only inside
+   `__ruact_render_structured_error?`. But the addendum also designated
+   `__ruact_function_call?` as THE helper Story 9.2 reuses — so the helper
+   encoded the wrong contract (a GET carrying `Accept: application/json` would
+   read as a function call). Now split in two:
+   - `__ruact_json_accept?` — the raw, verb-agnostic header check.
+   - `__ruact_function_call?` — the SEMANTIC predicate:
+     `__ruact_json_accept? && !(request.get? || request.head?)`.
+   The verb rule (function calls are non-GET, epic contract decision #1) now
+   lives in ONE place — the predicate itself — so Story 9.2 inherits the
+   correct contract verbatim. This SUPERSEDES the 2026-06-07 note that
+   "`__ruact_function_call?` itself is UNCHANGED"; the raw check survives under
+   its new name.
+2. **GET/HEAD upload-error gate.** `__ruact_render_structured_error?` now checks
+   the verb FIRST (`return false if request.get? || request.head?`), so the
+   `UploadTooLargeError` exception to the re-raise rule is also verb-gated. The
+   guard never produces that error on a GET/HEAD (it skips them — D2), so the
+   only way one reaches the handler on a GET is a manual `raise` inside a page
+   action — which must keep stock Rails behavior (AC1 byte-for-byte), not be
+   swallowed into a structured 413. The non-GET case is unchanged: a
+   `UploadTooLargeError` from a native multipart form submit (Bucket 1, no JSON
+   Accept) still renders a meaningful 413.
+3. **CSRF-ordering invariant made executable (AC4 / Pitfall #4).** The upload
+   guard is `prepend_before_action`, so it normally beats
+   `verify_authenticity_token`. But a host can re-order CSRF ahead of it with
+   `protect_from_forgery prepend: true`, after which an oversized tokenless
+   multipart request is 403'd before the intended 413 — silently breaking AC4.
+   Rather than document this as the host's responsibility, the concern now
+   detects the inversion in the compiled callback chain
+   (`__ruact_csrf_precedes_upload_guard?` — pure, unit-testable inspection) and
+   fails loudly with a `Ruact::ConfigurationError` from
+   `__ruact_verify_upload_guard_precedence!` (a new no-op hook on
+   `ErrorRendering`, overridden by the concern, invoked before the guard's
+   verb short-circuit). Because CSRF verification is a no-op for GET/HEAD, the
+   guard still runs on page loads, so a misordered controller fails on its
+   first request in development. Note the limit: an oversized tokenless POST to
+   an already-misordered controller is still 403'd at request time (CSRF runs
+   first; the guard cannot run) — the detection makes the misconfiguration
+   impossible to ship unnoticed, it does not silently repair the ordering.
+
+### 2026-06-08 — Story 9.1 — code-review patches, round 3 (ordering invariant on the POST path, ConfigurationError stays loud, conditional-CSRF detector, Accept parsing)
+
+Five further patches from the Story 9.1 code review (gem PR #2), refining the
+round-2 work. Spec-pinned (red→green), landed as a follow-up commit on the same
+PR (GitHub Flow — no amend/force-push).
+
+1. **Ordering invariant now covers the oversized tokenless POST.** Round 2
+   detected the `protect_from_forgery prepend: true` inversion from inside the
+   upload guard, which only runs when reachable — so the exact broken shape
+   (an oversized multipart POST without a CSRF token) still 403'd before the
+   413, because CSRF runs first and aborts the chain before the guard.
+   `__ruact_verify_upload_guard_precedence!` is now ALSO invoked at the top of
+   `ErrorRendering#__ruact_render_action_error`, so the rescue chain
+   re-asserts the invariant on the request shape the guard never sees. Net
+   effect: an inverted controller fails loudly (`Ruact::ConfigurationError`)
+   on EVERY request — GET page loads (guard runs, CSRF no-ops), tokenless
+   POSTs (CSRF raises → rescue re-checks), and valid-token POSTs (guard runs)
+   alike. The misconfiguration can serve no request, which supersedes the
+   round-2 note that "an oversized tokenless POST … is still 403'd at request
+   time". Pinned by a request spec for an oversized tokenless POST on the
+   inverted host.
+2. **`Ruact::ConfigurationError` is never rendered as a structured error.**
+   With the ordering verifier raising `Ruact::ConfigurationError` and the
+   concern's `rescue_from StandardError` chain rendering structured JSON for
+   JSON function calls, a valid-token `Accept: application/json` POST on an
+   inverted host could fold the configuration failure into an ordinary
+   `_ruact_server_action_error` 500. `__ruact_render_structured_error?` now
+   returns false for `Ruact::ConfigurationError` (any source), so configuration
+   invariants stay loud setup failures. Pinned by a non-GET JSON request spec.
+3. **Detector narrowed to UNCONDITIONAL CSRF callbacks.**
+   `__ruact_csrf_precedes_upload_guard?` reduced callbacks to raw filter names
+   and ignored `if`/`unless`/`only`/`except`, so
+   `protect_from_forgery prepend: true, if: -> { false }` (CSRF can never run)
+   still raised. The detector now inspects the compiled before-callback's
+   `@if`/`@unless` arrays (Rails compiles `only:`/`except:` into these) and
+   only flags an unconditional CSRF callback. The genuine misconfig is
+   unconditional, so it is still caught; false positives on conditional CSRF
+   are eliminated. Pinned by `if: -> { false }` and `only:` specs.
+4. **`Accept` header parsed into media ranges.** `__ruact_json_accept?` used
+   `include?("application/json")`, which matched `application/jsonp` and
+   `application/json;q=0` and was case-sensitive. It now parses comma-separated
+   media ranges, matches `application/json` case-insensitively on token
+   boundaries, and requires a positive q-value. This matters because
+   `__ruact_function_call?` feeds Story 9.2's discriminator — a loose match
+   would route ordinary requests into Ruact's structured payload. Pinned by
+   `application/jsonp`, `application/json;q=0`, `Application/JSON`, and
+   `application/json;q=0.5` specs.
+5. **CHANGELOG corrected.** The `[Unreleased]` `Ruact::Server` note now states
+   that function calls are non-GET/HEAD JSON-Accept requests and that the
+   structured 413 applies to non-GET guarded requests (not "every caller
+   shape"), matching the verb-gated round-2/round-3 behavior.
+
+### 2026-06-08 — Story 9.1 — code-review patches, round 4 (applicability-aware CSRF detector, nil-limit no-op, stricter Accept parser, v1 smoke spec)
+
+Four further patches from the Story 9.1 code review (gem PR #2), refining the
+round-3 work. Spec-pinned (red→green), landed as a follow-up commit on the same
+PR (GitHub Flow — no amend/force-push).
+
+1. **CSRF-order detector evaluates applicability (supersedes round 3's
+   "unconditional only").** Round 3 narrowed `__ruact_csrf_precedes_upload_guard?`
+   to UNCONDITIONAL CSRF callbacks to kill false positives, but that created a
+   false NEGATIVE: `protect_from_forgery with: :exception, prepend: true,
+   only: [:create]` (on `create`) or `if: -> { true }` still runs CSRF ahead of
+   the guard yet went unflagged. The detector now evaluates the CSRF callback's
+   compiled `@if`/`@unless` conditions against the controller for the current
+   request/action (`__ruact_callback_applies?` / `__ruact_condition_met?` —
+   Symbol → `send`, Proc → arity-aware `instance_exec`, `ActionFilter` →
+   `match?(self)`). An ACTIVE condition is caught; an inactive one
+   (`only: [:other]`, `if: -> { false }`) is not. The detector is no longer
+   purely static (it reads `action_name` / request-derived state), but both
+   call sites — the guard and the rescue path — run inside a live request.
+   Pinned: `only: [:create]` on `create` (flagged) vs on `index` (not flagged),
+   `if: -> { true }` (flagged), plus the round-3 inactive cases.
+2. **Ordering verifier is a no-op when `max_upload_bytes` is `nil`.** A nil cap
+   is the documented carve-out that disables the gem-side guard, so there is no
+   413-before-CSRF invariant to enforce — failing an inverted host that has
+   intentionally opted out is wrong. `__ruact_verify_upload_guard_precedence!`
+   now returns early when `Ruact.config.max_upload_bytes.nil?`. Pinned: a GET
+   page load on an inverted host with `max_upload_bytes = nil` renders normally
+   instead of raising `Ruact::ConfigurationError`.
+3. **Stricter, quote-aware Accept parser.** The round-3 parser still accepted
+   out-of-range q-values (`q=2`, `q=1.5`) and split on commas without respecting
+   quoted-strings (`application/json;note="a,b";q=0` split before the q-value
+   and defaulted to 1.0). The q-value must now lie within `0.0 < q <= 1.0`, and
+   media ranges / parameters are split with a quote-aware tokenizer
+   (`__ruact_split_unquoted`). This matters because `__ruact_function_call?`
+   feeds Story 9.2's discriminator — a malformed or explicitly-refused JSON
+   Accept must not misclassify a request. Pinned: `q=2`, `q=1.5`, and a quoted
+   comma before `q=0` (all rejected); quoted comma with `q=0.9` (accepted).
+4. **v1 endpoint upload-limit smoke spec.** The v1 endpoint stays alive as the
+   strangler-fig safety net until Story 9.9 and still shares the salvaged upload
+   guard, but the deep upload matrix was re-anchored on the v2 concern (and
+   `endpoint_controller_upload_spec.rb` removed). A minimal observable-contract
+   smoke spec now pins the v1 413 path (oversized multipart
+   `POST /__ruact/fn/:name` → 413 + `_ruact_server_action_error` +
+   `upload_limit`) in `dispatch_request_spec.rb`, so the safety net cannot
+   regress before demolition. Not the old implementation-coupled matrix — just
+   the wire-visible contract.
+
+### 2026-06-08 — Story 9.1 — code-review patches, round 5 (escape-aware Accept tokenizer, strict qvalue grammar, GET/HEAD verifier no-op)
+
+Three further patches from the Story 9.1 code review (gem PR #2), refining the
+round-4 work. Spec-pinned (red→green), landed as a follow-up commit on the same
+PR (GitHub Flow — no amend/force-push).
+
+1. **Escape-aware Accept tokenizer + unterminated-range rejection.** Round 4's
+   quote-aware split toggled quote state on every `"` and ignored HTTP
+   quoted-pair (`\"`) escaping and unterminated quoted strings:
+   `application/json;note="a\",b";q=0` read as JSON-acceptable (the escaped
+   quote ended the quoted-string early, the comma split the range, and the
+   `q=0` was lost → default 1.0). `__ruact_split_unquoted` now honors backslash
+   escapes inside quoted spans, and `__ruact_json_media_range?` rejects a range
+   whose quotes are unbalanced (`__ruact_balanced_quotes?`) rather than parsing
+   it as default-quality JSON. Pinned: escaped quote before `q=0` (rejected),
+   escaped quote with positive q (accepted), unterminated quote hiding `q=0`
+   (rejected).
+2. **Strict RFC 7231 qvalue grammar.** Round 4's `Float`-range check accepted
+   malformed q-values (`q=.5`, `q=01`, `q=1e-1`, `q=0.1234`). The value is now
+   validated against the qvalue grammar (`QVALUE_FORMAT` — `0` / `0.`+≤3 digits
+   / `1` / `1.`+≤3 zeros) before conversion; anything else is a rejecting 0.0.
+   Pinned: leading-dot, leading-zero, exponent, and over-precision values (all
+   rejected).
+3. **Ordering verifier is a no-op on GET/HEAD (supersedes round-2 GET
+   surfacing).** D2 says the upload guard never fires on GET/HEAD, and AC1 says
+   GET page behavior stays byte-for-byte — but the round-2/3 verifier still ran
+   on those verbs, so `protect_from_forgery prepend: true, only: [:index]` on a
+   GET `index` raised `Ruact::ConfigurationError` even though no upload guard
+   could fire. `__ruact_verify_upload_guard_precedence!` now returns early when
+   `__ruact_upload_guard_applicable?` is false. The loud failure is preserved
+   for guarded (non-GET) requests — including the oversized tokenless POST via
+   the rescue path (round 3) — so the misordering still cannot ship unnoticed;
+   it simply surfaces on the first NON-GET (function-call) request instead of
+   on a page load. This SUPERSEDES the round-2 note that GET page loads fail
+   immediately on a misordered host. Pinned: GET on an unconditionally-inverted
+   host renders (200); GET whose CSRF is scoped to the GET action (`only:`)
+   renders (200); non-GET inverted specs still fail loudly; unit GET/HEAD
+   no-raise + nil-limit non-GET no-raise.
+
+### 2026-06-08 — Story 9.1 — contract simplification after review round 5
+
+The repeated review loop on Story 9.1 exposed two over-engineered edges:
+request-time callback-order introspection for the upload guard, and a hand-
+rolled Accept parser that kept accreting RFC 7231 edge handling. The final
+decision is to simplify both contracts rather than keep patching them.
+
+1. **Accept is now exact.** The v2 concern treats only `Accept: application/json`
+   as a JSON-Accept request. Exact header match, no qvalue parsing, no media-
+   range splitting, no quoted-string handling. This matches the generated
+   runtime shape and removes the parser surface entirely.
+2. **Upload-order verification is documented, not enforced at runtime.** The
+   concern still installs the upload guard, but it no longer introspects the
+   callback chain to detect `protect_from_forgery prepend: true`. Hosts are
+   expected to include `Ruact::Server` after `protect_from_forgery`; the order
+   is documented in the changelog and story file instead of being enforced via
+   request-time callback inspection.
+
+Pinned by the simplified round-6 follow-up specs: exact `Accept:
+application/json` is the only function-call discriminator, and the upload guard
+still works on correctly ordered hosts while the misordered-host behavior is no
+longer special-cased.

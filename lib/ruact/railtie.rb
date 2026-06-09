@@ -6,6 +6,8 @@ module Ruact
   class Railtie < Rails::Railtie
     initializer "ruact.load_controller" do
       require_relative "controller"
+      # Story 9.1 — the v2 route-driven marker concern (`include Ruact::Server`).
+      require_relative "server"
       require_relative "server_action"
     end
 

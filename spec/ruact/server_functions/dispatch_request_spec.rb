@@ -19,6 +19,7 @@ require "action_view/railtie"
 
 require "spec_helper"
 require "rack/test"
+require "tempfile"
 
 require "ruact/controller"
 require "ruact/server_functions/endpoint_controller"
@@ -426,10 +427,10 @@ RSpec.describe "Story 8.1: POST /__ruact/fn/:name dispatch", :story_8_1 do
   describe "Story 8.5 — regression: multipart UploadedFile passes through ruact_action_raw_args", :story_8_5 do
     # Regression guard against future refactors of the controller-hosted
     # branch's multipart path (controller.rb `ruact_action_raw_args` →
-    # `request.request_parameters`). The full request-cycle coverage lives
-    # in endpoint_controller_upload_spec.rb; this single example pins the
-    # behavior here so the dispatch suite catches a regression even if the
-    # upload-spec file is renamed/relocated.
+    # `request.request_parameters`). The deep request-cycle coverage moved to
+    # the v2 concern in Story 9.1 (`spec/ruact/server_upload_request_spec.rb`);
+    # this single example pins the controller-hosted pass-through here so the
+    # dispatch suite catches a regression even if that file moves.
     it "params[:cover] reaches the block as ActionDispatch::Http::UploadedFile" do
       fixture_path = File.expand_path("../../support/fixtures/pixel.png", __dir__)
       DispatchRequestSpecSupport::TestController.ruact_action(:upload_check) do |params|
@@ -440,6 +441,43 @@ RSpec.describe "Story 8.1: POST /__ruact/fn/:name dispatch", :story_8_1 do
            { "cover" => Rack::Test::UploadedFile.new(fixture_path, "image/png") }
       expect(last_response.status).to eq(200)
       expect(JSON.parse(last_response.body).fetch("klass")).to eq("ActionDispatch::Http::UploadedFile")
+    end
+  end
+
+  # Story 9.1 review patch (2026-06-08, round 4) — the v1 endpoint stays alive
+  # as the strangler-fig safety net until Story 9.9 and still shares the
+  # salvaged upload guard. The deep upload matrix was re-anchored on the v2
+  # concern (and `endpoint_controller_upload_spec.rb` removed), so this minimal
+  # OBSERVABLE-CONTRACT smoke spec keeps the v1 endpoint's 413 path from
+  # regressing before demolition. Not the old implementation-coupled matrix —
+  # just the wire-visible contract through `POST /__ruact/fn/:name`.
+  describe "Story 9.1 — v1 endpoint upload-limit smoke (strangler safety net)", :story_9_1 do
+    before do
+      # spec_helper's global before-hook resets @config; re-prime AFTER it
+      # (local before runs after global) so the tight cap sticks for the body.
+      Ruact.instance_variable_set(:@config, nil)
+      Ruact.instance_variable_set(:@configured_at_least_once, false)
+      Ruact.configure { |c| c.max_upload_bytes = 1024 }
+    end
+
+    it "an oversized multipart POST /__ruact/fn/:name rejects with 413 + structured upload_limit body" do
+      large = Tempfile.new(["big", ".bin"])
+      large.binmode
+      large.write("x" * 4096) # 4 KB > the 1 KB cap
+      large.rewind
+
+      post "/__ruact/fn/oversized_smoke",
+           { "cover" => Rack::Test::UploadedFile.new(large.path, "application/octet-stream") },
+           { "HTTP_ACCEPT" => "application/json" }
+
+      expect(last_response.status).to eq(413)
+      body = JSON.parse(last_response.body)
+      expect(body.fetch("_ruact_server_action_error")).to be(true)
+      expect(body.fetch("error_class")).to eq("Ruact::UploadTooLargeError")
+      expect(body.fetch("upload_limit")).to include("limit_bytes" => 1024)
+    ensure
+      large.close
+      large.unlink
     end
   end
 

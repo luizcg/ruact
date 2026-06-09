@@ -3,6 +3,7 @@
 require "action_controller"
 
 require_relative "error_payload"
+require_relative "error_rendering"
 
 module Ruact
   module ServerFunctions
@@ -23,6 +24,15 @@ module Ruact
     # are reached indirectly via the wrapper method
     # `__ruact_action_<symbol>` that {Ruact::Controller#ruact_action} defines.
     class EndpointController < ActionController::Base
+      # Story 9.1 — the Story 8.4 error chain + Story 8.5 upload guard bodies
+      # were extracted into the shared {ErrorRendering} module so the
+      # {Ruact::Server} concern (v2) hosts the IDENTICAL implementation during
+      # the strangler-fig transition. This controller keeps v1 semantics via
+      # the module's hook defaults (always render the structured payload,
+      # guard always applicable) plus the `__ruact_error_action_name` override
+      # below. Behavior is byte-for-byte unchanged.
+      include Ruact::ServerFunctions::ErrorRendering
+
       # Story 8.1 AC8 — for controller-hosted actions the gem does NOT impose
       # its own CSRF protection: the host's `ApplicationController` is what
       # enforces `protect_from_forgery`; since those requests are dispatched
@@ -182,39 +192,10 @@ module Ruact
         @__ruact_entry = lookup_entry(@__ruact_name_sym)
       end
 
-      # Story 8.5 — `prepend_before_action` callback. Rejects requests whose
-      # wire `Content-Length` exceeds `Ruact.config.max_upload_bytes`. The
-      # check uses `Content-Length` (not body inspection) so it fires BEFORE
-      # Rack's multipart parser would touch the body — the cheapest possible
-      # reject. It only fires for `multipart/form-data` and
-      # `application/x-www-form-urlencoded`; JSON bodies have their own
-      # operational caps (host middleware / reverse proxy) and aren't a
-      # "max upload" concern in this story. Chunked-transfer clients
-      # (`Content-Length` absent) bypass the guard because we cannot know
-      # the size up-front; the action body is responsible for any belt-and-
-      # suspenders check via `params[:file].size` / `params[:file].byte_size`.
-      # A nil `Ruact.config.max_upload_bytes` short-circuits the guard
-      # entirely — the gem-side knob has been opted out and the host's
-      # reverse proxy / middleware owns the cap.
-      #
-      # The reported `received_bytes` is the WIRE Content-Length, which
-      # includes multipart boundary overhead (a 9.5 MB file uploaded via
-      # multipart reports `received_bytes ≈ 9.5 MB + a few KB`). The 10 MB
-      # default has enough headroom that this is invisible for the common
-      # case; the docs page calls it out for the edge.
-      def __ruact_enforce_upload_limit!
-        limit = Ruact.config.max_upload_bytes
-        return if limit.nil?
-
-        content_type = request.content_mime_type&.to_s
-        return unless ["multipart/form-data", "application/x-www-form-urlencoded"].include?(content_type)
-
-        received = request.content_length
-        return if received.nil?
-        return if received <= limit
-
-        raise Ruact::UploadTooLargeError.new(received_bytes: received, limit_bytes: limit)
-      end
+      # Story 8.5 — the upload-guard body lives in {ErrorRendering}
+      # (`__ruact_enforce_upload_limit!`); this controller uses it via the
+      # `prepend_before_action` above with the module's "always applicable"
+      # default (the endpoint route is POST-only — no GET carve-out needed).
 
       def dispatching_standalone?
         return false unless @__ruact_entry
@@ -236,90 +217,20 @@ module Ruact
         )
       end
 
-      # Story 8.4 — Structured server-action error renderer. Resolves the
-      # mode from {Ruact.config.dev_error_payload_enabled} (falling back to
-      # `Rails.env.development? || Rails.env.test?` when nil), builds the
-      # JSON body via {ErrorPayload.build}, logs the failure server-side
-      # (always — the prod constraint is "do not leak via the wire", not
-      # "do not log"), then renders `json: payload, status: <mapped>`.
-      def __ruact_render_action_error(error)
-        # Story 8.5 — the upload-limit guard runs BEFORE `resolve_ruact_entry!`,
-        # so `@__ruact_name_sym` may still be nil when a 413 fires. Fall back
-        # to `request.path_parameters[:name]` (the URL `:name` segment Rails
-        # routed on) so the structured payload still carries a meaningful
-        # `action_name` instead of "(unknown)".
-        action_name = @__ruact_name_sym ||
-                      request.path_parameters[:name]&.to_s&.to_sym ||
-                      :"(unknown)"
-        mode = __ruact_payload_mode
-        payload = ErrorPayload.build(action_name: action_name, error: error, mode: mode)
-        __ruact_log_action_error(action_name, error)
-        render(json: payload, status: __ruact_status_for(error))
-      end
-
-      # Story 8.4 — Status mapping per AC1:
-      # - `ActiveRecord::RecordInvalid` → 422
-      # - `ActionController::InvalidAuthenticityToken` → 403
-      # - any other StandardError → 500
-      # Uses class-name string match so the gem does NOT require ActiveRecord
-      # at load time (parity with {ErrorSuggestion}).
-      def __ruact_status_for(error)
-        case error.class.name
-        when "ActiveRecord::RecordInvalid" then 422
-        when "ActionController::InvalidAuthenticityToken" then 403
-        when "Ruact::UploadTooLargeError" then 413
-        else 500
-        end
-      end
-
-      # Story 8.4 — Resolve the payload mode from configuration with a Rails
-      # env fallback. The fallback keeps the Configuration trivially
-      # constructible in non-Rails specs while ensuring production hosts that
-      # never call `Ruact.configure` still see the reduced wire shape.
+      # Story 8.4 / 9.1 — the structured-error renderer body lives in
+      # {ErrorRendering} (`__ruact_render_action_error` + status mapping +
+      # payload-mode resolution + logging). This override supplies the v1
+      # `action_name` source.
       #
-      # Strict-boolean handling (review follow-up): only the literals `true`
-      # and `false` count as an explicit configuration. Any other value
-      # (strings like `"true"`, numerics, Symbols, etc.) falls back to the
-      # env-driven default rather than being coerced via Ruby truthiness —
-      # otherwise a misconfigured `c.dev_error_payload_enabled = "false"`
-      # would silently leak the verbose payload in production.
-      def __ruact_payload_mode
-        case Ruact.config.dev_error_payload_enabled
-        when true  then :development
-        when false then :production
-        else __ruact_default_dev_mode? ? :development : :production
-        end
-      end
-
-      def __ruact_default_dev_mode?
-        return false unless defined?(Rails) && Rails.respond_to?(:env)
-
-        Rails.env.development? || Rails.env.test?
-      end
-
-      # Story 8.4 AC6 — log a single error line + the full backtrace, both at
-      # `error` severity. When `Rails.logger` responds to `tagged` (the
-      # ActiveSupport::TaggedLogging extension; Rails 6+ default for the
-      # request logger), wrap the entry in a `ruact action:<name>` tag for
-      # log-aggregator indexing. The full backtrace is emitted regardless of
-      # the wire-payload mode — server-side logs always carry the full
-      # picture.
-      def __ruact_log_action_error(action_name, error)
-        return unless defined?(Rails) && Rails.respond_to?(:logger) && Rails.logger
-
-        line = "[ruact] server action :#{action_name} failed — #{error.class.name}: #{error.message}"
-        backtrace_text = Array(error.backtrace).join("\n")
-
-        logger = Rails.logger
-        if logger.respond_to?(:tagged)
-          logger.tagged("ruact action:#{action_name}") do
-            logger.error(line)
-            logger.error(backtrace_text) unless backtrace_text.empty?
-          end
-        else
-          logger.error(line)
-          logger.error(backtrace_text) unless backtrace_text.empty?
-        end
+      # Story 8.5 — the upload-limit guard runs BEFORE `resolve_ruact_entry!`,
+      # so `@__ruact_name_sym` may still be nil when a 413 fires. Fall back
+      # to `request.path_parameters[:name]` (the URL `:name` segment Rails
+      # routed on) so the structured payload still carries a meaningful
+      # `action_name` instead of "(unknown)".
+      def __ruact_error_action_name
+        @__ruact_name_sym ||
+          request.path_parameters[:name]&.to_s&.to_sym ||
+          :"(unknown)"
       end
     end
   end
