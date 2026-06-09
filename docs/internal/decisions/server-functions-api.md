@@ -1450,3 +1450,114 @@ cannot unconditionally guarantee the final header, and a Rack-level mechanism
 was judged not worth the complexity for this edge. This mirrors the Story 9.1
 lesson — stop patching the edges of a mechanism once the remaining cases stop
 earning their complexity.
+
+#### 2026-06-09 — Story 9.3 — Route-driven codegen for mutations + runtime re-target
+
+Phase B. The codegen SOURCE swaps from the v1 registries to the Rails route
+table, and the runtime SWAPS from the synthetic `POST /__ruact/fn/:name` to real
+REST routes + verbs. Resolves the ADR open items left by Story 9-0 (namespace
+scheme, rename-override macro) and the `$redirect` client-follow 9.2 deferred.
+
+**Source (AC1).** `Ruact::ServerFunctions::RouteSource.collect(route_set)` reads
+`Rails.application.routes`, keeps only non-GET/HEAD verbs (POST/PUT/PATCH/DELETE)
+whose controller `include Ruact::Server`, and emits version-2 snapshot entries:
+`{ js_identifier, kind: "action", http_method, path, segments, controller, action }`.
+GET routes are pages — never callables. The `update` PATCH/PUT pair collapses to
+one entry (`http_method: "PATCH"`, Rails' primary). Pure: the host predicate +
+override lookup are injected (default = constant resolution) so the derivation
+table is unit-testable without booting controllers.
+
+**Naming derivation table (AC3 — LOCKED).**
+`js_identifier = lowerCamel(action) + Namespace*(Pascal) + Resource(Pascal)`,
+where `lowerCamel` is the existing `NameBridge` camelization (leading underscore
+preserved). Resource word: SINGULAR for the RESTful writes
+(`create`/`update`/`destroy`) and for any member route (path carries `:id`);
+PLURAL for a custom collection route.
+
+| Route (`verb controller#action`) | js_identifier |
+|---|---|
+| `POST posts#create` | `createPost` |
+| `PATCH/PUT posts#update` | `updatePost` (PATCH) |
+| `DELETE posts#destroy` | `destroyPost` |
+| `GET posts#index/show/new/edit` | — (skipped; pages) |
+| `POST posts#publish` (member) | `publishPost` |
+| `POST posts#publish_all` (collection) | `publishAllPosts` |
+| `POST session#create` (`resource :session`) | `createSession` |
+| `DELETE account#destroy` (singular) | `destroyAccount` |
+| `POST admin/posts#create` (namespaced) | `createAdminPost` |
+| `POST admin/reports/posts#create` | `createAdminReportsPost` |
+
+**Namespace = PREFIX, not flat (D3 — resolves 9-0 open item #2).** Namespace
+segments are PascalCased and inserted between verb and resource. Rationale:
+flattening guarantees `admin/posts#create` and `posts#create` collide on
+`createPost`, forcing rename-overrides for the common admin case; prefixing keeps
+the merged JS namespace collision-free by construction.
+
+**Rename-override macro (D4 — resolves 9-0 open item #3).**
+`ruact_function_name :action, as: "jsIdentifier"` — a class macro on the
+`Ruact::Server` host (`Ruact::Server::ClassMethods`). Populates a per-controller
+`__ruact_function_name_overrides` map (action name → js identifier) that
+`RouteSource` consults before collision detection. The target is validated at
+class-load time against the JS-identifier shape + reserved-word /
+`RESERVED_BY_RUACT` rules (a bad override fails at boot, never at codegen).
+
+**Collision detection (AC4).** Two distinct routes mapping to the same
+js_identifier (after overrides) raise `Ruact::ConfigurationError` at boot naming
+BOTH origins (`posts#create and comments#create both map to JS identifier
+"createPost"`), mirroring the v1 cross-registry collision raise.
+
+**Transparency (AC2).** `Ruact::ServerFunctions.write_v2_snapshot!` always logs
+`[ruact] codegen: exposing <comma-list>` — a routed non-GET action never becomes
+a callable silently (the verb-rule's mitigation, epic Decision #1).
+
+**Runtime re-target (AC7, D6).** New runtime export `_makeServerFunction({ method,
+path, segments })` for v2; v1 `_makeRef(name)` is BYTE-BEHAVIOR-IDENTICAL (still
+POSTs `/__ruact/fn/:name`). Both factor through a shared `ruactInvoke({ method,
+url, args, label })` core — same FormData branching, CSRF meta injection,
+`credentials: "same-origin"`, `redirect: "error"`, text-first parsing,
+`RuactActionError`. Adding a NEW export (not widening `_makeRef`) is what makes
+AC6 "no shared-runtime leak" true by construction: the v1 path consumes
+`_makeRef`, the v2 path consumes `_makeServerFunction`.
+
+**Path-param interpolation (D7).** Member/`:id` routes need the id in the URL
+(the v1 synthetic endpoint never did). The descriptor carries the path template
++ segment names; at call time the runtime reads each segment BY NAME from the
+single FormData/object argument (`FormData.get("id")` / `args.id`),
+URL-encodes it, and substitutes into the path — the full argument is still sent
+as the body (Rails reads `params[:id]` from the path; the duplicate is ignored).
+The single-arg shape (8.2 `<form action>` / `useActionState`) is unchanged. A
+missing required segment throws a clear `TypeError` before any fetch.
+
+**`$redirect` client-follow (D2 / AC8 — resolves the 9.2 deferral).** When a
+Bucket-2 mutation returns `{ "$redirect": "<path>" }`, the v2 runtime navigates
+via `globalThis.__ruact_navigate` (the same global handoff `revalidate()` uses),
+falling back to `window.location.assign(path)` when no router is installed, and
+resolves `null`. Applied ONLY on the v2 path — the v1 endpoint never emits
+`$redirect`, so `_makeRef` is unaffected. Publishing `__ruact_navigate` from
+`ruact-router.js#setupRouter` is playground wiring → Story 9.8.
+
+**Codegen render (Ruby + JS byte-identical).** `Codegen.render` dispatches on
+`snapshot.version`: version 1 → the untouched v1 renderer; version 2 →
+`Codegen::V2.render` (separate module so the v1 singleton class stays within its
+size budget), emitting `_makeServerFunction({ method, path, segments })` with the
+SAME Story-8.2 intersection signature on every action. The JS-side `renderV2`
+mirrors it; the parity vitest ("Story 9.3 — route-driven (v2) render + parity")
+asserts byte equality against the Ruby renderer.
+
+**Single-writer / `.next` parallel target (AC5).** The v2 codegen writes to a
+PARALLEL bridge `tmp/cache/ruact/server-functions.next.json` →
+`app/javascript/.ruact/server-functions.next.ts`, rendered by the Ruby codegen
+(Vite does not watch `.next`). Per AC5 this target is for parity tests +
+inspection ONLY — never imported by application code — so the real
+`server-functions.ts` (v1, rendered by Vite from the v1 bridge) is untouched
+(AC6). **Scoping decision (refines create-time D5):** in Story 9.3 the v2 codegen
+ALWAYS writes the parallel target — it never takes over the real file. The
+Decision-#6 ownership flip (an app with ZERO v1 declarations → route-driven
+codegen takes over the real `server-functions.ts`) is Story 9.8's job; the
+`Snapshot.v1_declarations?` primitive is provided + tested here for 9.8 to
+consume. This is the literal reading of AC5's "writes to a parallel target …
+never imported," and is strangler-safe (no cross-app behavior change in 9.3).
+
+**Strangler invariant.** The v1 `POST /__ruact/fn/:name` endpoint, registries,
+`ruact_action`/`ruact_query` DSL, and v1 codegen all stay fully alive and
+untouched. Demolition is Story 9.9; playground migration is Story 9.8.
