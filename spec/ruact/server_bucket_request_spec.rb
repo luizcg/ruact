@@ -86,8 +86,34 @@ module ServerBucketSpecSupport
       @ok = true
     end
 
+    # Review round 2 — a host that sets Vary: * (uncacheable wildcard) must keep
+    # it as-is, not "*, Accept".
+    def vary_wildcard
+      response.headers["Vary"] = "*"
+      @ok = true
+    end
+
     def unserializable
       @rec = UnserializableRecord.new
+    end
+  end
+
+  # Review round 2 — an auth-style before_action that redirects on a Bucket-2
+  # call: the response is performed in the before_action, so after-callbacks are
+  # skipped — Vary must still be present (set by a before_action too).
+  class BucketBeforeRedirectController < ActionController::Base
+    include Ruact::Server
+
+    before_action :bounce
+
+    def never_runs
+      @ok = true
+    end
+
+    private
+
+    def bounce
+      redirect_to "/login"
     end
   end
 
@@ -130,6 +156,8 @@ if defined?(ControllerRequestSpecSupport) &&
     post "/bucket/redirect_external", to: "server_bucket_spec_support/bucket_server#redirect_external"
     post "/bucket/redirect_external_allowed", to: "server_bucket_spec_support/bucket_server#redirect_external_allowed"
     post "/bucket/vary_clobber",    to: "server_bucket_spec_support/bucket_server#vary_clobber"
+    post "/bucket/vary_wildcard",   to: "server_bucket_spec_support/bucket_server#vary_wildcard"
+    post "/bucket/before_redirect", to: "server_bucket_spec_support/bucket_before_redirect#never_runs"
     post "/bucket/unserializable",  to: "server_bucket_spec_support/bucket_server#unserializable"
     post "/bucket/dual_redirecting", to: "server_bucket_spec_support/bucket_dual#redirecting"
     post "/bucket/protected", to: "server_bucket_spec_support/bucket_forgery#create_protected"
@@ -206,6 +234,19 @@ RSpec.describe "Story 9.2: Ruact::Server dual-bucket response negotiation", :sto
       vary = last_response.headers["Vary"]
       expect(vary).to match(/\bCookie\b/)
       expect(vary).to match(/\bAccept\b/)
+    end
+  end
+
+  describe "Vary edge cases (review round 2)" do
+    it "is set on a $redirect performed by a before_action (after-callbacks skipped)" do
+      post "/bucket/before_redirect", "{}", json_headers
+      expect(JSON.parse(last_response.body)).to eq("$redirect" => "/login")
+      expect(last_response.headers["Vary"]).to match(/\bAccept\b/)
+    end
+
+    it "preserves a host Vary: * wildcard as-is (does not produce '*, Accept')" do
+      post "/bucket/vary_wildcard", "{}", json_headers
+      expect(last_response.headers["Vary"]).to eq("*")
     end
   end
 

@@ -77,13 +77,20 @@ module Ruact
       # Story 9.2 AC6 — `Vary: Accept` on every non-GET SUCCESS shape. The same
       # URL + verb serves two bodies discriminated solely on `Accept`, so a
       # cache MUST vary on it (never serve Flight to a JSON caller or vice-versa).
-      # An `after_action` (review round 1) runs AFTER the action + render set
-      # their headers, so it APPENDS `Accept` to a host-set `Vary` instead of a
-      # `before_action` that a later `response.headers["Vary"] = ...` could
-      # clobber. Covers the 200 ivar-JSON / 204 / `$redirect` / Bucket-1 Flight
-      # shapes; error responses (413/403/500) skip it — they are non-cacheable,
-      # not dual representations.
-      after_action :__ruact_set_vary_on_accept!
+      # Set in BOTH a `before_action` and an `after_action` (review rounds 1–2),
+      # because either callback alone has a gap:
+      #   - the `after_action` APPENDS to a host-set `Vary` (preserving it), but
+      #     is skipped when a `before_action` performs the response (e.g. an auth
+      #     `before_action` that `redirect_to`s a Bucket-2 call);
+      #   - the `before_action` covers that halt case (it runs ahead of the
+      #     host's own before-callbacks), but a later `response.headers["Vary"] =`
+      #     in the action would clobber it.
+      # Together they cover the 200 ivar-JSON / 204 / `$redirect` / Bucket-1
+      # Flight shapes (incl. before-callback redirects). The method is
+      # idempotent. Error responses (413/403/500) may still omit it — they are
+      # non-cacheable, not dual representations.
+      before_action :__ruact_set_vary_on_accept!
+      after_action  :__ruact_set_vary_on_accept!
 
       # Story 8.4 salvage — same registration order as v1 (Pitfall #1): the
       # generic StandardError entry first, the explicit
@@ -161,12 +168,15 @@ module Ruact
     private
 
     # AC6 — append `Accept` to the `Vary` response header for non-GET requests
-    # (idempotent, preserves any host-set `Vary`). Runs as an `after_action`
-    # so it appends to whatever `Vary` the action/render set.
+    # (idempotent, preserves any host-set `Vary`). A host `Vary: *` wildcard is
+    # left as-is (review round 2): per HTTP, `Vary` is either `*` (varies on
+    # everything) OR a field-name list — `*, Accept` is invalid/weaker.
     def __ruact_set_vary_on_accept!
       return if request.get? || request.head?
 
       values = response.headers["Vary"].to_s.split(",").map(&:strip).reject(&:empty?)
+      return if values.include?("*")
+
       values << "Accept" unless values.any? { |value| value.casecmp?("Accept") }
       response.headers["Vary"] = values.join(", ")
     end
