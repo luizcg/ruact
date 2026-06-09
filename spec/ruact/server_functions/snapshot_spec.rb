@@ -186,6 +186,71 @@ module Ruact
           expect(JSON.parse(File.read(path))["version"]).to eq(1)
         end
       end
+
+      describe "route-driven (v2) snapshot (Story 9.3)", :story_9_3 do
+        let(:entries) do
+          [
+            { "js_identifier" => "createPost", "kind" => "action", "http_method" => "POST",
+              "path" => "/posts", "segments" => [], "controller" => "posts", "action" => "create" }
+          ]
+        end
+
+        describe ".dump_v2" do
+          it "wraps entries in a version-2 snapshot Hash" do
+            snap = described_class.dump_v2(entries, now: frozen_time)
+            expect(snap[:version]).to eq(2)
+            expect(snap[:generated_at]).to eq(frozen_time.iso8601)
+            expect(snap[:functions]).to eq(entries)
+          end
+        end
+
+        describe ".generate_v2! (write-if-changed)" do
+          around do |example|
+            Dir.mktmpdir do |dir|
+              @tmpdir = dir
+              example.run
+            end
+          end
+
+          let(:path) { File.join(@tmpdir, "server-functions.next.json") }
+
+          it "writes a version-2 bridge on first call" do
+            expect(described_class.generate_v2!(entries: entries, path: path, now: frozen_time)).to be(true)
+            parsed = JSON.parse(File.read(path))
+            expect(parsed.fetch("version")).to eq(2)
+            expect(parsed.fetch("functions").first.fetch("js_identifier")).to eq("createPost")
+          end
+
+          it "short-circuits when entries are unchanged (no timestamp churn)" do
+            described_class.generate_v2!(entries: entries, path: path, now: frozen_time)
+            expect(described_class.generate_v2!(entries: entries, path: path, now: Time.now.utc)).to be(false)
+          end
+
+          it "rewrites when entries change" do
+            described_class.generate_v2!(entries: entries, path: path, now: frozen_time)
+            more = entries + [{ "js_identifier" => "destroyPost", "kind" => "action",
+                                "http_method" => "DELETE", "path" => "/posts/:id",
+                                "segments" => ["id"], "controller" => "posts", "action" => "destroy" }]
+            expect(described_class.generate_v2!(entries: more, path: path, now: frozen_time)).to be(true)
+          end
+        end
+
+        describe ".v1_declarations? (Decision-#6 ownership primitive)" do
+          it "is false when both registries are empty" do
+            expect(described_class.v1_declarations?(Registry.new, Registry.new)).to be(false)
+          end
+
+          it "is true when the action registry has any entry" do
+            actions.register(:create_post, kind: :action, controller: posts_controller)
+            expect(described_class.v1_declarations?(actions, Registry.new)).to be(true)
+          end
+
+          it "is true when the query registry has any entry" do
+            queries.register(:categories, kind: :query, controller: cats_controller)
+            expect(described_class.v1_declarations?(Registry.new, queries)).to be(true)
+          end
+        end
+      end
     end
   end
 end

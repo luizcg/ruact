@@ -77,6 +77,9 @@ module Ruact
 
         entries = [
           "app/javascript/.ruact/server-functions.ts",
+          # Story 9.3 — the route-driven (v2) parallel inspection target is also
+          # generated output, never source.
+          "app/javascript/.ruact/server-functions.next.ts",
           "tmp/cache/ruact/"
         ]
         # Substring matches (`existing.include?(entry)`) were unsafe — they

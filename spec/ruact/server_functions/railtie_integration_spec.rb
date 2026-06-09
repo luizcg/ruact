@@ -11,6 +11,7 @@ require "action_controller"
 # spec/ruact/railtie_spec.rb).
 require "ruact/railtie"
 require "ruact/controller"
+require "ruact/server"
 
 # Story 8.0a — Railtie.write_server_functions_snapshot! is the entry point
 # wired into `config.to_prepare`. The full to_prepare boot lives in
@@ -59,6 +60,68 @@ module Ruact
         expect(Ruact::Railtie.write_server_functions_snapshot!).to be(true)
         parsed = JSON.parse(File.read(path))
         expect(parsed["functions"].map { |fn| fn["ruby_symbol"] }).to eq(["demo_ping"])
+      end
+    end
+
+    RSpec.describe "Ruact::ServerFunctions.write_v2_snapshot! (Story 9.3)", :story_9_3 do
+      # A real Ruact::Server host so RouteSource's default constant-resolving
+      # host predicate recognizes it; stub_const (not a literal class) keeps the
+      # file single-definition and the constant scoped to the example.
+      before do
+        stub_const("V2DemoPostsController", Class.new(ActionController::Base) { include Ruact::Server })
+      end
+
+      around do |example|
+        Dir.mktmpdir { |dir| @tmpdir = dir and example.run }
+      end
+
+      def route_set
+        rs = ActionDispatch::Routing::RouteSet.new
+        rs.draw { resources :v2_demo_posts, only: %i[create update destroy] }
+        rs
+      end
+
+      def write!(logger: nil)
+        Ruact::ServerFunctions.write_v2_snapshot!(
+          route_set: route_set, root: Pathname.new(@tmpdir), logger: logger
+        )
+      end
+
+      let(:next_json) { File.join(@tmpdir, "tmp/cache/ruact/server-functions.next.json") }
+      let(:next_ts)   { File.join(@tmpdir, "app/javascript/.ruact/server-functions.next.ts") }
+      let(:real_json) { File.join(@tmpdir, "tmp/cache/ruact/server-functions.json") }
+
+      it "writes the v2 bridge + TS to the PARALLEL .next target (not the real file)" do
+        entries = write!
+
+        expect(entries.map { |e| e["js_identifier"] })
+          .to match_array(%w[createV2DemoPost updateV2DemoPost destroyV2DemoPost])
+        expect(File).to exist(next_json)
+        expect(File).to exist(next_ts)
+        # AC5/AC6 — the v1 real bridge is NOT written by the v2 path.
+        expect(File).not_to exist(real_json)
+        expect(JSON.parse(File.read(next_json)).fetch("version")).to eq(2)
+      end
+
+      it "renders _makeServerFunction calls targeting real routes into the .next TS" do
+        write!
+        ts = File.read(next_ts)
+        expect(ts).to include('import { _makeServerFunction } from "ruact/server-functions-runtime";')
+        expect(ts).to include('_makeServerFunction({ method: "POST", path: "/v2_demo_posts", segments: [] });')
+        expect(ts).to include('_makeServerFunction({ method: "PATCH", path: "/v2_demo_posts/:id", segments: ["id"] });')
+      end
+
+      it "is byte-stable across calls on an unchanged route table (no churn)" do
+        write!
+        first = File.read(next_ts)
+        write!
+        expect(File.read(next_ts)).to eq(first)
+      end
+
+      it "logs the exposed function names (AC2 — transparency over silence)" do
+        logger = instance_double(Logger, info: nil)
+        write!(logger: logger)
+        expect(logger).to have_received(:info).with(/\[ruact\] codegen: exposing .*createV2DemoPost/)
       end
     end
 

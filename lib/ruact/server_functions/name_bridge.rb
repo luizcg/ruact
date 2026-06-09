@@ -55,6 +55,7 @@ module Ruact
       # surfaces during boot, not at first request.
       RESERVED_BY_RUACT = %w[
         _makeRef
+        _makeServerFunction
         revalidate
       ].to_set.freeze
 
