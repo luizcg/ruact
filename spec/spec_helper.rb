@@ -55,5 +55,13 @@ RSpec.configure do |config|
     # cannot bleed entries into another under random order.
     Ruact.instance_variable_set(:@action_registry, nil)
     Ruact.instance_variable_set(:@query_registry, nil)
+    # Story 9.3: specs that set `Rails.logger = instance_double(Logger)` (e.g.
+    # railtie_spec, configuration_spec) leave a per-example double on the global
+    # after they finish; rspec then refuses to call it from the NEXT example.
+    # That was harmless until the codegen/rake paths began reading `Rails.logger`
+    # (the `[ruact] codegen: exposing …` line). Reset it to a real, silent logger
+    # before every example so no leaked double survives — examples that need a
+    # specific logger set their own in their own `before` (which runs after this).
+    Rails.logger = Logger.new(IO::NULL) if defined?(Rails) && Rails.respond_to?(:logger=)
   end
 end
