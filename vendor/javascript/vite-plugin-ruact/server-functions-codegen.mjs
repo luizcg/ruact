@@ -346,6 +346,16 @@ function validateSnapshotV2(snapshot) {
           "snapshot JSON is corrupted.",
       );
     }
+    // Bidirectional: every dynamic `:param` in the path must be declared.
+    const pathParams = (fn.path.match(/:[A-Za-z_][A-Za-z0-9_]*/g) || []).map((t) => t.slice(1));
+    const undeclared = pathParams.filter((p) => !fn.segments.includes(p));
+    if (undeclared.length > 0) {
+      throw new Error(
+        `ruact server-function codegen: v2 snapshot entry "${fn.js_identifier}" path ${JSON.stringify(fn.path)} ` +
+          `has dynamic segment(s) ${JSON.stringify(undeclared)} not declared in segments; ` +
+          "snapshot JSON is corrupted.",
+      );
+    }
   }
 }
 

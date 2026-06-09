@@ -807,6 +807,18 @@ describe("Story 9.3 — route-driven (v2) render + parity", () => {
     ).toThrow(/absent from path/);
   });
 
+  it("rejects a v2 path with an undeclared dynamic segment (bidirectional guard)", () => {
+    expect(() =>
+      render({
+        version: 2,
+        generated_at: "x",
+        functions: [
+          { js_identifier: "updatePost", kind: "action", http_method: "PATCH", path: "/posts/:id", segments: [] },
+        ],
+      }),
+    ).toThrow(/not declared in segments/);
+  });
+
   it("rejects a v2 segment that only substring-matches a longer path token", () => {
     expect(() =>
       render({

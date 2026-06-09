@@ -404,6 +404,16 @@ module Ruact
             .to raise_error(Ruact::ConfigurationError, /reserved/)
         end
 
+        it "rejects a v2 path with an undeclared dynamic segment (bidirectional guard)" do
+          evil = v2_snapshot.merge(functions: [
+                                     { "js_identifier" => "updatePost", "kind" => "action",
+                                       "http_method" => "PATCH", "path" => "/posts/:id",
+                                       "segments" => [] }
+                                   ])
+          expect { described_class.render(evil) }
+            .to raise_error(Ruact::ConfigurationError, /not declared in segments/)
+        end
+
         it "rejects a v2 segment that only substring-matches a longer path token" do
           evil = v2_snapshot.merge(functions: [
                                      { "js_identifier" => "updatePost", "kind" => "action",

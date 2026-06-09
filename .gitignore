@@ -15,3 +15,7 @@ vendor/javascript/vite-plugin-ruact/node_modules/
 vendor/javascript/ruact-server-functions-runtime/node_modules/
 vendor/javascript/ruact-server-functions-runtime/package-lock.json
 /log/
+
+# Story 9.3 — generated server-functions codegen output (host-app artifact; the
+# Story 7.9 spec app boots with Rails.root = gem dir, so to_prepare renders here).
+/app/javascript/.ruact/

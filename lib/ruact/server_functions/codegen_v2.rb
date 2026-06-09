@@ -149,11 +149,20 @@ module Ruact
             # Whole-token match: `:id` must NOT satisfy a declared segment when
             # the path only has `:id_extra` (a substring `include?` would).
             missing = segments.reject { |s| path.match?(/:#{Regexp.escape(s)}(?![A-Za-z0-9_])/) }
-            return if missing.empty?
+            unless missing.empty?
+              raise Ruact::ConfigurationError,
+                    "ruact server-function codegen: v2 snapshot entry #{js_id.inspect} declares " \
+                    "segment(s) #{missing.inspect} absent from path #{path.inspect}; snapshot JSON is corrupted."
+            end
+
+            # Bidirectional: every dynamic `:param` in the path MUST be declared
+            # in segments, else the runtime would fetch a literal `:param` URL.
+            undeclared = path.scan(/:([A-Za-z_][A-Za-z0-9_]*)/).flatten - segments
+            return if undeclared.empty?
 
             raise Ruact::ConfigurationError,
-                  "ruact server-function codegen: v2 snapshot entry #{js_id.inspect} declares " \
-                  "segment(s) #{missing.inspect} absent from path #{path.inspect}; snapshot JSON is corrupted."
+                  "ruact server-function codegen: v2 snapshot entry #{js_id.inspect} path #{path.inspect} " \
+                  "has dynamic segment(s) #{undeclared.inspect} not declared in segments; snapshot JSON is corrupted."
           end
 
           # v2 snapshots use string keys on disk; specs may pass symbol keys.
