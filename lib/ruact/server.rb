@@ -70,19 +70,20 @@ module Ruact
     include Ruact::ServerFunctions::ErrorRendering
 
     included do
-      # Story 9.2 AC6 — `Vary: Accept` on every non-GET response shape. The same
-      # URL + verb serves two bodies discriminated solely on `Accept`, so a
-      # cache MUST vary on it (never serve Flight to a JSON caller or vice-versa).
-      # Prepended FIRST here so the upload guard (prepended next) still lands
-      # ahead of it — keeping the Story 8.5 "guard wins the callback race"
-      # invariant. Vary therefore runs on every shape EXCEPT the 413 upload
-      # rejection (the guard aborts first); the 200 / 204 / `$redirect` / Flight
-      # / structured-500 / 403-CSRF shapes all carry it.
-      prepend_before_action :__ruact_set_vary_on_accept!
-
       # Story 8.5 salvage — prepended so the size check wins the race against
       # every other callback, including `verify_authenticity_token`.
       prepend_before_action :__ruact_enforce_upload_limit!
+
+      # Story 9.2 AC6 — `Vary: Accept` on every non-GET SUCCESS shape. The same
+      # URL + verb serves two bodies discriminated solely on `Accept`, so a
+      # cache MUST vary on it (never serve Flight to a JSON caller or vice-versa).
+      # An `after_action` (review round 1) runs AFTER the action + render set
+      # their headers, so it APPENDS `Accept` to a host-set `Vary` instead of a
+      # `before_action` that a later `response.headers["Vary"] = ...` could
+      # clobber. Covers the 200 ivar-JSON / 204 / `$redirect` / Bucket-1 Flight
+      # shapes; error responses (413/403/500) skip it — they are non-cacheable,
+      # not dual representations.
+      after_action :__ruact_set_vary_on_accept!
 
       # Story 8.4 salvage — same registration order as v1 (Pitfall #1): the
       # generic StandardError entry first, the explicit
@@ -132,20 +133,36 @@ module Ruact
     # Story 9.2 AC3 (D2) — on a function-call request, `redirect_to` surfaces as
     # a JSON redirect directive — body `"$redirect" => "<path>"` (the runtime
     # follows it client-side; re-targeting/following is Story 9.3) instead of a
-    # 302 or a Flight redirect row. Any other request shape falls through to `super` so the
-    # Bucket-1 Flight redirect row / Rails 302 is unchanged (AC1). Same-origin
-    # redirects collapse to a path (mirroring `Ruact::Controller`); external
-    # origins keep the absolute URL.
+    # 302 or a Flight redirect row. Any other request shape falls through to
+    # `super` so the Bucket-1 Flight redirect row / Rails 302 is unchanged (AC1).
+    #
+    # Review round 1 — reuses Rails' OWN redirect machinery
+    # (`_compute_redirect_to_location`, `_ensure_url_is_http_header_safe`,
+    # `_enforce_open_redirect_protection`) so the nil-check, header-safety, and
+    # open-redirect protection (`allow_other_host` / `raise_on_open_redirects`)
+    # match Bucket 1 / stock Rails exactly — a cross-host `redirect_to` raises
+    # `UnsafeRedirectError` instead of leaking an external `$redirect`. Same-
+    # origin targets collapse to a path; an allowed external origin keeps the
+    # absolute URL.
     def redirect_to(options = {}, response_options = {})
       return super unless __ruact_function_call?
 
-      render json: { "$redirect" => __ruact_redirect_directive(url_for(options)) }
+      raise ActionController::ActionControllerError, "Cannot redirect to nil!" unless options
+      raise AbstractController::DoubleRenderError if response_body
+
+      allow_other_host = response_options.delete(:allow_other_host)
+      location = _compute_redirect_to_location(request, options)
+      _ensure_url_is_http_header_safe(location)
+      location = _enforce_open_redirect_protection(location, allow_other_host: allow_other_host)
+
+      render json: { "$redirect" => __ruact_redirect_path(location) }
     end
 
     private
 
     # AC6 — append `Accept` to the `Vary` response header for non-GET requests
-    # (idempotent, preserves any host-set `Vary`).
+    # (idempotent, preserves any host-set `Vary`). Runs as an `after_action`
+    # so it appends to whatever `Vary` the action/render set.
     def __ruact_set_vary_on_accept!
       return if request.get? || request.head?
 
@@ -154,11 +171,12 @@ module Ruact
       response.headers["Vary"] = values.join(", ")
     end
 
-    # Collapse a redirect target to a path for same-origin URLs (the common
-    # `redirect_to @record` case); keep the absolute URL for external origins
-    # so a cross-origin redirect (e.g. a payment provider) survives. Mirrors the
-    # same-origin handling in {Ruact::Controller#redirect_to}.
-    def __ruact_redirect_directive(url)
+    # Collapse a (already open-redirect-validated) location to a path for
+    # same-origin URLs (the common `redirect_to @record` case); keep the
+    # absolute URL for an allowed external origin so a cross-origin redirect
+    # (e.g. a payment provider, with `allow_other_host: true`) survives. Mirrors
+    # the same-origin handling in {Ruact::Controller#redirect_to}.
+    def __ruact_redirect_path(url)
       uri = ::URI.parse(url)
       if uri.host &&
          (uri.host != request.host ||

@@ -69,6 +69,23 @@ module ServerBucketSpecSupport
       redirect_to "/posts/1"
     end
 
+    # Review round 1 — cross-host redirect must hit Rails' open-redirect
+    # protection (raise) instead of silently emitting an external $redirect.
+    def redirect_external
+      redirect_to "https://evil.example.com/x"
+    end
+
+    def redirect_external_allowed
+      redirect_to "https://allowed.example.com/x", allow_other_host: true
+    end
+
+    # Review round 1 — a host that sets Vary itself must keep it; Accept is
+    # appended, not clobbered.
+    def vary_clobber
+      response.headers["Vary"] = "Cookie"
+      @ok = true
+    end
+
     def unserializable
       @rec = UnserializableRecord.new
     end
@@ -110,6 +127,9 @@ if defined?(ControllerRequestSpecSupport) &&
     post "/bucket/with_ivars",      to: "server_bucket_spec_support/bucket_server#with_ivars"
     post "/bucket/empty",           to: "server_bucket_spec_support/bucket_server#empty_action"
     post "/bucket/redirecting",     to: "server_bucket_spec_support/bucket_server#redirecting"
+    post "/bucket/redirect_external", to: "server_bucket_spec_support/bucket_server#redirect_external"
+    post "/bucket/redirect_external_allowed", to: "server_bucket_spec_support/bucket_server#redirect_external_allowed"
+    post "/bucket/vary_clobber",    to: "server_bucket_spec_support/bucket_server#vary_clobber"
     post "/bucket/unserializable",  to: "server_bucket_spec_support/bucket_server#unserializable"
     post "/bucket/dual_redirecting", to: "server_bucket_spec_support/bucket_dual#redirecting"
     post "/bucket/protected", to: "server_bucket_spec_support/bucket_forgery#create_protected"
@@ -152,6 +172,40 @@ RSpec.describe "Story 9.2: Ruact::Server dual-bucket response negotiation", :sto
       post "/bucket/redirecting", "{}", json_headers
       expect(last_response.status).to eq(200)
       expect(JSON.parse(last_response.body)).to eq("$redirect" => "/posts/1")
+    end
+  end
+
+  describe "Bucket 2 — redirect open-redirect protection (review round 1)" do
+    # Turn Rails' open-redirect protection ON for this app (the bare test app
+    # doesn't `load_defaults`, so it defaults to log-and-allow). `raise_on_open_redirects`
+    # forces the raise path on both Rails 7.0 and 8.x.
+    around do |example|
+      previous = ActionController::Base.raise_on_open_redirects
+      ActionController::Base.raise_on_open_redirects = true
+      example.run
+    ensure
+      ActionController::Base.raise_on_open_redirects = previous
+    end
+
+    it "a cross-host redirect_to raises (open-redirect protection) → 500 structured, matching Rails" do
+      post "/bucket/redirect_external", "{}", json_headers
+      expect(last_response.status).to eq(500)
+      expect(JSON.parse(last_response.body).fetch("error_class")).to match(/RedirectError/)
+    end
+
+    it "honors allow_other_host: true — emits the absolute $redirect" do
+      post "/bucket/redirect_external_allowed", "{}", json_headers
+      expect(last_response.status).to eq(200)
+      expect(JSON.parse(last_response.body)).to eq("$redirect" => "https://allowed.example.com/x")
+    end
+  end
+
+  describe "Vary preserves a host-set value (review round 1)" do
+    it "appends Accept to a Vary the action set, never clobbering it" do
+      post "/bucket/vary_clobber", "{}", json_headers
+      vary = last_response.headers["Vary"]
+      expect(vary).to match(/\bCookie\b/)
+      expect(vary).to match(/\bAccept\b/)
     end
   end
 
