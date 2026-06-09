@@ -89,6 +89,16 @@ module Ruact
       # Flight shapes (incl. before-callback redirects). The method is
       # idempotent. Error responses (413/403/500) may still omit it — they are
       # non-cacheable, not dual representations.
+      #
+      # Documented limitation (accepted 2026-06-09): a host `before_action` that
+      # BOTH overwrites `Vary` AND performs the response (e.g.
+      # `response.headers["Vary"] = "Cookie"; redirect_to "/login"` in one
+      # before-callback) leaves the final response without `Accept` — the Ruact
+      # before-action set it first, the host clobbered it, and Rails skips the
+      # after-action on the before-halt. This combination is contrived (real
+      # auth callbacks don't reassign `Vary` while redirecting); a callback can't
+      # guarantee the final header unconditionally, and a Rack-level mechanism
+      # was judged not worth the complexity for this edge.
       before_action :__ruact_set_vary_on_accept!
       after_action  :__ruact_set_vary_on_accept!
 

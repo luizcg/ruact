@@ -1435,3 +1435,18 @@ rejection (the guard aborts the chain before the Vary callback). Acceptable: the
 **CSRF (AC7 / NFR27).** Entirely the host's `protect_from_forgery` — valid token
 → success; missing/invalid → 403 via the 9.1 chain; API-mode (forgery off) →
 accepted. No gem-side CSRF.
+
+#### 2026-06-09 — Story 9.2 review (round 3) — Vary callback limitation accepted
+
+The `Vary: Accept` mechanism is callback-based (`before_action` +
+`after_action`, see D3 / review rounds 1–2). One residual gap was identified
+and ACCEPTED (Luiz) rather than patched further: a host `before_action` that
+BOTH reassigns `Vary` AND performs the response in the same callback (e.g.
+`response.headers["Vary"] = "Cookie"; redirect_to "/login"`) yields a final
+response without `Accept` (Ruact's before-action set it, the host clobbered it,
+and Rails skips after-actions on a before-halt). Rationale: the combination is
+contrived (real auth callbacks redirect without reassigning `Vary`); a callback
+cannot unconditionally guarantee the final header, and a Rack-level mechanism
+was judged not worth the complexity for this edge. This mirrors the Story 9.1
+lesson — stop patching the edges of a mechanism once the remaining cases stop
+earning their complexity.
