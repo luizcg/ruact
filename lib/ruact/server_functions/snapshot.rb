@@ -20,6 +20,10 @@ module Ruact
       # must be updated in lockstep.
       VERSION = 1
 
+      # Story 9.3 — the route-driven snapshot schema. v2 entries are produced by
+      # {Ruact::ServerFunctions::RouteSource} (route table), not the registries.
+      VERSION_V2 = 2
+
       class << self
         # Builds the snapshot Hash for both registries. Pure. See also
         # {.generate!} (writes to disk) and {.functions_payload} (fingerprint
@@ -91,6 +95,47 @@ module Ruact
             functions: new_functions
           }
           SnapshotWriter.write_if_changed!(path: path, content: "#{JSON.pretty_generate(snapshot)}\n")
+        end
+
+        # Story 9.3 — wraps route-derived +entries+ into a version-2 snapshot
+        # Hash (the shape {Codegen.render} dispatches on). Pure.
+        #
+        # @param entries [Array<Hash>] from {RouteSource.collect}.
+        # @return [Hash]
+        def dump_v2(entries, now: Time.now.utc)
+          {
+            version: VERSION_V2,
+            generated_at: now.utc.iso8601,
+            functions: entries
+          }
+        end
+
+        # Story 9.3 — write-if-changed for the route-driven (v2) bridge. Mirrors
+        # {.generate!}: `generated_at` is freshly stamped only when the entries
+        # changed, so a stable route table never churns the file (and never
+        # re-triggers downstream TS rendering). A schema mismatch (`version`)
+        # forces a rewrite even when entries are unchanged.
+        #
+        # @param entries [Array<Hash>] from {RouteSource.collect}.
+        # @param path [String, Pathname] absolute path to the v2 bridge JSON.
+        # @return [Boolean] true if written, false if unchanged.
+        def generate_v2!(entries:, path:, now: Time.now.utc)
+          existing_version, existing_functions = read_existing_snapshot(path)
+          return false if existing_version == VERSION_V2 && existing_functions == entries
+
+          snapshot = { version: VERSION_V2, generated_at: now.utc.iso8601, functions: entries }
+          SnapshotWriter.write_if_changed!(path: path, content: "#{JSON.pretty_generate(snapshot)}\n")
+        end
+
+        # Story 9.3 — the Decision-#6 ownership primitive. True when the app has
+        # ANY v1 declaration (`ruact_action` / `ruact_query`). Story 9.8 consults
+        # this to decide whether route-driven codegen takes over the real
+        # `server-functions.ts`; in Story 9.3 the v2 codegen always writes the
+        # parallel `.next` target regardless, so this is informational here.
+        #
+        # @return [Boolean]
+        def v1_declarations?(action_registry, query_registry)
+          !(action_registry.entries.empty? && query_registry.entries.empty?)
         end
 
         private

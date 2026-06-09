@@ -118,6 +118,7 @@ module Ruact
       Ruact::Railtie.force_load_server_function_hosts!
 
       Ruact::Railtie.write_server_functions_snapshot!
+      Ruact::ServerFunctions.write_v2_snapshot!(route_set: Rails.application.routes, root: Rails.root)
     end
 
     # Detect streaming capability at boot and log the active mode (AC#1–3).
@@ -288,11 +289,10 @@ module Ruact
     #
     # @return [Boolean] true if a fresh file was written, false if unchanged.
     def self.write_server_functions_snapshot!
-      path = Rails.root.join("tmp/cache/ruact/server-functions.json")
       Ruact::ServerFunctions::Snapshot.generate!(
         action_registry: Ruact.action_registry,
         query_registry: Ruact.query_registry,
-        path: path
+        path: Rails.root.join("tmp/cache/ruact/server-functions.json")
       )
     end
 

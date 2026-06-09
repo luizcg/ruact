@@ -64,6 +64,14 @@ namespace :ruact do
           snapshot: snapshot,
           output_path: ts_path
         )
+
+        # Story 9.3 — also emit the route-driven (v2) parallel target
+        # (`server-functions.next.{json,ts}`). Vite does not render the `.next`
+        # bridge, so the rake is the production/CI path that materializes it for
+        # parity + inspection. The real `server-functions.ts` above stays v1.
+        Ruact::ServerFunctions.write_v2_snapshot!(
+          route_set: Rails.application.routes, root: Rails.root, logger: Rails.logger
+        )
       rescue Ruact::ConfigurationError, Errno::ENOENT, JSON::ParserError => e
         warn "[ruact] error: #{e.message}"
         exit 1

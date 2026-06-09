@@ -22,8 +22,8 @@ module Ruact
 
       # Story 9.3 — the route-driven snapshot schema. A version-2 snapshot
       # carries route-derived entries (`http_method` + `path` + `segments`,
-      # no `ruby_symbol`) and renders `_makeServerFunction({...})` calls instead
-      # of `_makeRef("<sym>")`. {.render} dispatches on the snapshot `version` so
+      # no `ruby_symbol`) and renders `_makeServerFunction(descriptor)` calls
+      # instead of `_makeRef("<sym>")`. {.render} dispatches on `version` so
       # the v1 (registry-driven) path stays byte-for-byte untouched.
       VERSION_V2 = 2
 
