@@ -54,7 +54,7 @@ const RESERVED_JS_IDENTIFIERS = new Set([
 // declared either as an action `js_identifier` would emit a duplicate
 // binding and crash at module-load time. Mirrors Ruby
 // `NameBridge::RESERVED_BY_RUACT`.
-const RESERVED_BY_RUACT = new Set(["_makeRef", "revalidate"]);
+const RESERVED_BY_RUACT = new Set(["_makeRef", "_makeServerFunction", "revalidate"]);
 
 // Story 9.3 — the route-driven snapshot schema version + its verb allowlist.
 // A version-2 snapshot renders `_makeServerFunction({...})` calls; `render`
@@ -335,7 +335,10 @@ function validateSnapshotV2(snapshot) {
           `segments ${JSON.stringify(fn.segments)} (must be an array of non-empty strings).`,
       );
     }
-    const missing = fn.segments.filter((s) => !fn.path.includes(`:${s}`));
+    // Whole-token match (mirror Ruby) — `:id` must not satisfy `:id_extra`.
+    const missing = fn.segments.filter(
+      (s) => !new RegExp(`:${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9_])`).test(fn.path),
+    );
     if (missing.length > 0) {
       throw new Error(
         `ruact server-function codegen: v2 snapshot entry "${fn.js_identifier}" declares ` +

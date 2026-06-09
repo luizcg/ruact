@@ -59,9 +59,10 @@ module Ruact
       Snapshot.generate_v2!(entries: entries, path: json_path)
       Codegen.generate_ts!(snapshot: JSON.parse(File.read(json_path)), output_path: ts_path)
 
-      unless entries.empty?
-        logger&.info "[ruact] codegen: exposing #{entries.map { |e| e['js_identifier'] }.join(', ')}"
-      end
+      # AC2 — ALWAYS log what is exposed (even "(none)"), so a routed non-GET
+      # action never becomes a callable server function silently.
+      names = entries.empty? ? "(none)" : entries.map { |e| e["js_identifier"] }.join(", ")
+      logger&.info "[ruact] codegen: exposing #{names}"
       entries
     end
 

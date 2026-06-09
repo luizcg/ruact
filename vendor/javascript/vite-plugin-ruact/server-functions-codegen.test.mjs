@@ -807,6 +807,30 @@ describe("Story 9.3 — route-driven (v2) render + parity", () => {
     ).toThrow(/absent from path/);
   });
 
+  it("rejects a v2 segment that only substring-matches a longer path token", () => {
+    expect(() =>
+      render({
+        version: 2,
+        generated_at: "x",
+        functions: [
+          { js_identifier: "updatePost", kind: "action", http_method: "PATCH", path: "/posts/:id_extra", segments: ["id"] },
+        ],
+      }),
+    ).toThrow(/absent from path/);
+  });
+
+  it("rejects a v2 entry named after the v2 runtime accessor (_makeServerFunction)", () => {
+    expect(() =>
+      render({
+        version: 2,
+        generated_at: "x",
+        functions: [
+          { js_identifier: "_makeServerFunction", kind: "action", http_method: "POST", path: "/x", segments: [] },
+        ],
+      }),
+    ).toThrow(/reserved/);
+  });
+
   it("Ruby's render and JS's render produce byte-identical v2 output", () => {
     const jsOutput = render(v2Fixture);
     const gemLibPath = path.resolve(

@@ -44,4 +44,10 @@ RSpec.describe "Ruact::Server.ruact_function_name", :story_9_3 do
       host.ruact_function_name(:create, as: "revalidate")
     end.to raise_error(Ruact::ConfigurationError, /reserved|ruact runtime/)
   end
+
+  it "rejects the v2 runtime accessor name (_makeServerFunction)" do
+    expect do
+      host.ruact_function_name(:create, as: "_makeServerFunction")
+    end.to raise_error(Ruact::ConfigurationError, /reserved|ruact runtime/)
+  end
 end

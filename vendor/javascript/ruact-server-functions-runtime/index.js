@@ -279,7 +279,10 @@ function interpolatePath(path, segments, args) {
           "but it was missing from the call argument",
       );
     }
-    url = url.replace(`:${seg}`, encodeURIComponent(String(value)));
+    // Whole-token replace so `:id` does not clobber the prefix of a longer
+    // segment name (e.g. `:id` within `:id_extra`).
+    const token = new RegExp(`:${seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9_])`);
+    url = url.replace(token, encodeURIComponent(String(value)));
   }
   return url;
 }

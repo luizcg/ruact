@@ -394,6 +394,25 @@ module Ruact
           expect { described_class.render(evil) }
             .to raise_error(Ruact::ConfigurationError, /reserved/)
         end
+
+        it "rejects a v2 entry named after the v2 runtime accessor (_makeServerFunction)" do
+          evil = v2_snapshot.merge(functions: [
+                                     { "js_identifier" => "_makeServerFunction", "kind" => "action",
+                                       "http_method" => "POST", "path" => "/posts", "segments" => [] }
+                                   ])
+          expect { described_class.render(evil) }
+            .to raise_error(Ruact::ConfigurationError, /reserved/)
+        end
+
+        it "rejects a v2 segment that only substring-matches a longer path token" do
+          evil = v2_snapshot.merge(functions: [
+                                     { "js_identifier" => "updatePost", "kind" => "action",
+                                       "http_method" => "PATCH", "path" => "/posts/:id_extra",
+                                       "segments" => ["id"] }
+                                   ])
+          expect { described_class.render(evil) }
+            .to raise_error(Ruact::ConfigurationError, /absent from path/)
+        end
       end
     end
   end

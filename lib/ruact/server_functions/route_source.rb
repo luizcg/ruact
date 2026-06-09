@@ -128,13 +128,24 @@ module Ruact
           resource_base = segments.last
           namespace = segments[0..-2]
 
-          member = route.required_parts.include?(:id)
-          singular = RESTFUL_WRITES.include?(action) || member
+          singular = RESTFUL_WRITES.include?(action) || member_route?(route, resource_base)
           resource_word = singular ? resource_base.singularize : resource_base
 
           lower_camel(action) +
             namespace.map { |part| pascal(part) }.join +
             pascal(resource_word)
+        end
+
+        # A route is a MEMBER route when its path carries a dynamic segment for
+        # THIS resource — i.e. the resource's own basename is immediately
+        # followed by a `:param` in the path (`/posts/:id/publish`,
+        # `/posts/:slug` under `param: :slug`). This is more robust than checking
+        # `required_parts.include?(:id)`: it honors custom `param:` names AND
+        # correctly classifies a NESTED collection route (`/posts/:post_id/
+        # comments/flag_all` — whose only dynamic part is the PARENT `:post_id`)
+        # as a collection, not a member.
+        def member_route?(route, resource_base)
+          route.path.spec.to_s.match?(%r{/#{Regexp.escape(resource_base)}/:[^/(]+})
         end
 
         # snake_case → lowerCamel, leading underscore preserved (mirrors

@@ -146,7 +146,9 @@ module Ruact
                     "ruact server-function codegen: v2 snapshot entry #{js_id.inspect} has invalid " \
                     "segments #{segments.inspect} (must be an Array of non-empty Strings)."
             end
-            missing = segments.reject { |s| path.include?(":#{s}") }
+            # Whole-token match: `:id` must NOT satisfy a declared segment when
+            # the path only has `:id_extra` (a substring `include?` would).
+            missing = segments.reject { |s| path.match?(/:#{Regexp.escape(s)}(?![A-Za-z0-9_])/) }
             return if missing.empty?
 
             raise Ruact::ConfigurationError,

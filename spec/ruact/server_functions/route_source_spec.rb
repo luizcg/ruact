@@ -112,6 +112,29 @@ module Ruact
           rs = route_set { resources :posts }
           expect(ids(collect(rs))).to eq(%w[createPost destroyPost updatePost])
         end
+
+        it "classifies a custom-param member route (param: :slug) as member → singular" do
+          rs = route_set do
+            resources :posts, param: :slug do
+              member { post :publish }
+            end
+          end
+          entry = collect(rs).find { |e| e["action"] == "publish" }
+          expect(entry["js_identifier"]).to eq("publishPost")
+          expect(entry["segments"]).to eq(["slug"])
+        end
+
+        it "classifies a nested collection route (only parent :id present) as collection → plural" do
+          rs = route_set do
+            resources :posts, only: [] do
+              resources :comments, only: [] do
+                collection { post :flag_all }
+              end
+            end
+          end
+          entry = collect(rs).find { |e| e["action"] == "flag_all" }
+          expect(entry["js_identifier"]).to eq("flagAllComments")
+        end
       end
 
       describe "rename override (AC4 input)" do
