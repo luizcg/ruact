@@ -215,6 +215,8 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
       let(:gitignore_entries) do
         [
           "app/javascript/.ruact/server-functions.ts",
+          # Story 9.3 — route-driven (v2) parallel inspection target.
+          "app/javascript/.ruact/server-functions.next.ts",
           "tmp/cache/ruact/"
         ]
       end
@@ -261,6 +263,7 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         append_gitignore_entries(tmpdir)
         content = read_file(".gitignore")
         expect(content).to include("app/javascript/.ruact/server-functions.ts")
+        expect(content).to include("app/javascript/.ruact/server-functions.next.ts")
         expect(content).to include("tmp/cache/ruact/")
       end
 
@@ -275,7 +278,8 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
       end
 
       it "does not write to .gitignore when both entries already exist" do
-        write_file(".gitignore", "/tmp\napp/javascript/.ruact/server-functions.ts\ntmp/cache/ruact/\n")
+        write_file(".gitignore", "/tmp\napp/javascript/.ruact/server-functions.ts\n" \
+                                 "app/javascript/.ruact/server-functions.next.ts\ntmp/cache/ruact/\n")
         result = append_gitignore_entries(tmpdir)
         expect(result).to eq(:already_present)
       end
