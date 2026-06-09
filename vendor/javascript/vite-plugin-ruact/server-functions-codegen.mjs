@@ -56,6 +56,13 @@ const RESERVED_JS_IDENTIFIERS = new Set([
 // `NameBridge::RESERVED_BY_RUACT`.
 const RESERVED_BY_RUACT = new Set(["_makeRef", "revalidate"]);
 
+// Story 9.3 — the route-driven snapshot schema version + its verb allowlist.
+// A version-2 snapshot renders `_makeServerFunction({...})` calls; `render`
+// dispatches on `version` so the v1 path stays byte-for-byte untouched.
+// Mirrors Ruby `Codegen::VERSION_V2` / `V2_HTTP_METHODS`.
+export const VERSION_V2 = 2;
+const V2_HTTP_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
 /**
  * Absolute path to the placeholder runtime bundled inside the gem. Used as the
  * target of the `ruact/server-functions-runtime` Vite alias so host apps
@@ -76,7 +83,10 @@ export function runtimePackagePath() {
  *
  * @param {unknown} snapshot
  */
-function validateSnapshot(snapshot) {
+// Story 9.3 — extracted so both the v1 ({@link validateSnapshot}) and v2
+// ({@link validateSnapshotV2}) paths share the identical root-shape +
+// metadata checks (and identical error messages → byte-stable across versions).
+function validateMetadata(snapshot) {
   if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
     throw new Error(
       "ruact server-function codegen: snapshot is not an object — " +
@@ -98,7 +108,7 @@ function validateSnapshot(snapshot) {
     }
   }
 
-  const { version, generated_at, functions } = snapshot;
+  const { version, generated_at } = snapshot;
 
   if (typeof version !== "number" && typeof version !== "string") {
     throw new Error(
@@ -126,6 +136,11 @@ function validateSnapshot(snapshot) {
         "snapshot JSON is corrupted.",
     );
   }
+}
+
+function validateSnapshot(snapshot) {
+  validateMetadata(snapshot);
+  const { functions } = snapshot;
 
   if (!Array.isArray(functions)) {
     throw new Error(
@@ -203,6 +218,19 @@ function validateSnapshot(snapshot) {
  * @returns {string}
  */
 export function render(snapshot) {
+  // Story 9.3 — dispatch on snapshot version. A version-2 (route-driven)
+  // snapshot renders `_makeServerFunction({...})` calls; the v1 path below is
+  // untouched. The version peek is shape-guarded so a corrupt non-object
+  // snapshot still falls through to validateSnapshot's loud failure.
+  if (
+    snapshot &&
+    typeof snapshot === "object" &&
+    !Array.isArray(snapshot) &&
+    String(snapshot.version) === String(VERSION_V2)
+  ) {
+    return renderV2(snapshot);
+  }
+
   validateSnapshot(snapshot);
   const { version, generated_at, functions } = snapshot;
   let out = "";
@@ -231,6 +259,136 @@ export function render(snapshot) {
   out += "\n";
   out += `export { revalidate } from "${RUNTIME_IMPORT_SPECIFIER}";\n`;
   return out;
+}
+
+/**
+ * Story 9.3 — validates a version-2 (route-driven) snapshot. A v2 entry has no
+ * `ruby_symbol`; it carries `http_method` + `path` + `segments`. Mirrors the
+ * Ruby-side `validate_functions_v2!`.
+ *
+ * @param {unknown} snapshot
+ */
+function validateSnapshotV2(snapshot) {
+  validateMetadata(snapshot);
+  const { functions } = snapshot;
+
+  if (!Array.isArray(functions)) {
+    throw new Error(
+      `ruact server-function codegen: snapshot.functions must be an array, got ${typeof functions}`,
+    );
+  }
+
+  const seen = new Set();
+  for (const fn of functions) {
+    if (!fn || typeof fn !== "object" || Array.isArray(fn)) {
+      throw new Error(
+        `ruact server-function codegen: snapshot.functions entry is not an object: ${JSON.stringify(fn)}`,
+      );
+    }
+    if (typeof fn.js_identifier !== "string" || !VALID_JS_IDENTIFIER.test(fn.js_identifier)) {
+      throw new Error(
+        "ruact server-function codegen rejected a v2 snapshot entry: " +
+          `js_identifier=${JSON.stringify(fn.js_identifier)} is not a valid JS identifier ` +
+          "(must match /^[A-Za-z_$][A-Za-z0-9_$]*$/). The snapshot JSON is corrupted.",
+      );
+    }
+    if (RESERVED_JS_IDENTIFIERS.has(fn.js_identifier) || RESERVED_BY_RUACT.has(fn.js_identifier)) {
+      throw new Error(
+        `ruact server-function codegen: js_identifier "${fn.js_identifier}" is reserved — ` +
+          "cannot be exported. The snapshot JSON is corrupted.",
+      );
+    }
+    if (seen.has(fn.js_identifier)) {
+      throw new Error(
+        `ruact server-function codegen: duplicate js_identifier "${fn.js_identifier}" in snapshot.`,
+      );
+    }
+    seen.add(fn.js_identifier);
+
+    if (fn.kind !== "action") {
+      throw new Error(
+        `ruact server-function codegen: v2 snapshot entry "${fn.js_identifier}" has invalid ` +
+          `kind ${JSON.stringify(fn.kind)} (v2 entries are always "action").`,
+      );
+    }
+    if (!V2_HTTP_METHODS.has(fn.http_method)) {
+      throw new Error(
+        `ruact server-function codegen: v2 snapshot entry "${fn.js_identifier}" has invalid ` +
+          `http_method ${JSON.stringify(fn.http_method)} (must be POST/PUT/PATCH/DELETE).`,
+      );
+    }
+    if (typeof fn.path !== "string" || !fn.path.startsWith("/")) {
+      throw new Error(
+        `ruact server-function codegen: v2 snapshot entry "${fn.js_identifier}" has invalid ` +
+          `path ${JSON.stringify(fn.path)} (must be a string beginning with "/").`,
+      );
+    }
+    if (containsLineTerminator(fn.path)) {
+      throw new Error(
+        `ruact server-function codegen: v2 snapshot entry "${fn.js_identifier}" path contains a ` +
+          "line break — would break out of the generated call; snapshot JSON is corrupted.",
+      );
+    }
+    if (!Array.isArray(fn.segments) || !fn.segments.every((s) => typeof s === "string" && s.length > 0)) {
+      throw new Error(
+        `ruact server-function codegen: v2 snapshot entry "${fn.js_identifier}" has invalid ` +
+          `segments ${JSON.stringify(fn.segments)} (must be an array of non-empty strings).`,
+      );
+    }
+    const missing = fn.segments.filter((s) => !fn.path.includes(`:${s}`));
+    if (missing.length > 0) {
+      throw new Error(
+        `ruact server-function codegen: v2 snapshot entry "${fn.js_identifier}" declares ` +
+          `segment(s) ${JSON.stringify(missing)} absent from path ${JSON.stringify(fn.path)}; ` +
+          "snapshot JSON is corrupted.",
+      );
+    }
+  }
+}
+
+/**
+ * Story 9.3 — renders a version-2 (route-driven) snapshot. MUST stay
+ * byte-identical to the Ruby-side `Codegen.render_v2`.
+ *
+ * @param {object} snapshot
+ * @returns {string}
+ */
+function renderV2(snapshot) {
+  validateSnapshotV2(snapshot);
+  const { version, generated_at, functions } = snapshot;
+  let out = "";
+  out += "// AUTO-GENERATED by vite-plugin-ruact (Story 9.3). DO NOT EDIT.\n";
+  out += `// Source: Rails route table (version ${version})\n`;
+  out += `// Generated at: ${generated_at}\n`;
+  out += `import { _makeServerFunction } from "${RUNTIME_IMPORT_SPECIFIER}";\n`;
+
+  if (functions.length === 0) {
+    out += "\n// (no server functions exposed yet — add a non-GET route on a Ruact::Server controller)\n";
+    out += "void _makeServerFunction;\n";
+  } else {
+    out += "\n";
+    for (const fn of functions) {
+      out += renderExportV2(fn);
+    }
+  }
+  out += "\n";
+  out += `export { revalidate } from "${RUNTIME_IMPORT_SPECIFIER}";\n`;
+  return out;
+}
+
+function renderExportV2(fn) {
+  // Same intersection signature as v1 actions (Story 8.2) — every v2 entry is
+  // an action. Mirrors `Ruact::ServerFunctions::Codegen::ACTION_SIGNATURE`.
+  const signature =
+    "((args?: FormData | Record<string, unknown>) => Promise<unknown>) & ((formData: FormData) => Promise<void>)";
+  const method = JSON.stringify(String(fn.http_method));
+  const pathLit = JSON.stringify(String(fn.path));
+  const segs = (fn.segments || []).map((s) => JSON.stringify(String(s))).join(", ");
+  const descriptor = `{ method: ${method}, path: ${pathLit}, segments: [${segs}] }`;
+  return (
+    `export const ${fn.js_identifier}: ${signature} =\n` +
+    `  _makeServerFunction(${descriptor});\n`
+  );
 }
 
 function renderExport(fn) {

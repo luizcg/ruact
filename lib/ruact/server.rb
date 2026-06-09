@@ -13,6 +13,7 @@ require "uri"
 require_relative "../ruact"
 require_relative "server_functions/error_rendering"
 require_relative "server_functions/bucket_two_payload"
+require_relative "server_functions/name_bridge"
 
 module Ruact
   # Story 9.1 (route-driven redesign, Phase A) — the v2 server-functions
@@ -118,6 +119,60 @@ module Ruact
       rescue_from StandardError, with: :__ruact_render_action_error
       rescue_from ActionController::InvalidAuthenticityToken, with: :__ruact_render_action_error
       self.rescue_handlers = (rescue_handlers - inherited_handlers) + inherited_handlers
+    end
+
+    # Story 9.3 — the JS-identifier rename escape hatch (AC4). Naming is
+    # derived from the route table by default ({Ruact::ServerFunctions::RouteSource});
+    # when two routes collide in the merged JS namespace the codegen fails loudly
+    # at boot, and this macro is how a host breaks the tie (or simply prefers a
+    # different name):
+    #
+    #   class PostsController < ApplicationController
+    #     include Ruact::Server
+    #     ruact_function_name :publish_all, as: "publishEverything"
+    #   end
+    #
+    # The override is keyed by ACTION name (string) and read by the codegen via
+    # {#__ruact_function_name_overrides}. The target identifier is validated at
+    # class-load time against the same JS-identifier shape + reserved-word rules
+    # the codegen enforces, so a bad override fails at boot, never at codegen.
+    module ClassMethods
+      # JS identifier shape — mirror of {Ruact::ServerFunctions::Codegen::VALID_JS_IDENTIFIER}
+      # (kept local so the concern does not depend on the codegen module).
+      RUACT_VALID_JS_IDENTIFIER = /\A[A-Za-z_$][A-Za-z0-9_$]*\z/
+
+      # @param action [Symbol, String] the controller action whose generated
+      #   server-function name is being overridden.
+      # @param as [Symbol, String] the JS identifier to emit instead of the
+      #   derived one.
+      # @raise [Ruact::ConfigurationError] when +as+ is not a valid JS identifier
+      #   or collides with a reserved word / a name the runtime already binds.
+      def ruact_function_name(action, as:)
+        js = as.to_s
+        unless js.match?(RUACT_VALID_JS_IDENTIFIER)
+          raise Ruact::ConfigurationError,
+                "ruact_function_name :#{action}, as: #{as.inspect} — " \
+                "\"#{js}\" is not a valid JS identifier (must match #{RUACT_VALID_JS_IDENTIFIER.inspect})"
+        end
+        if Ruact::ServerFunctions::NameBridge::RESERVED_JS_IDENTIFIERS.include?(js) ||
+           Ruact::ServerFunctions::NameBridge::RESERVED_BY_RUACT.include?(js)
+          raise Ruact::ConfigurationError,
+                "ruact_function_name :#{action}, as: #{as.inspect} — " \
+                "\"#{js}\" is a reserved JS word or is already bound by the ruact runtime " \
+                "(`_makeRef` / `_makeServerFunction` / `revalidate`); pick another name"
+        end
+
+        __ruact_function_name_overrides[action.to_s] = js
+      end
+
+      # The action-name → js-identifier override map for this controller,
+      # consulted by {Ruact::ServerFunctions::RouteSource}. Per-controller (not
+      # inherited) — overrides describe the host's own actions.
+      #
+      # @return [Hash{String=>String}]
+      def __ruact_function_name_overrides
+        @__ruact_function_name_overrides ||= {}
+      end
     end
 
     # Story 9.2 AC2/AC4 (D1) — Bucket-2 success-path negotiation. When the

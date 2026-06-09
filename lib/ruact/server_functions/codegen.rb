@@ -20,6 +20,13 @@ module Ruact
       # cross-implementation parity without coupling to the literal byte string.
       VERSION = 1
 
+      # Story 9.3 — the route-driven snapshot schema. A version-2 snapshot
+      # carries route-derived entries (`http_method` + `path` + `segments`,
+      # no `ruby_symbol`) and renders `_makeServerFunction({...})` calls instead
+      # of `_makeRef("<sym>")`. {.render} dispatches on the snapshot `version` so
+      # the v1 (registry-driven) path stays byte-for-byte untouched.
+      VERSION_V2 = 2
+
       RUNTIME_IMPORT = '"ruact/server-functions-runtime"'
 
       # Story 8.2 (2026-05-16, refined 2026-05-17 per review patch R1) —
@@ -103,6 +110,9 @@ module Ruact
           functions    = fetch_snapshot_key!(snapshot, :functions, "functions")
 
           validate_metadata!(version, generated_at)
+
+          return V2.render(version, generated_at, functions) if version.to_s == VERSION_V2.to_s
+
           validate_functions!(functions)
 
           io = +""
@@ -313,3 +323,8 @@ module Ruact
     end
   end
 end
+
+# Story 9.3 — the route-driven (version-2) renderer lives in its own module so
+# the v1 singleton class stays within its size budget. Required after the
+# constants above are defined; `Codegen.render` delegates to it on version 2.
+require_relative "codegen_v2"

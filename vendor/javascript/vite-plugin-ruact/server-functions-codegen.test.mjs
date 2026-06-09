@@ -740,3 +740,91 @@ describe("Story 8.0a — Ruby parity (Task 8.5)", () => {
     expect(jsOutput).toBe(rubyOutput);
   });
 });
+
+describe("Story 9.3 — route-driven (v2) render + parity", () => {
+  const v2Fixture = {
+    version: 2,
+    generated_at: "2026-06-09T00:00:00Z",
+    functions: [
+      {
+        js_identifier: "createPost",
+        kind: "action",
+        http_method: "POST",
+        path: "/posts",
+        segments: [],
+        controller: "posts",
+        action: "create",
+      },
+      {
+        js_identifier: "updatePost",
+        kind: "action",
+        http_method: "PATCH",
+        path: "/posts/:id",
+        segments: ["id"],
+        controller: "posts",
+        action: "update",
+      },
+    ],
+  };
+
+  it("dispatches on version 2 and emits _makeServerFunction calls with real path+verb", () => {
+    const out = render(v2Fixture);
+    expect(out).toContain('import { _makeServerFunction } from "ruact/server-functions-runtime";');
+    expect(out).toContain('_makeServerFunction({ method: "POST", path: "/posts", segments: [] });');
+    expect(out).toContain('_makeServerFunction({ method: "PATCH", path: "/posts/:id", segments: ["id"] });');
+    expect(out).toContain('export { revalidate } from "ruact/server-functions-runtime";');
+    // v2 actions keep the Story 8.2 intersection signature (form action support)
+    expect(out).toContain("& ((formData: FormData) => Promise<void>)");
+  });
+
+  it("emits the empty-v2 module when no routes are exposed", () => {
+    const out = render({ version: 2, generated_at: "2026-06-09T00:00:00Z", functions: [] });
+    expect(out).toContain("void _makeServerFunction;");
+    expect(out).toContain("(no server functions exposed yet");
+  });
+
+  it("rejects a v2 entry with an invalid http_method", () => {
+    expect(() =>
+      render({
+        version: 2,
+        generated_at: "x",
+        functions: [
+          { js_identifier: "createPost", kind: "action", http_method: "GET", path: "/posts", segments: [] },
+        ],
+      }),
+    ).toThrow(/invalid.*http_method/i);
+  });
+
+  it("rejects a v2 entry declaring a segment absent from the path", () => {
+    expect(() =>
+      render({
+        version: 2,
+        generated_at: "x",
+        functions: [
+          { js_identifier: "updatePost", kind: "action", http_method: "PATCH", path: "/posts", segments: ["id"] },
+        ],
+      }),
+    ).toThrow(/absent from path/);
+  });
+
+  it("Ruby's render and JS's render produce byte-identical v2 output", () => {
+    const jsOutput = render(v2Fixture);
+    const gemLibPath = path.resolve(
+      path.dirname(new URL(import.meta.url).pathname),
+      "..",
+      "..",
+      "..",
+      "lib",
+    );
+    const fixtureJson = JSON.stringify(v2Fixture);
+    const script =
+      'require "ruact/server_functions/codegen"; ' +
+      'require "json"; ' +
+      `print Ruact::ServerFunctions::Codegen.render(JSON.parse('${fixtureJson}'))`;
+    const rubyOutput = execFileSync("ruby", ["-I", gemLibPath, "-e", script], {
+      encoding: "utf8",
+    });
+
+    expect(jsOutput).toBe(rubyOutput);
+  });
+});

@@ -322,6 +322,79 @@ module Ruact
             .to be(false)
         end
       end
+
+      describe ".render — route-driven v2 snapshot (Story 9.3)", :story_9_3 do
+        let(:v2_snapshot) do
+          {
+            version: 2,
+            generated_at: "2026-06-09T00:00:00Z",
+            functions: [
+              { "js_identifier" => "createPost", "kind" => "action",
+                "http_method" => "POST", "path" => "/posts", "segments" => [],
+                "controller" => "posts", "action" => "create" },
+              { "js_identifier" => "updatePost", "kind" => "action",
+                "http_method" => "PATCH", "path" => "/posts/:id", "segments" => ["id"],
+                "controller" => "posts", "action" => "update" }
+            ]
+          }
+        end
+
+        it "dispatches on version 2 and emits _makeServerFunction with real path+verb" do
+          out = described_class.render(v2_snapshot)
+          expect(out).to include('import { _makeServerFunction } from "ruact/server-functions-runtime";')
+          expect(out).to include('_makeServerFunction({ method: "POST", path: "/posts", segments: [] });')
+          expect(out).to include('_makeServerFunction({ method: "PATCH", path: "/posts/:id", segments: ["id"] });')
+          expect(out).to include('export { revalidate } from "ruact/server-functions-runtime";')
+        end
+
+        it "keeps the Story 8.2 intersection signature on v2 actions (form action support)" do
+          out = described_class.render(v2_snapshot)
+          expect(out).to include("& ((formData: FormData) => Promise<void>)")
+        end
+
+        it "emits the empty-v2 module when no routes are exposed" do
+          out = described_class.render(version: 2, generated_at: "2026-06-09T00:00:00Z", functions: [])
+          expect(out).to include("void _makeServerFunction;")
+          expect(out).to include("(no server functions exposed yet")
+          expect(out).to end_with("export { revalidate } from \"ruact/server-functions-runtime\";\n")
+        end
+
+        it "rejects a v2 entry with an invalid http_method" do
+          evil = v2_snapshot.merge(functions: [
+                                     { "js_identifier" => "createPost", "kind" => "action",
+                                       "http_method" => "GET", "path" => "/posts", "segments" => [] }
+                                   ])
+          expect { described_class.render(evil) }
+            .to raise_error(Ruact::ConfigurationError, /invalid http_method/)
+        end
+
+        it "rejects a v2 entry declaring a segment absent from the path" do
+          evil = v2_snapshot.merge(functions: [
+                                     { "js_identifier" => "updatePost", "kind" => "action",
+                                       "http_method" => "PATCH", "path" => "/posts", "segments" => ["id"] }
+                                   ])
+          expect { described_class.render(evil) }
+            .to raise_error(Ruact::ConfigurationError, /absent from path/)
+        end
+
+        it "rejects a v2 entry with a non-action kind" do
+          evil = v2_snapshot.merge(functions: [
+                                     { "js_identifier" => "createPost", "kind" => "query",
+                                       "http_method" => "POST", "path" => "/posts", "segments" => [] }
+                                   ])
+          expect { described_class.render(evil) }
+            .to raise_error(Ruact::ConfigurationError, /v2 entries are always/)
+        end
+
+        it "rejects a v2 entry whose js_identifier is reserved" do
+          evil = v2_snapshot.merge(functions: [
+                                     { "js_identifier" => "revalidate", "kind" => "action",
+                                       "http_method" => "POST", "path" => "/posts", "segments" => [] }
+                                   ])
+          expect { described_class.render(evil) }
+            .to raise_error(Ruact::ConfigurationError, /reserved/)
+        end
+      end
     end
   end
 end
