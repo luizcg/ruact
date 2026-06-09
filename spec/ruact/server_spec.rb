@@ -101,11 +101,10 @@ RSpec.describe Ruact::Server, :story_9_1 do
     end
   end
 
-  # Review patch (2026-06-08) — the raw `Accept: application/json` detection is
-  # now its own helper, distinct from the SEMANTIC function-call predicate.
-  # `__ruact_json_accept?` is the verb-agnostic header check; the matrix that
-  # used to live on `__ruact_function_call?` belongs here.
-  describe "Story 9.1 — __ruact_json_accept? raw-header matrix (AC2 / D3, review patch)" do
+  # Simplified Story 9.1 contract — the runtime sends the exact
+  # `Accept: application/json` shape, and that exact header is the only
+  # JSON-Accept signal this concern recognizes.
+  describe "Story 9.1 — __ruact_json_accept? exact-header matrix" do
     let(:controller) { ServerConcernUnitSupport::ConcernController.new }
 
     def stub_accept_header(value)
@@ -119,9 +118,9 @@ RSpec.describe Ruact::Server, :story_9_1 do
       expect(controller.send(:__ruact_json_accept?)).to be(true)
     end
 
-    it "is true when application/json appears in a composite Accept (axios-style)" do
+    it "is false for a composite Accept header" do
       stub_accept_header("application/json, text/plain, */*")
-      expect(controller.send(:__ruact_json_accept?)).to be(true)
+      expect(controller.send(:__ruact_json_accept?)).to be(false)
     end
 
     it "is false for browser navigation Accept headers" do
@@ -136,96 +135,6 @@ RSpec.describe Ruact::Server, :story_9_1 do
 
     it "is false when the Accept header is absent (strict boolean, not nil)" do
       stub_accept_header(nil)
-      expect(controller.send(:__ruact_json_accept?)).to be(false)
-    end
-
-    # Review patch (2026-06-08, round 3) — the predicate now parses media
-    # ranges and token boundaries instead of a raw substring match, so it no
-    # longer mistakes near-misses for JSON-Accept. Because `__ruact_function_call?`
-    # feeds Story 9.2's discriminator, a substring false-positive would route
-    # ordinary requests into Ruact's structured payload.
-    it "is false for application/jsonp (token boundary, not a substring match)" do
-      stub_accept_header("application/jsonp")
-      expect(controller.send(:__ruact_json_accept?)).to be(false)
-    end
-
-    it "is false for application/json;q=0 (explicitly NOT acceptable)" do
-      stub_accept_header("text/html, application/json;q=0")
-      expect(controller.send(:__ruact_json_accept?)).to be(false)
-    end
-
-    it "is true for Application/JSON (media types are case-insensitive)" do
-      stub_accept_header("Application/JSON")
-      expect(controller.send(:__ruact_json_accept?)).to be(true)
-    end
-
-    it "is true for application/json;q=0.5 (positive q-value)" do
-      stub_accept_header("application/json;q=0.5, text/plain")
-      expect(controller.send(:__ruact_json_accept?)).to be(true)
-    end
-
-    # Review patch (2026-06-08, round 4) — q-values must lie within 0.0..1.0,
-    # and comma splitting must be quote-aware so a quoted comma inside a
-    # parameter cannot smuggle a fragment past the q-value.
-    it "is false for application/json;q=2 (q above the 0..1 range)" do
-      stub_accept_header("application/json;q=2")
-      expect(controller.send(:__ruact_json_accept?)).to be(false)
-    end
-
-    it "is false for application/json;q=1.5 (q above the 0..1 range)" do
-      stub_accept_header("application/json;q=1.5")
-      expect(controller.send(:__ruact_json_accept?)).to be(false)
-    end
-
-    it "is false for application/json with a quoted comma before q=0 (quote-aware split)" do
-      stub_accept_header('application/json;note="a,b";q=0')
-      expect(controller.send(:__ruact_json_accept?)).to be(false)
-    end
-
-    it "is true for application/json with a quoted comma and a positive q (quote-aware split)" do
-      stub_accept_header('application/json;note="a,b";q=0.9')
-      expect(controller.send(:__ruact_json_accept?)).to be(true)
-    end
-
-    # Review patch (2026-06-08, round 5) — the tokenizer must honor HTTP
-    # quoted-pair (`\"`) escaping and reject unterminated quoted strings, so an
-    # escaped quote cannot end a quoted-string early and let a rejecting q-value
-    # leak past, and a malformed open quote cannot hide a later q-value.
-    it "is false for an escaped quote inside a quoted param before q=0 (quoted-pair)" do
-      stub_accept_header('application/json;note="a\",b";q=0')
-      expect(controller.send(:__ruact_json_accept?)).to be(false)
-    end
-
-    it "is true for an escaped quote inside a quoted param with a positive q" do
-      stub_accept_header('application/json;note="a\",b";q=0.9')
-      expect(controller.send(:__ruact_json_accept?)).to be(true)
-    end
-
-    it "is false for an unterminated quoted string that hides q=0" do
-      stub_accept_header('application/json;note="open;q=0')
-      expect(controller.send(:__ruact_json_accept?)).to be(false)
-    end
-
-    # Review patch (2026-06-08, round 5) — q-values must match the RFC 7231
-    # qvalue grammar, not just "a Float in 0..1". Malformed q-values must not
-    # opt a request into Bucket 2.
-    it "is false for a leading-dot q-value (q=.5)" do
-      stub_accept_header("application/json;q=.5")
-      expect(controller.send(:__ruact_json_accept?)).to be(false)
-    end
-
-    it "is false for a leading-zero q-value (q=01)" do
-      stub_accept_header("application/json;q=01")
-      expect(controller.send(:__ruact_json_accept?)).to be(false)
-    end
-
-    it "is false for an exponent q-value (q=1e-1)" do
-      stub_accept_header("application/json;q=1e-1")
-      expect(controller.send(:__ruact_json_accept?)).to be(false)
-    end
-
-    it "is false for an over-precision q-value (q=0.1234)" do
-      stub_accept_header("application/json;q=0.1234")
       expect(controller.send(:__ruact_json_accept?)).to be(false)
     end
   end
@@ -266,177 +175,6 @@ RSpec.describe Ruact::Server, :story_9_1 do
     it "is false for a non-GET request without a JSON Accept (Bucket-1 form submit)" do
       stub_request(accept: "text/html", verb: "POST")
       expect(controller.send(:__ruact_function_call?)).to be(false)
-    end
-  end
-
-  # Review patch (2026-06-08) — AC4 / Pitfall #4 made executable. A host that
-  # re-orders CSRF ahead of the prepended upload guard via
-  # `protect_from_forgery prepend: true` would 403 an oversized tokenless
-  # multipart request before the intended 413. The concern detects the
-  # inversion in the compiled callback chain and fails loudly rather than
-  # documenting it as the host's responsibility.
-  describe "Story 9.1 — upload guard must precede CSRF verification (AC4 / Pitfall #4, review patch)" do
-    let(:inverted_controller_class) do
-      Class.new(ActionController::Base) do
-        include Ruact::Server
-
-        protect_from_forgery with: :exception, prepend: true
-      end
-    end
-
-    let(:ordered_controller_class) do
-      Class.new(ActionController::Base) do
-        include Ruact::Server
-
-        protect_from_forgery with: :exception
-      end
-    end
-
-    it "detects the inversion when verify_authenticity_token is prepended ahead of the guard" do
-      expect(inverted_controller_class.new.send(:__ruact_csrf_precedes_upload_guard?)).to be(true)
-    end
-
-    it "does not flag a controller whose CSRF check follows the prepended guard" do
-      expect(ordered_controller_class.new.send(:__ruact_csrf_precedes_upload_guard?)).to be(false)
-    end
-
-    it "does not flag a controller without CSRF protection at all" do
-      expect(
-        ServerConcernUnitSupport::ConcernController.new.send(:__ruact_csrf_precedes_upload_guard?)
-      ).to be(false)
-    end
-
-    # Review patch (2026-06-08, round 3) — the detector reduced callbacks to
-    # raw filter names and ignored `if`/`unless`/`only`/`except`, so a CSRF
-    # callback that can NEVER run on a real request still produced a spurious
-    # ConfigurationError. The detector now narrows to UNCONDITIONAL CSRF
-    # callbacks (the genuine `protect_from_forgery prepend: true` misconfig is
-    # unconditional, so it is still caught).
-    context "with a CONDITIONAL CSRF callback (review patch round 3)" do
-      let(:disabled_if_class) do
-        Class.new(ActionController::Base) do
-          include Ruact::Server
-
-          protect_from_forgery with: :exception, prepend: true, if: -> { false }
-        end
-      end
-
-      let(:action_scoped_class) do
-        Class.new(ActionController::Base) do
-          include Ruact::Server
-
-          protect_from_forgery with: :exception, prepend: true, only: [:never_routed]
-        end
-      end
-
-      it "does NOT flag a prepended-but-disabled CSRF callback (if: -> { false })" do
-        expect(disabled_if_class.new.send(:__ruact_csrf_precedes_upload_guard?)).to be(false)
-      end
-
-      it "does NOT flag a prepended CSRF callback scoped to other actions (only:)" do
-        expect(action_scoped_class.new.send(:__ruact_csrf_precedes_upload_guard?)).to be(false)
-      end
-
-      it "does NOT raise when the guard runs on a controller with a conditional CSRF callback" do
-        controller = disabled_if_class.new
-        request = instance_double(ActionDispatch::Request, get?: true, head?: false)
-        allow(controller).to receive(:request).and_return(request)
-        expect { controller.send(:__ruact_enforce_upload_limit!) }.not_to raise_error
-      end
-    end
-
-    # Review patch (2026-06-08, round 4) — round 3's "unconditional only"
-    # narrowing created a false NEGATIVE: a conditional CSRF callback that DOES
-    # apply to the current action (e.g. `only: [:create]` on `create`, or
-    # `if: -> { true }`) still runs ahead of the guard, but was not flagged.
-    # The detector now evaluates callback applicability for the current
-    # action/request, so an ACTIVE condition is caught.
-    context "with an ACTIVE conditional CSRF callback (review patch round 4)" do
-      let(:only_create_class) do
-        Class.new(ActionController::Base) do
-          include Ruact::Server
-
-          protect_from_forgery with: :exception, prepend: true, only: [:create]
-        end
-      end
-
-      let(:if_true_class) do
-        Class.new(ActionController::Base) do
-          include Ruact::Server
-
-          protect_from_forgery with: :exception, prepend: true, if: -> { true }
-        end
-      end
-
-      it "flags only: [:create] when the current action IS :create" do
-        controller = only_create_class.new
-        allow(controller).to receive(:action_name).and_return("create")
-        expect(controller.send(:__ruact_csrf_precedes_upload_guard?)).to be(true)
-      end
-
-      it "does NOT flag only: [:create] when the current action is a different one" do
-        controller = only_create_class.new
-        allow(controller).to receive(:action_name).and_return("index")
-        expect(controller.send(:__ruact_csrf_precedes_upload_guard?)).to be(false)
-      end
-
-      it "flags an active if: -> { true } condition" do
-        expect(if_true_class.new.send(:__ruact_csrf_precedes_upload_guard?)).to be(true)
-      end
-    end
-
-    it "raises Ruact::ConfigurationError when the guard runs on an inverted controller (non-GET)" do
-      controller = inverted_controller_class.new
-      request = instance_double(ActionDispatch::Request, get?: false, head?: false)
-      allow(controller).to receive(:request).and_return(request)
-      expect { controller.send(:__ruact_enforce_upload_limit!) }
-        .to raise_error(Ruact::ConfigurationError, /verify_authenticity_token before/)
-    end
-
-    it "does NOT raise when the guard runs on a correctly-ordered controller" do
-      controller = ordered_controller_class.new
-      # Non-GET so the guard IS applicable (exercises the detector path);
-      # content_mime_type nil makes the guard body short-circuit cleanly.
-      request = instance_double(ActionDispatch::Request, get?: false, head?: false, content_mime_type: nil)
-      allow(controller).to receive(:request).and_return(request)
-      expect { controller.send(:__ruact_enforce_upload_limit!) }.not_to raise_error
-    end
-
-    # Review patch (2026-06-08, round 5) — D2/AC1: the upload guard never fires
-    # on GET/HEAD, so there is no 413-before-CSRF invariant to enforce on those
-    # requests. The precedence verifier must be a no-op when the guard is not
-    # applicable, even on an inverted host (the misconfig surfaces on the first
-    # non-GET request instead — see the request specs).
-    context "when the request is GET/HEAD and the upload guard is not applicable (review patch round 5)" do
-      it "does NOT raise on an inverted host for a GET request (guard not applicable)" do
-        controller = inverted_controller_class.new
-        request = instance_double(ActionDispatch::Request, get?: true, head?: false)
-        allow(controller).to receive(:request).and_return(request)
-        expect { controller.send(:__ruact_enforce_upload_limit!) }.not_to raise_error
-      end
-
-      it "does NOT raise on an inverted host for a HEAD request (guard not applicable)" do
-        controller = inverted_controller_class.new
-        request = instance_double(ActionDispatch::Request, get?: false, head?: true)
-        allow(controller).to receive(:request).and_return(request)
-        expect { controller.send(:__ruact_enforce_upload_limit!) }.not_to raise_error
-      end
-    end
-
-    # Review patch (2026-06-08, round 4 → confirmed round 5) — nil cap disables
-    # the guard, so the verifier must not fire even on a guarded (non-GET)
-    # request on an inverted host.
-    it "does NOT raise on an inverted host when max_upload_bytes is nil (non-GET)" do
-      Ruact.instance_variable_set(:@config, nil)
-      Ruact.instance_variable_set(:@configured_at_least_once, false)
-      Ruact.configure { |c| c.max_upload_bytes = nil }
-      controller = inverted_controller_class.new
-      request = instance_double(ActionDispatch::Request, get?: false, head?: false)
-      allow(controller).to receive(:request).and_return(request)
-      expect { controller.send(:__ruact_enforce_upload_limit!) }.not_to raise_error
-    ensure
-      Ruact.instance_variable_set(:@config, nil)
-      Ruact.instance_variable_set(:@configured_at_least_once, false)
     end
   end
 end

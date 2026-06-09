@@ -1342,3 +1342,26 @@ PR (GitHub Flow — no amend/force-push).
    host renders (200); GET whose CSRF is scoped to the GET action (`only:`)
    renders (200); non-GET inverted specs still fail loudly; unit GET/HEAD
    no-raise + nil-limit non-GET no-raise.
+
+### 2026-06-08 — Story 9.1 — contract simplification after review round 5
+
+The repeated review loop on Story 9.1 exposed two over-engineered edges:
+request-time callback-order introspection for the upload guard, and a hand-
+rolled Accept parser that kept accreting RFC 7231 edge handling. The final
+decision is to simplify both contracts rather than keep patching them.
+
+1. **Accept is now exact.** The v2 concern treats only `Accept: application/json`
+   as a JSON-Accept request. Exact header match, no qvalue parsing, no media-
+   range splitting, no quoted-string handling. This matches the generated
+   runtime shape and removes the parser surface entirely.
+2. **Upload-order verification is documented, not enforced at runtime.** The
+   concern still installs the upload guard, but it no longer introspects the
+   callback chain to detect `protect_from_forgery prepend: true`. Hosts are
+   expected to include `Ruact::Server` after `protect_from_forgery`; the order
+   is documented in the changelog and story file instead of being enforced via
+   request-time callback inspection.
+
+Pinned by the simplified round-6 follow-up specs: exact `Accept:
+application/json` is the only function-call discriminator, and the upload guard
+still works on correctly ordered hosts while the misordered-host behavior is no
+longer special-cased.

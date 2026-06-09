@@ -58,7 +58,6 @@ module Ruact
       # default has enough headroom that this is invisible for the common
       # case; the docs page calls it out for the edge.
       def __ruact_enforce_upload_limit!
-        __ruact_verify_upload_guard_precedence!
         return unless __ruact_upload_guard_applicable?
 
         limit = Ruact.config.max_upload_bytes
@@ -89,16 +88,6 @@ module Ruact
       # handling — debug page in development, public 500 in production —
       # proceeds exactly as if the concern were not installed.
       def __ruact_render_action_error(error)
-        # Review patch (2026-06-08, round 3) — re-assert the upload-guard
-        # ordering invariant here too. On an inverted host (CSRF prepended
-        # ahead of the guard via `protect_from_forgery prepend: true`) an
-        # oversized tokenless POST is rejected by `verify_authenticity_token`
-        # BEFORE the guard can run, so the guard's own precedence check never
-        # fires. Running it in the rescue path means the misconfiguration
-        # surfaces loudly on that request too — the inverted controller cannot
-        # serve a single request. A no-op for the v1 endpoint (default hook)
-        # and for correctly-ordered hosts.
-        __ruact_verify_upload_guard_precedence!
         raise error unless __ruact_render_structured_error?(error)
 
         action_name = __ruact_error_action_name
@@ -128,14 +117,6 @@ module Ruact
       def __ruact_upload_guard_applicable?
         true
       end
-
-      # Hook — assert any precondition the upload guard depends on BEFORE the
-      # size check (runs for every verb, including the GET/HEAD requests that
-      # {#__ruact_upload_guard_applicable?} later short-circuits). The v1
-      # endpoint owns its callback chain end-to-end and has nothing to verify;
-      # {Ruact::Server} overrides this to fail loudly when a host re-orders
-      # CSRF ahead of the guard (AC4 / Pitfall #4).
-      def __ruact_verify_upload_guard_precedence!; end
 
       # Story 8.4 — Status mapping per AC1:
       # - `ActiveRecord::RecordInvalid` → 422

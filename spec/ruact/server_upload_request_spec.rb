@@ -7,7 +7,8 @@
 #
 #   - oversized multipart → 413 + structured `upload_limit` payload through
 #     the concern's salvaged chain (inventory A7, A14, B7, B9, B11)
-#   - guard fires BEFORE CSRF verification — 413, not 403 (B6 / Pitfall #4)
+#   - guard fires BEFORE CSRF verification on correctly ordered hosts —
+#     413, not 403 (B6 / Pitfall #4)
 #   - the three carve-outs: nil limit (B2), content-type allowlist (B3),
 #     absent Content-Length (B4); off-by-one equal-passes (B5)
 #   - D1: the 413 renders structured for native form submits too (no
@@ -61,50 +62,6 @@ module ServerUploadSpecSupport
       render json: { "ok" => true }
     end
   end
-
-  # Review patch (2026-06-08) — pathological host that re-orders CSRF ahead of
-  # the prepended upload guard via `protect_from_forgery prepend: true`. The
-  # concern must detect the inversion and fail loudly rather than silently
-  # 403 an oversized tokenless request before the intended 413 (AC4).
-  class InvertedGuardUploadsController < ActionController::Base
-    include Ruact::Server
-
-    protect_from_forgery with: :exception, prepend: true
-
-    # A GET page action: CSRF verification is a no-op for GET, so the prepended
-    # guard still runs and surfaces the ordering inversion immediately — the
-    # realistic "fail on the first page load" path (an oversized tokenless POST
-    # would already be 403'd by the misordered CSRF check before the guard, the
-    # very breakage this detection exists to prevent in development).
-    def page
-      render plain: "inverted host page"
-    end
-
-    # Review patch (2026-06-08, round 3) — the exact broken shape the reviewer
-    # named: an oversized multipart POST without a CSRF token. On an inverted
-    # host Rails runs verify_authenticity_token BEFORE the prepended guard, so
-    # the guard never gets to 413. The concern must still fail loudly here
-    # (via the rescue chain re-asserting the precedence invariant) rather than
-    # quietly 403-ing — the misconfiguration cannot serve a single request.
-    def create
-      render json: { "ok" => true }
-    end
-  end
-
-  # Review patch (2026-06-08, round 5) — a host whose CSRF check is prepended
-  # ahead of the guard but SCOPED to a GET action (`only: [:index]`). The CSRF
-  # callback IS applicable to the GET, so the detector flags it, but the upload
-  # guard never fires on a GET (D2) — so the verifier must NOT raise, and the
-  # page renders byte-for-byte (AC1).
-  class ScopedCsrfUploadsController < ActionController::Base
-    include Ruact::Server
-
-    protect_from_forgery with: :exception, prepend: true, only: [:index]
-
-    def index
-      render plain: "scoped csrf page"
-    end
-  end
 end
 
 if defined?(ControllerRequestSpecSupport) &&
@@ -113,9 +70,6 @@ if defined?(ControllerRequestSpecSupport) &&
   ControllerRequestSpecSupport.app_class.routes.append do
     post "/server_upload",           to: "server_upload_spec_support/uploads_server#create_upload"
     post "/server_upload/protected", to: "server_upload_spec_support/forgery_uploads_server#create_protected_upload"
-    get  "/server_upload/inverted",  to: "server_upload_spec_support/inverted_guard_uploads#page"
-    post "/server_upload/inverted",  to: "server_upload_spec_support/inverted_guard_uploads#create"
-    get  "/server_upload/scoped_csrf", to: "server_upload_spec_support/scoped_csrf_uploads#index"
   end
 end
 
@@ -235,68 +189,6 @@ RSpec.describe "Story 9.1: Ruact::Server concern — salvaged upload guard", :st
         expect(last_response.status).to eq(413)
         expect(JSON.parse(last_response.body).fetch("error_class")).to eq("Ruact::UploadTooLargeError")
       end
-    end
-  end
-
-  describe "upload guard precedence — GET/HEAD stay byte-for-byte on an inverted host (D2/AC1, round 5)" do
-    # SUPERSEDES the round-2 "fail on the first GET page load" behavior: D2 says
-    # the upload guard never fires on GET/HEAD, so there is no 413-before-CSRF
-    # invariant to enforce on those requests — raising there would break AC1.
-    # The misordering instead surfaces loudly on the first non-GET request (see
-    # the oversized tokenless POST spec below).
-    it "a GET page load on an unconditionally-inverted host renders normally (no ConfigurationError)" do
-      get "/server_upload/inverted"
-      expect(last_response.status).to eq(200)
-      expect(last_response.body).to eq("inverted host page")
-    end
-
-    it "a GET page load whose CSRF check is scoped to the GET action (only:) still renders" do
-      # The CSRF callback IS applicable to this GET, so the detector flags it,
-      # but the guard is not applicable on a GET — the verifier must no-op.
-      get "/server_upload/scoped_csrf"
-      expect(last_response.status).to eq(200)
-      expect(last_response.body).to eq("scoped csrf page")
-    end
-  end
-
-  describe "inverted host — oversized tokenless POST also fails loudly (AC4 / Pitfall #4, review patch round 3)" do
-    around do |example|
-      previous = ServerUploadSpecSupport::InvertedGuardUploadsController.allow_forgery_protection
-      ServerUploadSpecSupport::InvertedGuardUploadsController.allow_forgery_protection = true
-      example.run
-    ensure
-      ServerUploadSpecSupport::InvertedGuardUploadsController.allow_forgery_protection = previous
-    end
-
-    before { cap_max_upload_bytes(1024) }
-
-    it "raises Ruact::ConfigurationError instead of silently 403-ing before the 413" do
-      # CSRF (prepended ahead) raises InvalidAuthenticityToken before the guard
-      # ever runs, so the inversion cannot surface from the guard itself. The
-      # rescue chain re-asserts the precedence invariant and propagates the
-      # ConfigurationError — the misconfigured controller serves NO request.
-      with_oversized_tempfile do |large|
-        expect do
-          post "/server_upload/inverted",
-               {
-                 "title" => "oversized, no token",
-                 "cover" => Rack::Test::UploadedFile.new(large.path, "application/octet-stream")
-               }
-        end.to raise_error(Ruact::ConfigurationError, /upload guard/)
-      end
-    end
-  end
-
-  describe "inverted host with max_upload_bytes = nil — no invariant to enforce (review patch round 4)" do
-    # When the gem-side cap is disabled there is no 413-before-CSRF invariant
-    # for Ruact to protect, so the ordering verifier must NOT fire — the
-    # request follows stock Rails behavior even on an otherwise-inverted host.
-    before { cap_max_upload_bytes(nil) }
-
-    it "a GET page load renders normally instead of raising Ruact::ConfigurationError" do
-      get "/server_upload/inverted"
-      expect(last_response.status).to eq(200)
-      expect(last_response.body).to eq("inverted host page")
     end
   end
 
