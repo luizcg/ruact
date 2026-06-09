@@ -9,8 +9,10 @@ require "active_support/concern"
 # pipeline. The gem root never requires this file back (the bare
 # `require "ruact"` path stays ActionController-free; the Railtie loads the
 # concern), so this is acyclic by construction.
+require "uri"
 require_relative "../ruact"
 require_relative "server_functions/error_rendering"
+require_relative "server_functions/bucket_two_payload"
 
 module Ruact
   # Story 9.1 (route-driven redesign, Phase A) — the v2 server-functions
@@ -72,6 +74,34 @@ module Ruact
       # every other callback, including `verify_authenticity_token`.
       prepend_before_action :__ruact_enforce_upload_limit!
 
+      # Story 9.2 AC6 — `Vary: Accept` on every non-GET SUCCESS shape. The same
+      # URL + verb serves two bodies discriminated solely on `Accept`, so a
+      # cache MUST vary on it (never serve Flight to a JSON caller or vice-versa).
+      # Set in BOTH a `before_action` and an `after_action` (review rounds 1–2),
+      # because either callback alone has a gap:
+      #   - the `after_action` APPENDS to a host-set `Vary` (preserving it), but
+      #     is skipped when a `before_action` performs the response (e.g. an auth
+      #     `before_action` that `redirect_to`s a Bucket-2 call);
+      #   - the `before_action` covers that halt case (it runs ahead of the
+      #     host's own before-callbacks), but a later `response.headers["Vary"] =`
+      #     in the action would clobber it.
+      # Together they cover the 200 ivar-JSON / 204 / `$redirect` / Bucket-1
+      # Flight shapes (incl. before-callback redirects). The method is
+      # idempotent. Error responses (413/403/500) may still omit it — they are
+      # non-cacheable, not dual representations.
+      #
+      # Documented limitation (accepted 2026-06-09): a host `before_action` that
+      # BOTH overwrites `Vary` AND performs the response (e.g.
+      # `response.headers["Vary"] = "Cookie"; redirect_to "/login"` in one
+      # before-callback) leaves the final response without `Accept` — the Ruact
+      # before-action set it first, the host clobbered it, and Rails skips the
+      # after-action on the before-halt. This combination is contrived (real
+      # auth callbacks don't reassign `Vary` while redirecting); a callback can't
+      # guarantee the final header unconditionally, and a Rack-level mechanism
+      # was judged not worth the complexity for this edge.
+      before_action :__ruact_set_vary_on_accept!
+      after_action  :__ruact_set_vary_on_accept!
+
       # Story 8.4 salvage — same registration order as v1 (Pitfall #1): the
       # generic StandardError entry first, the explicit
       # InvalidAuthenticityToken entry second so it wins Rails'
@@ -90,7 +120,98 @@ module Ruact
       self.rescue_handlers = (rescue_handlers - inherited_handlers) + inherited_handlers
     end
 
+    # Story 9.2 AC2/AC4 (D1) — Bucket-2 success-path negotiation. When the
+    # action finished without an explicit render on a function-call request
+    # ({#__ruact_function_call?} — `Accept: application/json`, non-GET), serialize
+    # the action's exposed instance variables (Rails `view_assigns`, verbatim —
+    # the same set a view would see) as a JSON object keyed by ivar name, or
+    # `204 No Content` when none were set. Any other request shape falls through
+    # to `super` so Bucket-1 rendering — the host's `Ruact::Controller` Flight
+    # re-render, then Rails — is byte-for-byte unchanged (AC1).
+    #
+    # The exposed-ivar set is Rails' own `view_assigns` with no custom filtering:
+    # Rails already excludes its protected `@_`-prefixed internals (including the
+    # CSRF `@_marked_for_same_origin_verification` flag), so what remains is
+    # exactly what the action assigned. Each value is serialized through the
+    # `ruact_props` / `Ruact::Serializable` / `strict_serialization` rules
+    # ({Ruact::ServerFunctions::BucketTwoPayload}); a single ivar stays keyed
+    # (no magic unwrap).
+    def default_render(*)
+      return super unless __ruact_function_call?
+
+      assigns = view_assigns
+      return head(:no_content) if assigns.empty?
+
+      render json: ServerFunctions::BucketTwoPayload.build(
+        assigns, strict: Ruact.config.strict_serialization
+      )
+    end
+
+    # Story 9.2 AC3 (D2) — on a function-call request, `redirect_to` surfaces as
+    # a JSON redirect directive — body `"$redirect" => "<path>"` (the runtime
+    # follows it client-side; re-targeting/following is Story 9.3) instead of a
+    # 302 or a Flight redirect row. Any other request shape falls through to
+    # `super` so the Bucket-1 Flight redirect row / Rails 302 is unchanged (AC1).
+    #
+    # Review round 1 — reuses Rails' OWN redirect machinery
+    # (`_compute_redirect_to_location`, `_ensure_url_is_http_header_safe`,
+    # `_enforce_open_redirect_protection`) so the nil-check, header-safety, and
+    # open-redirect protection (`allow_other_host` / `raise_on_open_redirects`)
+    # match Bucket 1 / stock Rails exactly — a cross-host `redirect_to` raises
+    # `UnsafeRedirectError` instead of leaking an external `$redirect`. Same-
+    # origin targets collapse to a path; an allowed external origin keeps the
+    # absolute URL.
+    def redirect_to(options = {}, response_options = {})
+      return super unless __ruact_function_call?
+
+      raise ActionController::ActionControllerError, "Cannot redirect to nil!" unless options
+      raise AbstractController::DoubleRenderError if response_body
+
+      allow_other_host = response_options.delete(:allow_other_host)
+      location = _compute_redirect_to_location(request, options)
+      _ensure_url_is_http_header_safe(location)
+      location = _enforce_open_redirect_protection(location, allow_other_host: allow_other_host)
+
+      render json: { "$redirect" => __ruact_redirect_path(location) }
+    end
+
     private
+
+    # AC6 — append `Accept` to the `Vary` response header for non-GET requests
+    # (idempotent, preserves any host-set `Vary`). A host `Vary: *` wildcard is
+    # left as-is (review round 2): per HTTP, `Vary` is either `*` (varies on
+    # everything) OR a field-name list — `*, Accept` is invalid/weaker.
+    def __ruact_set_vary_on_accept!
+      return if request.get? || request.head?
+
+      values = response.headers["Vary"].to_s.split(",").map(&:strip).reject(&:empty?)
+      return if values.include?("*")
+
+      values << "Accept" unless values.any? { |value| value.casecmp?("Accept") }
+      response.headers["Vary"] = values.join(", ")
+    end
+
+    # Collapse a (already open-redirect-validated) location to a path for
+    # same-origin URLs (the common `redirect_to @record` case); keep the
+    # absolute URL for an allowed external origin so a cross-origin redirect
+    # (e.g. a payment provider, with `allow_other_host: true`) survives. Mirrors
+    # the same-origin handling in {Ruact::Controller#redirect_to}.
+    def __ruact_redirect_path(url)
+      uri = ::URI.parse(url)
+      if uri.host &&
+         (uri.host != request.host ||
+          (uri.port && uri.port != request.port) ||
+          (uri.scheme && uri.scheme != request.scheme))
+        return url
+      end
+
+      path = uri.path.nil? || uri.path.empty? ? "/" : uri.path
+      path += "?#{uri.query}" if uri.query
+      path += "##{uri.fragment}" if uri.fragment
+      path
+    rescue ::URI::InvalidURIError
+      url
+    end
 
     # Raw discriminator — does the request's `Accept` header equal
     # `application/json`? This is exactly what the 8.1 runtime sends on every

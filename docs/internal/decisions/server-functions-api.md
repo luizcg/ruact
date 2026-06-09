@@ -1365,3 +1365,88 @@ Pinned by the simplified round-6 follow-up specs: exact `Accept:
 application/json` is the only function-call discriminator, and the upload guard
 still works on correctly ordered hosts while the misordered-host behavior is no
 longer special-cased.
+
+### 2026-06-09 — Story 9.2 — dual-bucket response negotiation on the same controller action
+
+Phase B's contract story: one non-GET `Ruact::Server` action serves both
+form/navigation submits (Bucket 1) and imperative `await fn()` calls (Bucket 2),
+discriminated by `__ruact_function_call?` (locked in 9.1 — `Accept: application/json`,
+non-GET). 9.1 built the predicate; 9.2 builds the response side.
+
+**D1 — Bucket-2 success seam (`default_render`).** `Ruact::Server` overrides
+`default_render`: `return super unless __ruact_function_call?` — so Bucket 1
+falls through to the host's `Ruact::Controller#default_render` (Flight re-render)
+and Rails, byte-for-byte unchanged. On Bucket 2 it serializes the action's
+exposed ivars as a JSON object (or `head :no_content`). The two concerns are
+siblings composed on the host; the super-chain works because `Ruact::Server` is
+included on the action's controller (subclass) while `Ruact::Controller` sits on
+a parent (`ApplicationController`), so `Server#default_render` precedes
+`Controller#default_render` in the ancestry and `super` reaches it. Documented
+include-order assumption: `include Ruact::Server` AFTER (or below in the
+ancestry) `Ruact::Controller`.
+
+**Exposed ivars = Rails `view_assigns`, VERBATIM (decided with Luiz 2026-06-09 —
+"closest to how Rails does it").** No custom exclusion list. An early probe
+suggested `@marked_for_same_origin_verification` leaks, but that was a probe
+error: Rails 8.1.3 sets the PROTECTED `@_marked_for_same_origin_verification`
+(`request_forgery_protection.rb:447`, in `base.rb:322` protected ivars), so a
+real request's `view_assigns` is already clean. What remains is exactly what the
+action assigned — including `@current_user` IF the action calls the memoized
+helper (dev-controlled; same mental model as "what the view sees"). Keyed by
+ivar name without `@`; a single ivar stays keyed (no magic unwrap, decision C).
+
+**Bucket-2 value serialization — `Ruact::ServerFunctions::BucketTwoPayload`
+(pure).** Mirrors the policy of `Flight::Serializer#serialize_unknown`
+(`Ruact::Serializable` → `ruact_props` only; under `strict_serialization` a
+non-Serializable domain object raises `Ruact::SerializationError`; otherwise a
+vetted `as_json` fallback with self-/raise-guards), but emits PLAIN JSON-ready
+values (Hash/Array/scalar) — `render json:` does the encoding, so JSON
+primitives incl. Time/Date pass through (not Flight-encoded). Pure function: the
+caller passes the resolved `strict` flag (= `Ruact.config.strict_serialization`),
+mirroring the `ErrorPayload` caller/builder split (NFR26 / `Ruact/NoIoInFlight`
+untouched). Policy MIRRORED (not extracted from `flight/serializer.rb`) to avoid
+refactoring the Flight hot path; the Flight serializer remains the canonical
+policy reference.
+
+**D2 — `redirect_to` → `$redirect`.** `Ruact::Server` overrides `redirect_to`:
+`return super unless __ruact_function_call?` (Bucket 1 → Controller's Flight
+redirect row / Rails 302, unchanged). On Bucket 2 it renders
+`json: { "$redirect" => <path> }`. Same-origin targets collapse to a path
+(mirroring `Ruact::Controller#redirect_to`); external origins keep the absolute
+URL. **Server-only: the runtime does NOT follow `$redirect` today** — emitting it
+is 9.2; the client following it (and the route/verb re-target away from
+`/__ruact/fn/:name`) is Story 9.3's runtime work.
+
+**D3 — `Vary: Accept` (the ADR had NOT specified it — 9.2 owns it).** A
+`prepend_before_action :__ruact_set_vary_on_accept!` appends `Accept` to `Vary`
+for non-GET requests (idempotent, preserves host-set `Vary`). It is prepended
+BEFORE the upload guard in source so the guard still lands first (Story 8.5
+"guard wins the race" invariant preserved). Consequence: `Vary` is present on
+the 200 ivar-JSON, 204, `$redirect`, Bucket-1 Flight, structured-500, and
+403-CSRF shapes — the cacheable dual-representations — but NOT on the 413 upload
+rejection (the guard aborts the chain before the Vary callback). Acceptable: the
+413 is a non-cacheable error, not a dual representation.
+
+**Error routing (AC5).** A `Ruact::SerializationError` raised inside
+`default_render`'s Bucket-2 serialization propagates to the 9.1
+`__ruact_render_action_error` chain → `__ruact_render_structured_error?` is true
+(non-GET function call) → 500 structured payload. No new `rescue_from`.
+
+**CSRF (AC7 / NFR27).** Entirely the host's `protect_from_forgery` — valid token
+→ success; missing/invalid → 403 via the 9.1 chain; API-mode (forgery off) →
+accepted. No gem-side CSRF.
+
+#### 2026-06-09 — Story 9.2 review (round 3) — Vary callback limitation accepted
+
+The `Vary: Accept` mechanism is callback-based (`before_action` +
+`after_action`, see D3 / review rounds 1–2). One residual gap was identified
+and ACCEPTED (Luiz) rather than patched further: a host `before_action` that
+BOTH reassigns `Vary` AND performs the response in the same callback (e.g.
+`response.headers["Vary"] = "Cookie"; redirect_to "/login"`) yields a final
+response without `Accept` (Ruact's before-action set it, the host clobbered it,
+and Rails skips after-actions on a before-halt). Rationale: the combination is
+contrived (real auth callbacks redirect without reassigning `Vary`); a callback
+cannot unconditionally guarantee the final header, and a Rack-level mechanism
+was judged not worth the complexity for this edge. This mirrors the Story 9.1
+lesson — stop patching the edges of a mechanism once the remaining cases stop
+earning their complexity.
