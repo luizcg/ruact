@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   _makeRef,
+  _makeServerFunction,
   __RUNTIME_VERSION__,
   __internals,
   RuactActionError,
@@ -684,5 +685,143 @@ describe("Story 8.2 — revalidate()", () => {
     globalThis.location = { pathname: "/", search: "" };
 
     await expect(revalidate()).rejects.toThrow("Failed to fetch");
+  });
+});
+
+describe("Story 9.3 — _makeServerFunction (route-driven, real path+verb)", () => {
+  let originalNavigate;
+  let originalWindow;
+
+  beforeEach(() => {
+    originalNavigate = globalThis.__ruact_navigate;
+    originalWindow = globalThis.window;
+  });
+
+  afterEach(() => {
+    globalThis.__ruact_navigate = originalNavigate;
+    globalThis.window = originalWindow;
+  });
+
+  it("targets the real path + verb (POST /posts) — not the v1 synthetic endpoint", async () => {
+    mockFetchOk({ post: { id: 1 } });
+    const createPost = _makeServerFunction({ method: "POST", path: "/posts", segments: [] });
+
+    const result = await createPost({ title: "Hi" });
+
+    const [url, init] = globalThis.fetch.mock.calls[0];
+    expect(url).toBe("/posts");
+    expect(init.method).toBe("POST");
+    expect(init.redirect).toBe("error");
+    expect(JSON.parse(init.body)).toEqual({ title: "Hi" });
+    expect(result).toEqual({ post: { id: 1 } });
+  });
+
+  it("interpolates a :id segment from an object argument into the URL (PUT /posts/5)", async () => {
+    mockFetchOk(null, { status: 204, contentType: "text/plain" });
+    const updatePost = _makeServerFunction({ method: "PATCH", path: "/posts/:id", segments: ["id"] });
+
+    await updatePost({ id: 5, title: "Edited" });
+
+    const [url, init] = globalThis.fetch.mock.calls[0];
+    expect(url).toBe("/posts/5");
+    expect(init.method).toBe("PATCH");
+    // The id stays in the body too — Rails reads it from the path; harmless dup.
+    expect(JSON.parse(init.body)).toEqual({ id: 5, title: "Edited" });
+  });
+
+  it("interpolates a :id segment read from FormData and keeps the multipart body", async () => {
+    mockFetchOk({ ok: true });
+    const fd = new FormData();
+    fd.append("id", "42");
+    fd.append("title", "x");
+    const updatePost = _makeServerFunction({ method: "PATCH", path: "/posts/:id", segments: ["id"] });
+
+    await updatePost(fd);
+
+    const [url, init] = globalThis.fetch.mock.calls[0];
+    expect(url).toBe("/posts/42");
+    expect(init.body).toBe(fd); // FormData passed through (browser sets multipart boundary)
+    expect(init.headers["Content-Type"]).toBeUndefined();
+  });
+
+  it("URL-encodes interpolated segment values", async () => {
+    mockFetchOk({ ok: true });
+    const showThing = _makeServerFunction({ method: "DELETE", path: "/things/:slug", segments: ["slug"] });
+
+    await showThing({ slug: "a/b c" });
+
+    expect(globalThis.fetch.mock.calls[0][0]).toBe("/things/a%2Fb%20c");
+  });
+
+  it("throws a clear TypeError when a required segment is missing", async () => {
+    mockFetchOk({ ok: true });
+    const updatePost = _makeServerFunction({ method: "PATCH", path: "/posts/:id", segments: ["id"] });
+
+    await expect(updatePost({ title: "no id here" })).rejects.toThrow(/path segment ":id"/);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("injects the CSRF meta-tag token as X-CSRF-Token (NFR27 preserved)", async () => {
+    mockFetchOk({ ok: true });
+    mockMetaTag("tok-9-3");
+    const createPost = _makeServerFunction({ method: "POST", path: "/posts", segments: [] });
+
+    await createPost({ title: "x" });
+
+    expect(globalThis.fetch.mock.calls[0][1].headers["X-CSRF-Token"]).toBe("tok-9-3");
+  });
+
+  it("wraps a non-2xx response in RuactActionError (status + body preserved)", async () => {
+    mockFetchError(422, JSON.stringify({ error: "invalid" }));
+    const createPost = _makeServerFunction({ method: "POST", path: "/posts", segments: [] });
+
+    await expect(createPost({ title: "" })).rejects.toMatchObject({
+      name: "RuactActionError",
+      status: 422,
+    });
+  });
+
+  it("resolves null on an empty (204) body (matches the v1 empty-body contract)", async () => {
+    mockFetchOk("", { status: 204, contentType: "text/plain" });
+    const createPost = _makeServerFunction({ method: "POST", path: "/posts", segments: [] });
+
+    await expect(createPost({})).resolves.toBeNull();
+  });
+
+  it("follows a { $redirect } response via globalThis.__ruact_navigate and resolves null (AC8)", async () => {
+    mockFetchOk({ $redirect: "/posts/1" });
+    const navSpy = vi.fn();
+    globalThis.__ruact_navigate = navSpy;
+    const createPost = _makeServerFunction({ method: "POST", path: "/posts", segments: [] });
+
+    const result = await createPost({ title: "x" });
+
+    expect(navSpy).toHaveBeenCalledWith("/posts/1");
+    expect(result).toBeNull();
+  });
+
+  it("falls back to window.location.assign for $redirect when no router is installed", async () => {
+    mockFetchOk({ $redirect: "/posts/2" });
+    globalThis.__ruact_navigate = undefined;
+    const assignSpy = vi.fn();
+    globalThis.window = { location: { assign: assignSpy } };
+    const createPost = _makeServerFunction({ method: "POST", path: "/posts", segments: [] });
+
+    const result = await createPost({ title: "x" });
+
+    expect(assignSpy).toHaveBeenCalledWith("/posts/2");
+    expect(result).toBeNull();
+  });
+
+  it("does NOT treat an ordinary object body with no $redirect as a redirect", async () => {
+    mockFetchOk({ post: { id: 1 }, $redirect: 42 }); // $redirect not a string → ignored
+    const navSpy = vi.fn();
+    globalThis.__ruact_navigate = navSpy;
+    const createPost = _makeServerFunction({ method: "POST", path: "/posts", segments: [] });
+
+    const result = await createPost({});
+
+    expect(navSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ post: { id: 1 }, $redirect: 42 });
   });
 });

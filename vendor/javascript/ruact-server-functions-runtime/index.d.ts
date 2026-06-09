@@ -67,6 +67,27 @@ export function _makeRef(
   ((formData: RuactFormData) => Promise<void>);
 
 /**
+ * Story 9.3 — the route-driven (v2) accessor. The codegen emits
+ * `_makeServerFunction({ method, path, segments })` for every non-GET routed
+ * action on a `Ruact::Server` controller. The returned callable targets the
+ * REAL Rails route + verb (e.g. `POST /posts`, `PUT /posts/:id`), interpolating
+ * dynamic path segments by name from the single call argument, and follows a
+ * Bucket-2 `{ "$redirect": "<path>" }` response client-side.
+ *
+ * Shares the same intersection call-signature contract as {@link _makeRef} so
+ * `<form action={createPost}>` and `useActionState` keep type-checking.
+ */
+export function _makeServerFunction(descriptor: {
+  method: string;
+  path: string;
+  segments?: string[];
+}): ((
+  arg1?: Record<string, unknown> | RuactFormData,
+  arg2?: RuactFormData | Record<string, unknown>,
+) => Promise<unknown>) &
+  ((formData: RuactFormData) => Promise<void>);
+
+/**
  * Story 8.2 — issues a Flight refetch of the supplied path (or the
  * current URL when omitted) and swaps the React tree in place. Mirrors
  * Next.js' `revalidatePath` ergonomic: call it after a server action
