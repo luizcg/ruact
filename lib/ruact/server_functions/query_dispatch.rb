@@ -187,23 +187,24 @@ module Ruact
         def build_controller(query_class)
           query_class_name = query_class.name
 
-          controller = Class.new(resolve_parent_controller) do
-            include Ruact::ServerFunctions::ErrorRendering
-            include Dispatching
+          # Mixins applied on the built class (not inside a `Class.new do … end`
+          # block) so YARD's static MixinHandler does not emit "Undocumentable
+          # mixin … for class" for an anonymous class body — the
+          # `--fail-on-warning` docs gate treats that as an error. Runtime is
+          # identical.
+          controller = Class.new(resolve_parent_controller)
+          controller.include(Ruact::ServerFunctions::ErrorRendering)
+          controller.include(Dispatching)
 
-            # Re-constantized on every read so dev-mode code reloading of the
-            # query class can never leave the controller holding a stale ref.
-            define_singleton_method(:__ruact_query_class) { query_class_name.constantize }
+          controller.define_singleton_method(:__ruact_query_class) { query_class_name.constantize }
 
-            # AC5 — the salvaged 8.4 error chain, with the same front-loading
-            # trick as Ruact::Server: handlers the parent chain registered
-            # (inherited OR declared later) stay more recent and keep
-            # precedence; the structured renderer only catches what the host
-            # did not.
-            inherited_handlers = rescue_handlers
-            rescue_from StandardError, with: :__ruact_render_action_error
-            self.rescue_handlers = (rescue_handlers - inherited_handlers) + inherited_handlers
-          end
+          # AC5 — the salvaged 8.4 error chain, with the same front-loading
+          # trick as Ruact::Server: handlers the parent chain registered
+          # (inherited OR declared later) stay more recent and keep precedence;
+          # the structured renderer only catches what the host did not.
+          inherited_handlers = controller.rescue_handlers
+          controller.rescue_from(StandardError, with: :__ruact_render_action_error)
+          controller.rescue_handlers = (controller.rescue_handlers - inherited_handlers) + inherited_handlers
 
           define_query_actions(controller, query_class)
           apply_skips(controller, query_class)

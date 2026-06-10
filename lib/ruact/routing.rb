@@ -68,4 +68,14 @@ end
 # D8 — installed at require time (the Railtie requires this file from its
 # `ruact.load_controller` initializer; a direct `require "ruact/routing"`
 # in a non-Railtie context gets the same one-shot, idempotent install).
-ActionDispatch::Routing::Mapper.include(Ruact::Routing)
+# Written as a class reopening (rather than
+# `ActionDispatch::Routing::Mapper.include Ruact::Routing`) so YARD's static
+# MixinHandler resolves the named namespace instead of choking on the external
+# constant receiver under `--fail-on-warning`.
+module ActionDispatch # rubocop:disable Style/OneClassPerFile -- deliberate Mapper extension install (D8)
+  module Routing
+    class Mapper
+      include Ruact::Routing
+    end
+  end
+end
