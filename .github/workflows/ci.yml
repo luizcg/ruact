@@ -169,3 +169,5 @@ jobs:
 # here (this repo has no `e2e/` directory). When/if a host-app system test
 # is desired in CI, host the workflow in the monorepo (luizcg/ruact-dev) where
 # both the gem submodule and the e2e/ Rails app live side by side.
+
+# ci-trigger-probe: harmless comment
