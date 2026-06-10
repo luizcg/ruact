@@ -30,6 +30,8 @@ module Ruact
     autoload :EndpointController, "ruact/server_functions/endpoint_controller"
     autoload :StandaloneContext, "ruact/server_functions/standalone_context"
     autoload :StandaloneDispatcher, "ruact/server_functions/standalone_dispatcher"
+    autoload :QueryContext, "ruact/server_functions/query_context"
+    autoload :QueryDispatch, "ruact/server_functions/query_dispatch"
 
     # Story 9.3 — orchestrates the route-driven (v2) codegen target. Reads the
     # route table via {RouteSource}, writes the version-2 bridge to the PARALLEL

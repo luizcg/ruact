@@ -397,6 +397,91 @@ module Ruact
       end
     end
 
+    describe "Story 9.4 — query_route_prefix attribute", :story_9_4 do
+      it "defaults to \"/q\"" do
+        expect(Ruact.config.query_route_prefix).to eq("/q")
+      end
+
+      it "accepts a custom prefix inside Ruact.configure" do
+        Ruact.configure { |c| c.query_route_prefix = "/api/queries" }
+        expect(Ruact.config.query_route_prefix).to eq("/api/queries")
+      end
+
+      it "is sealed by the standard freeze contract — direct mutation raises ConfigurationError" do
+        Ruact.configure { |c| c.query_route_prefix = "/q" }
+        expect { Ruact.config.query_route_prefix = "/other" }
+          .to raise_error(Ruact::ConfigurationError, /Ruact::Configuration#query_route_prefix/)
+      end
+
+      it "is carried across atomic re-configuration (template clone)" do
+        Ruact.configure { |c| c.query_route_prefix = "/internal/q" }
+        Ruact.configure { |c| c.suspense_timeout = 6.0 }
+        expect(Ruact.config.query_route_prefix).to eq("/internal/q")
+      end
+
+      describe "writer-time validation" do
+        it "rejects a non-String with ConfigurationError naming the offending value + class" do
+          expect { Ruact.configure { |c| c.query_route_prefix = :q } }
+            .to raise_error(Ruact::ConfigurationError, /got :q \(Symbol\)/)
+        end
+
+        it "rejects a prefix that does not start with \"/\"" do
+          expect { Ruact.configure { |c| c.query_route_prefix = "q" } }
+            .to raise_error(Ruact::ConfigurationError, %r{must be a String starting with "/"})
+        end
+
+        it "rejects a prefix with a trailing slash (the macro joins with \"/\")" do
+          expect { Ruact.configure { |c| c.query_route_prefix = "/q/" } }
+            .to raise_error(Ruact::ConfigurationError, %r{must not end with "/"})
+        end
+
+        it "rejects nil" do
+          expect { Ruact.configure { |c| c.query_route_prefix = nil } }
+            .to raise_error(Ruact::ConfigurationError, %r{must be a String starting with "/"})
+        end
+      end
+    end
+
+    describe "Story 9.4 — query_parent_controller attribute", :story_9_4 do
+      it "defaults to \"ApplicationController\"" do
+        expect(Ruact.config.query_parent_controller).to eq("ApplicationController")
+      end
+
+      it "accepts a custom controller name inside Ruact.configure" do
+        Ruact.configure { |c| c.query_parent_controller = "Api::BaseController" }
+        expect(Ruact.config.query_parent_controller).to eq("Api::BaseController")
+      end
+
+      it "is sealed by the standard freeze contract — direct mutation raises ConfigurationError" do
+        Ruact.configure { |c| c.query_parent_controller = "ApplicationController" }
+        expect { Ruact.config.query_parent_controller = "Other" }
+          .to raise_error(Ruact::ConfigurationError, /Ruact::Configuration#query_parent_controller/)
+      end
+
+      it "is carried across atomic re-configuration (template clone)" do
+        Ruact.configure { |c| c.query_parent_controller = "Api::BaseController" }
+        Ruact.configure { |c| c.suspense_timeout = 6.0 }
+        expect(Ruact.config.query_parent_controller).to eq("Api::BaseController")
+      end
+
+      describe "writer-time validation" do
+        it "rejects a Class with ConfigurationError (the name is constantized lazily at route-draw time)" do
+          expect { Ruact.configure { |c| c.query_parent_controller = Class.new } }
+            .to raise_error(Ruact::ConfigurationError, /must be a non-empty String/)
+        end
+
+        it "rejects an empty String" do
+          expect { Ruact.configure { |c| c.query_parent_controller = "" } }
+            .to raise_error(Ruact::ConfigurationError, /must be a non-empty String/)
+        end
+
+        it "rejects nil" do
+          expect { Ruact.configure { |c| c.query_parent_controller = nil } }
+            .to raise_error(Ruact::ConfigurationError, /must be a non-empty String/)
+        end
+      end
+    end
+
     describe "error message includes caller location" do
       it "names the file:line of the offending mutation (AC2.2)" do
         Ruact.configure { |c| c.suspense_timeout = 5.0 }

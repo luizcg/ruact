@@ -9,6 +9,12 @@ module Ruact
       # Story 9.1 — the v2 route-driven marker concern (`include Ruact::Server`).
       require_relative "server"
       require_relative "server_action"
+      # Story 9.4 (D8) — requiring ruact/routing installs the `ruact_queries`
+      # macro into ActionDispatch::Routing::Mapper (a Mapper extension, NOT a
+      # mounted route — the host's routes.rb explicitly mounts each query
+      # class). Initializers all run before the routes file is loaded, so the
+      # macro is in place for the first draw.
+      require_relative "routing"
     end
 
     # Story 8.3 — register `app/server_actions/` as a Rails `paths` entry
@@ -28,9 +34,7 @@ module Ruact
       end
     end
 
-    rake_tasks do
-      load File.expand_path("../tasks/ruact.rake", __dir__)
-    end
+    rake_tasks { load File.expand_path("../tasks/ruact.rake", __dir__) }
 
     # Story 8.1 — clear the action/query registries on every code reload so
     # removed `ruact_action` declarations don't linger in the registry. We hook
