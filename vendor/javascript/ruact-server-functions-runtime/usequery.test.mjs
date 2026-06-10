@@ -289,6 +289,26 @@ describe("Story 9.6 — useQuery in-flight request de-duplication", () => {
     await waitFor(() => expect(deferred.fetchMock).toHaveBeenCalledTimes(2));
   });
 
+  it("does NOT share an invalid-shape params call onto an in-flight no-param request (surfaces the error) — AC2", async () => {
+    const deferred = deferredFetch();
+    const categories = _makeQuery({ path: "/q/categories", kind: "query" });
+
+    // A no-param request is in flight (key "").
+    const noParams = renderHook(() => useQuery(categories));
+    await waitFor(() => expect(deferred.fetchMock).toHaveBeenCalledTimes(1));
+
+    // An invalid array-shaped params call must NOT join the "" request — it must
+    // invoke the reference, whose buildQueryUrl throws a TypeError.
+    const invalid = renderHook(() => useQuery(categories, [1, 2]));
+    await waitFor(() => expect(invalid.result.current.loading).toBe(false));
+
+    expect(invalid.result.current.error).toBeInstanceOf(TypeError);
+    expect(invalid.result.current.data).toBeUndefined();
+    // No new network call: buildQueryUrl threw before fetch, and it never shared.
+    expect(deferred.fetchMock).toHaveBeenCalledTimes(1);
+    expect(noParams.result.current.loading).toBe(true); // still in flight
+  });
+
   it("issues a FRESH request on a mount AFTER the previous settled (in-flight only, no cache) — AC3", async () => {
     mockFetchOk([{ value: 1 }]);
     const categories = _makeQuery({ path: "/q/categories", kind: "query" });
@@ -325,5 +345,24 @@ describe("Story 9.6 — canonicalParamsKey (dedup key derivation)", () => {
 
   it("skips undefined-valued keys (mirrors buildQueryUrl's wire omission)", () => {
     expect(canonicalParamsKey({ q: "a", extra: undefined })).toBe(canonicalParamsKey({ q: "a" }));
+  });
+
+  it("distinguishes null from non-finite numbers (NaN / Infinity), which the wire sends differently", () => {
+    const asNull = canonicalParamsKey({ q: null });
+    const asNaN = canonicalParamsKey({ q: NaN });
+    const asInfinity = canonicalParamsKey({ q: Infinity });
+    expect(asNull).not.toBe(asNaN);
+    expect(asNaN).not.toBe(asInfinity);
+    expect(asNull).not.toBe(asInfinity);
+  });
+
+  it("distinguishes a null value (bare key) from the empty string (key=)", () => {
+    expect(canonicalParamsKey({ q: null })).not.toBe(canonicalParamsKey({ q: "" }));
+  });
+
+  it("returns null (non-shareable) for shapes buildQueryUrl rejects — array top level or array/object value", () => {
+    expect(canonicalParamsKey([1, 2])).toBe(null);
+    expect(canonicalParamsKey({ q: [1, 2] })).toBe(null);
+    expect(canonicalParamsKey({ q: { deep: 1 } })).toBe(null);
   });
 });

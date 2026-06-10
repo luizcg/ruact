@@ -202,22 +202,39 @@ export function _makeQuery(descriptor) {
 // between cases — `dedupedQuery` closes over the binding, so the swap is seen.
 let inflightQueries = new WeakMap();
 
-// Order-independent serialization of the params object, used BOTH as the dedup
-// key and as the `useEffect` dependency. FR88 guarantees `params` is a flat
-// object of primitives (string / number / boolean / null — arrays/objects are
-// rejected upstream by `buildQueryUrl` and server-side), so sorting the
-// top-level keys is sufficient to collapse `{a:1,b:2}` and `{b:2,a:1}` onto the
-// same key. `undefined` values are skipped to mirror `buildQueryUrl` (which
-// omits them from the wire). `null` / no params both serialize to "".
+// Order-independent dedup key, used BOTH as the registry key and as the
+// `useEffect` dependency. It mirrors the WIRE output of `buildQueryUrl` exactly
+// (the per-param tokens, sorted so order doesn't matter), so two param objects
+// share a request IFF they produce the SAME query string — the true "same
+// network request" equivalence. Building from the wire (not `JSON.stringify`)
+// is deliberate: `JSON.stringify` maps `NaN`/`Infinity`/`-Infinity` to `null`,
+// which would collide those distinct wire values (`?q=NaN` vs bare `?q`) onto
+// one key. Mirrors `buildQueryUrl`'s rules: `undefined` skipped, `null` → bare
+// key, string/number/boolean → `key=String(value)`.
+//
+// Returns `null` to signal a NON-SHAREABLE shape (a non-object/array top level,
+// or an array/object VALUE) — exactly the inputs `buildQueryUrl` rejects with a
+// `TypeError`. `dedupedQuery` bypasses the registry for those so the reference
+// is still invoked and the error surfaces (Story 9.5 behavior), instead of an
+// invalid call wrongly joining an in-flight no-param request. `null`/no params
+// both serialize to "".
 function canonicalParamsKey(params) {
-  if (params == null || typeof params !== "object" || Array.isArray(params)) return "";
-  const keys = Object.keys(params)
-    .filter((key) => params[key] !== undefined)
-    .sort();
-  if (keys.length === 0) return "";
-  const canonical = {};
-  for (const key of keys) canonical[key] = params[key];
-  return JSON.stringify(canonical);
+  if (params == null) return "";
+  if (typeof params !== "object" || Array.isArray(params)) return null;
+  const tokens = [];
+  for (const key of Object.keys(params)) {
+    const value = params[key];
+    if (value === undefined) continue;
+    if (value === null) {
+      tokens.push(encodeURIComponent(key)); // bare key — mirrors buildQueryUrl
+    } else if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      tokens.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+    } else {
+      return null; // array/object value — buildQueryUrl throws; non-shareable
+    }
+  }
+  tokens.sort();
+  return tokens.join("&");
 }
 
 // Share the in-flight request for (reference, canonical params). The first
@@ -230,6 +247,12 @@ function canonicalParamsKey(params) {
 // retries fresh.
 function dedupedQuery(reference, params) {
   const key = canonicalParamsKey(params);
+  // A `null` key marks a non-shareable shape (the inputs `buildQueryUrl`
+  // rejects). Bypass the registry entirely so the reference is invoked and its
+  // `TypeError` surfaces on the error path — never share onto another request.
+  if (key === null) {
+    return Promise.resolve().then(() => reference(params));
+  }
   let perRef = inflightQueries.get(reference);
   if (perRef) {
     const existing = perRef.get(key);
