@@ -169,3 +169,64 @@ jobs:
 # here (this repo has no `e2e/` directory). When/if a host-app system test
 # is desired in CI, host the workflow in the monorepo (luizcg/ruact-dev) where
 # both the gem submodule and the e2e/ Rails app live side by side.
+
+  release:
+    # Auto-release to RubyGems on every GREEN push to main, gated on the full
+    # required-check set via `needs:`. Versioning (source of truth:
+    # lib/ruact/version.rb): story verde -> patch; epic verde -> minor via an
+    # `[epic-done]` marker in the merge-commit message; major manual for 1.0.0.
+    # Auth is RubyGems Trusted Publishing (OIDC) — satisfies
+    # rubygems_mfa_required. The bump commit carries [skip ci] (no re-trigger).
+    name: Release to RubyGems
+    needs: [name-propagation, rspec, rubocop, yard, benchmark]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+      - name: Decide bump kind & compute next version
+        id: bump
+        env:
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          KIND=patch
+          printf '%s' "$HEAD_MSG" | grep -qi '\[epic-done\]' && KIND=minor
+          VERSION=$(ruby -e '
+            kind = ARGV[0]
+            path = "lib/ruact/version.rb"
+            src  = File.read(path)
+            maj, min, pat = src.match(/VERSION = "(\d+)\.(\d+)\.(\d+)"/).captures.map(&:to_i)
+            case kind
+            when "major" then maj, min, pat = maj + 1, 0, 0
+            when "minor" then min, pat = min + 1, 0
+            else pat += 1
+            end
+            v = "#{maj}.#{min}.#{pat}"
+            File.write(path, src.sub(/VERSION = "[^"]+"/, %(VERSION = "#{v}")))
+            print v
+          ' "$KIND")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "::notice::Release bump $KIND -> v$VERSION"
+      - uses: rubygems/configure-rubygems-credentials@v1
+      - name: Commit, tag & publish
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Release v$VERSION [skip ci]"
+          git tag "v$VERSION"
+          git push origin HEAD --tags
+          gem build ruact.gemspec
+          gem push "ruact-$VERSION.gem"
