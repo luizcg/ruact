@@ -155,4 +155,46 @@ RSpec.describe Ruact::ServerFunctions::BucketTwoPayload, :story_9_2 do
         .to raise_error(Ruact::SerializationError, /as_json raised RuntimeError: boom in as_json/)
     end
   end
+
+  describe "Story 9.4 — .serialize_value (single value, same policy as .build — D6)", :story_9_4 do
+    it "serializes a Serializable through ruact_props only" do
+      post = B2Fixtures::Post.new(id: 1, title: "Hi", secret: "nope")
+      expect(described_class.serialize_value(post, strict: true)).to eq("id" => 1, "title" => "Hi")
+    end
+
+    it "recurses into Arrays of Serializables" do
+      posts = [B2Fixtures::Post.new(id: 1, title: "A", secret: "x")]
+      expect(described_class.serialize_value(posts, strict: true)).to eq([{ "id" => 1, "title" => "A" }])
+    end
+
+    it "recurses into Hashes, stringifying keys" do
+      value = { total: 2, post: B2Fixtures::Post.new(id: 1, title: "A", secret: "x") }
+      expect(described_class.serialize_value(value, strict: true))
+        .to eq("total" => 2, "post" => { "id" => 1, "title" => "A" })
+    end
+
+    it "passes primitives through untouched" do
+      expect(described_class.serialize_value(42, strict: true)).to eq(42)
+    end
+
+    it "passes nil through (the dispatch controller renders it as JSON null — D6)" do
+      expect(described_class.serialize_value(nil, strict: true)).to be_nil
+    end
+
+    it "raises Ruact::SerializationError for a non-Serializable under strict" do
+      expect { described_class.serialize_value(B2Fixtures::PlainRecord.new, strict: true) }
+        .to raise_error(Ruact::SerializationError, /Cannot serialize B2Fixtures::PlainRecord/)
+    end
+
+    it "falls back to as_json when strict is false" do
+      expect(described_class.serialize_value(B2Fixtures::PlainRecord.new, strict: false))
+        .to eq("id" => 7, "leaked" => "everything")
+    end
+
+    it "is the same policy .build applies per ivar (extraction, not a fork)" do
+      post = B2Fixtures::Post.new(id: 3, title: "Same", secret: "x")
+      expect(described_class.build({ "post" => post }, strict: true))
+        .to eq("post" => described_class.serialize_value(post, strict: true))
+    end
+  end
 end

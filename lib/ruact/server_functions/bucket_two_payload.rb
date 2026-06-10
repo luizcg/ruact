@@ -44,6 +44,19 @@ module Ruact
           assigns.to_h { |name, value| [name.to_s, serialize(value, strict)] }
         end
 
+        # Story 9.4 (D6) — the per-value branch of the policy, extracted so the
+        # query dispatch controller serializes a method's single RETURN VALUE
+        # (Array / Hash / scalar / Serializable / nil) through the exact rules
+        # {.build} applies to each exposed ivar. One policy, two callers.
+        #
+        # @param value [Object] the query method's return value
+        # @param strict [Boolean] the resolved `strict_serialization` mode
+        # @return [Object] JSON-ready value (`nil` stays `nil` → JSON `null`)
+        # @raise [Ruact::SerializationError] per the strict policy
+        def serialize_value(value, strict:)
+          serialize(value, strict)
+        end
+
         private
 
         def serialize(value, strict)

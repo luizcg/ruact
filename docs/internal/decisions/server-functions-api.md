@@ -1561,3 +1561,106 @@ never imported," and is strangler-safe (no cross-app behavior change in 9.3).
 **Strangler invariant.** The v1 `POST /__ruact/fn/:name` endpoint, registries,
 `ruact_action`/`ruact_query` DSL, and v1 codegen all stay fully alive and
 untouched. Demolition is Story 9.9; playground migration is Story 9.8.
+
+
+### 2026-06-09 — Story 9.4 — `Ruact::Query` base class + `ruact_queries` route macro — in-story decisions
+
+**Scope.** Implements the v2 QUERY DISPATCH layer locked by the 2026-06-02
+addendum (Decision 2): `Ruact::Query` base class, the `ruact_queries` mapper
+macro, the internal per-query-class dispatch controller, constructor context
+injection, the per-query callback opt-out, and the two new configuration
+attributes. Resolves 2026-06-02 **open item 1** (callback opt-out) and **open
+item 2** (route prefix). Codegen of query entries, the `useQuery` hook, and the
+strict FR88 kwargs sanitization are Story 9.5; dedup is 9.6. The v1
+`Ruact.query_registry` is untouched (legacy, removed by 9.9) — the v2 class
+model never reads or populates it.
+
+**Decisions taken in this story (delegated by the epic / 2026-06-02 addendum):**
+
+1. **Open item 1 — RESOLVED: `ruact_skip_before_action` (D1, AC4).** Class
+   macro on `Ruact::Query` subclasses mirroring Rails' `skip_before_action`
+   signature (`ruact_skip_before_action :authenticate_user!, only: :categories,
+   raise: false`). Recorded per-class (NOT inherited — a skip describes the
+   declaring class's own queries) and applied verbatim to that class's
+   generated dispatch controller at route-draw time. Scoping is structural:
+   each query class gets its OWN controller (decision 2 below), so a skip can
+   never leak to sibling query classes; `only:`/`except:` further scope to
+   individual query methods (one action per method). Unknown callbacks raise at
+   route-draw unless `raise: false` — stock Rails semantics.
+
+2. **Dispatch-controller shape (D2): one generated controller subclass PER
+   query class.** Built lazily by the routing macro (when `ruact_queries`
+   runs inside `routes.draw`, the host's constants exist), inheriting
+   `Ruact.config.query_parent_controller.constantize`, named under
+   `Ruact::ServerFunctions::QueryDispatch` (e.g. `…::CatalogQueryController`)
+   so string route targets and `rails routes` stay legible — the dev never
+   sees it. One action per public query method (what makes per-action
+   `skip_before_action` possible). Regeneration is idempotent
+   (`remove_const` + rebuild on every draw) and the query class is
+   re-constantized per request, so dev-mode code reloading never serves a
+   stale class. The single-shared-controller alternative (query identity in a
+   route default + conditional skips) was rejected: more complex, less
+   Rails-idiomatic, and per-action callback scoping degrades.
+
+3. **Context source (D3): delegate to the dispatching controller, not a
+   resolver lambda.** `Ruact::ServerFunctions::QueryContext` wraps the
+   controller instance; `current_user` resolves through the controller's own
+   method — public OR private (hand-rolled hosts commonly define it private)
+   — because the controller inherits the host parent, that IS the host's
+   Devise/Pundit/hand-rolled method (FR89). A host chain with no
+   `current_user` raises a `NoMethodError` naming `query_parent_controller`
+   and the fix. Mirrors `StandaloneContext`'s SHAPE (plain accessors,
+   per-request instance, NFR8); the Story-8.3 `current_user_resolver` lambda
+   plays no part (it is superseded with the standalone path).
+
+4. **Route path derivation (D4) + open item 2 — RESOLVED: `/q` prefix.** Path
+   = `"#{Ruact.config.query_route_prefix}/#{NameBridge.to_js_identifier(method)}"`
+   (`search_users` → `GET /q/searchUsers`), route name
+   `:"ruact_query_<jsIdentifier>"` — every query visible in `rails routes`.
+   New config attrs (both under the 7.3 freeze contract):
+   `query_route_prefix` (String, default `"/q"`, must start with `/`, no
+   trailing slash — validated at writer time) and `query_parent_controller`
+   (non-empty String, default `"ApplicationController"`, constantized lazily
+   at route-draw — never at configure time, when the constant may not exist).
+   NameBridge reserved-word/shape failures and duplicate route names across
+   query classes both fail loudly at route-draw.
+
+5. **GET error-chain gate (D5, AC5).** The generated controller includes the
+   salvaged `ErrorRendering` chain with the same handler front-loading as
+   `Ruact::Server` (host/parent `rescue_from` keeps precedence) and overrides
+   `__ruact_render_structured_error?`: the mutation concern's gate returns
+   false for GET/HEAD (GET *pages* keep stock Rails errors), but every query
+   dispatch request is a GET *function call* — the override renders the
+   structured 8.4 payload (same 422/403/413/500 mapping) for everything
+   except `Ruact::ConfigurationError`, which still re-raises (a
+   misconfiguration stays a loud setup failure). No upload guard callback is
+   registered (GET bodies) and no `skip_forgery_protection` is added (Rails
+   never CSRF-verifies GET — confirmed by spec, not by dead code).
+
+6. **Return-value serialization (D6): `BucketTwoPayload.serialize_value`.**
+   The per-value branch of the Bucket-2 policy was extracted as a public
+   `serialize_value(value, strict:)` and is now the single policy for BOTH
+   the 9.2 ivar hash and the 9.4 query return value (`ruact_props` /
+   `Serializable` / `strict_serialization`, primitives pass through,
+   Hash/Array recursion). The controller resolves `strict_serialization` and
+   passes it in (serializer stays pure, NFR26). The response body is encoded
+   explicitly (`ActiveSupport::JSON.encode`) so scalar String and `nil`
+   returns render valid JSON — **`nil` → `null` with 200** (not 204): simpler
+   for a read; the 9.5 `useQuery` hook treats `data: null` as "no rows".
+
+7. **Param passing boundary (D7).** 9.4 passes GET query params as the
+   keyword arguments the query method declares, by name, best-effort (values
+   arrive as Strings). The strict FR88 sanitization contract
+   (string/number/boolean/null allowlist, reject objects, 400 on invalid) is
+   **Story 9.5's**, coupled to the `useQuery` wire format.
+
+8. **Install mechanism (D8).** `Ruact::Routing` is included into
+   `ActionDispatch::Routing::Mapper` at require time (`ruact/routing`,
+   required by the Railtie's `ruact.load_controller` initializer — before the
+   host's routes file loads). This is a NEW mechanism for the gem: a Mapper
+   *extension* the host calls explicitly, not a mounted route like the v1
+   `app.routes.prepend` endpoint — decision A (explicit mount) made flesh.
+
+**Deferred (noted, not ACs here):** install-generator scaffolding for
+`app/queries/application_query.rb`; codegen + `useQuery` + FR88 kwargs (9.5);
+dedup (9.6); docs rewrite (9.7); playground migration (9.8).

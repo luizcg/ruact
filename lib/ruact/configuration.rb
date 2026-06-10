@@ -20,6 +20,8 @@ module Ruact
       current_user_resolver
       dev_error_payload_enabled
       max_upload_bytes
+      query_route_prefix
+      query_parent_controller
     ].freeze
 
     # @!attribute [r] manifest_path
@@ -83,6 +85,26 @@ module Ruact
     #     Ruact.configure { |c| c.max_upload_bytes = 25 * 1024 * 1024 }
     #   @example Disable the gem-side guard (reverse proxy owns the cap)
     #     Ruact.configure { |c| c.max_upload_bytes = nil }
+    #
+    # @!attribute [r] query_route_prefix
+    #   @return [String] Story 9.4 — URL prefix under which the `ruact_queries`
+    #     routing macro draws one named GET route per public query method
+    #     (default `"/q"` → `GET /q/<jsIdentifier>`). Must be a String starting
+    #     with `/` and without a trailing slash (the macro joins prefix and
+    #     identifier with `/`). Changing the prefix is configuration, never code.
+    #   @example Mount queries under /api/queries
+    #     Ruact.configure { |c| c.query_route_prefix = "/api/queries" }
+    #
+    # @!attribute [r] query_parent_controller
+    #   @return [String] Story 9.4 — class NAME of the controller the gem's
+    #     internal query dispatch controller inherits from (default
+    #     `"ApplicationController"` — the Devise `parent_controller` pattern).
+    #     Kept as a String and constantized lazily at route-draw time, NOT at
+    #     configure time: `ApplicationController` does not exist when the gem
+    #     loads. The host's REAL callback chain (`authenticate_user!`, tenant
+    #     scoping, Pundit) runs before any query class is instantiated (FR89).
+    #   @example Dispatch queries through an API base controller
+    #     Ruact.configure { |c| c.query_parent_controller = "Api::BaseController" }
     ATTRIBUTES.each do |attr|
       attr_reader attr
 
@@ -133,6 +155,8 @@ module Ruact
         @current_user_resolver = nil
         @dev_error_payload_enabled = nil
         @max_upload_bytes = 10 * 1024 * 1024
+        @query_route_prefix = "/q"
+        @query_parent_controller = "ApplicationController"
       end
     end
 
@@ -190,7 +214,14 @@ module Ruact
     # error at request time. Both cases land here at boot/configure time
     # with a legible message pointing at the offending value.
     def validate_attribute_value!(attr, value)
-      return unless attr == :max_upload_bytes
+      case attr
+      when :max_upload_bytes        then validate_max_upload_bytes!(value)
+      when :query_route_prefix      then validate_query_route_prefix!(value)
+      when :query_parent_controller then validate_query_parent_controller!(value)
+      end
+    end
+
+    def validate_max_upload_bytes!(value)
       return if value.nil?
       return if value.is_a?(Integer) && value >= 0
 
@@ -198,6 +229,36 @@ module Ruact
             "Ruact::Configuration#max_upload_bytes must be nil or a non-negative Integer; " \
             "got #{value.inspect} (#{value.class.name}). " \
             "Set to nil to disable the gem-side guard, or pass a positive Integer (bytes)."
+    end
+
+    # Story 9.4 — the prefix is joined with the jsIdentifier as
+    # `"#{prefix}/#{js}"` at route-draw time, so a missing leading slash would
+    # draw a relative path and a trailing slash would draw `//`. Both are
+    # configuration-time errors, not first-request 500s.
+    def validate_query_route_prefix!(value)
+      unless value.is_a?(String) && value.start_with?("/")
+        raise Ruact::ConfigurationError,
+              "Ruact::Configuration#query_route_prefix must be a String starting with \"/\"; " \
+              "got #{value.inspect} (#{value.class.name})."
+      end
+      return unless value.length > 1 && value.end_with?("/")
+
+      raise Ruact::ConfigurationError,
+            "Ruact::Configuration#query_route_prefix must not end with \"/\" " \
+            "(the ruact_queries macro joins the prefix and the query identifier with \"/\"); " \
+            "got #{value.inspect}."
+    end
+
+    # Story 9.4 — kept as a String on purpose: the name is constantized lazily
+    # at route-draw time (`ApplicationController` does not exist when the gem
+    # loads or when the initializer runs).
+    def validate_query_parent_controller!(value)
+      return if value.is_a?(String) && !value.empty?
+
+      raise Ruact::ConfigurationError,
+            "Ruact::Configuration#query_parent_controller must be a non-empty String " \
+            "(the controller class NAME, constantized lazily at route-draw time); " \
+            "got #{value.inspect} (#{value.class.name})."
     end
 
     def build_error_message(attr, location)
