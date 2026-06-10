@@ -42,6 +42,7 @@ module Ruact
       # @api private — the macro body, kept off the Mapper instance so the only
       # method `ruact_queries` adds to the routing DSL surface is itself.
       def draw_query_routes(mapper, query_class)
+        check_flatten_collision!(mapper, query_class)
         ServerFunctions::QueryDispatch.controller_for(query_class)
         target = ServerFunctions::QueryDispatch.route_target_for(query_class)
         prefix = Ruact.config.query_route_prefix
@@ -52,6 +53,42 @@ module Ruact
                      to: "#{target}##{query_method}",
                      as: :"ruact_query_#{js_identifier}")
         end
+
+        claim_flatten_ownership!(mapper, query_class)
+      end
+
+      private
+
+      # Review rounds 1–2 — namespace flattening means two DISTINCT classes
+      # can map to one generated controller constant (`Admin::CatalogQuery`
+      # and `AdminCatalogQuery` both → `AdminCatalogQueryController`), which
+      # would silently cross-wire the earlier class's routes. The ownership
+      # ledger lives ON the draw's Mapper instance — Rails builds a fresh
+      # Mapper per draw-block evaluation, so every redraw starts clean
+      # (renaming or removing a query class between dev reloads can never be
+      # rejected against a stale owner), and ownership is only committed AFTER
+      # the controller generation + route draw succeed (a failed build cannot
+      # poison the ledger). Scope = one draw block, which is where all of a
+      # host's `ruact_queries` mounts live.
+      def check_flatten_collision!(mapper, query_class)
+        const_name = ServerFunctions::QueryDispatch.controller_const_name(query_class)
+        owner = flatten_ownership_ledger(mapper)[const_name]
+        return if owner.nil? || owner == query_class.name
+
+        raise Ruact::ConfigurationError,
+              "ruact_queries: #{query_class.name} and #{owner} both flatten to the generated " \
+              "dispatch controller Ruact::ServerFunctions::QueryDispatch::#{const_name} — " \
+              "rename one of the query classes so their namespace-flattened names differ."
+      end
+
+      def claim_flatten_ownership!(mapper, query_class)
+        const_name = ServerFunctions::QueryDispatch.controller_const_name(query_class)
+        flatten_ownership_ledger(mapper)[const_name] = query_class.name
+      end
+
+      def flatten_ownership_ledger(mapper)
+        mapper.instance_variable_get(:@__ruact_query_const_owners) ||
+          mapper.instance_variable_set(:@__ruact_query_const_owners, {})
       end
     end
   end

@@ -90,7 +90,6 @@ module Ruact
         #   be resolved or +query_class+ is anonymous
         def controller_for(query_class)
           const_name = controller_const_name(query_class)
-          claim_const_ownership!(const_name, query_class)
           remove_const(const_name) if const_defined?(const_name, false)
           const_set(const_name, build_controller(query_class))
         end
@@ -102,6 +101,17 @@ module Ruact
         # @return [String] e.g. `"ruact/server_functions/query_dispatch/catalog_query"`
         def route_target_for(query_class)
           "ruact/server_functions/query_dispatch/#{base_name(query_class).underscore}"
+        end
+
+        # The generated constant name for +query_class+'s dispatch controller
+        # (`Admin::CatalogQuery` → `"AdminCatalogQueryController"`). Public so
+        # the routing macro can detect flatten collisions within one draw
+        # (review round 2).
+        #
+        # @param query_class [Class] a {Ruact::Query} subclass
+        # @return [String]
+        def controller_const_name(query_class)
+          "#{base_name(query_class)}Controller"
         end
 
         private
@@ -118,30 +128,6 @@ module Ruact
           end
 
           name.gsub("::", "")
-        end
-
-        def controller_const_name(query_class)
-          "#{base_name(query_class)}Controller"
-        end
-
-        # Review round 1 (finding 2) — the namespace flattening above means two
-        # DISTINCT classes can map to one generated constant
-        # (`Admin::CatalogQuery` and `AdminCatalogQuery` both →
-        # `AdminCatalogQueryController`), which would silently cross-wire the
-        # earlier class's routes to the later class's controller. Track which
-        # query class NAME owns each generated constant and fail loudly at
-        # route-draw on a mismatch. Re-mounting the SAME class (boot + every
-        # dev-mode routes reload) stays allowed.
-        def claim_const_ownership!(const_name, query_class)
-          owner = (@const_owners ||= {})[const_name]
-          if owner && owner != query_class.name
-            raise Ruact::ConfigurationError,
-                  "ruact_queries: #{query_class.name} and #{owner} both flatten to the generated " \
-                  "dispatch controller #{name}::#{const_name} — rename one of the query classes " \
-                  "so their namespace-flattened names differ."
-          end
-
-          @const_owners[const_name] = query_class.name
         end
 
         # Lazy resolution of `Ruact.config.query_parent_controller` (AC2). Both

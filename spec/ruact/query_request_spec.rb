@@ -364,20 +364,40 @@ RSpec.describe "Story 9.4: Ruact::Query + ruact_queries dispatch", :story_9_4 do
     end
   end
 
-  describe "review round 1 — namespace flattening collisions are loud" do
+  describe "review rounds 1–2 — namespace flattening collisions are loud, scoped to one draw" do
     it "raises Ruact::ConfigurationError when two distinct classes flatten to the same constant" do
       namespaced = Class.new(Ruact::Query) { def ping_a = :a }
       flat       = Class.new(Ruact::Query) { def ping_b = :b }
       stub_const("QueryRequestSpecSupport::Collide::NsQuery", namespaced)
       stub_const("QueryRequestSpecSupport::CollideNsQuery", flat)
 
-      Ruact::ServerFunctions::QueryDispatch.controller_for(namespaced)
-      expect { Ruact::ServerFunctions::QueryDispatch.controller_for(flat) }
-        .to raise_error(Ruact::ConfigurationError) do |error|
-          expect(error.message).to include("QueryRequestSpecSupport::Collide::NsQuery")
-          expect(error.message).to include("QueryRequestSpecSupport::CollideNsQuery")
-          expect(error.message).to include("rename one of the query classes")
+      route_set = ActionDispatch::Routing::RouteSet.new
+      colliding_draw = lambda do
+        route_set.draw do
+          ruact_queries namespaced
+          ruact_queries flat
         end
+      end
+
+      expect(&colliding_draw).to raise_error(Ruact::ConfigurationError) do |error|
+        expect(error.message).to include("QueryRequestSpecSupport::Collide::NsQuery")
+        expect(error.message).to include("QueryRequestSpecSupport::CollideNsQuery")
+        expect(error.message).to include("rename one of the query classes")
+      end
+    end
+
+    it "a redraw after a rename is NOT rejected against a stale owner (round 2 — dev-reload safety)" do
+      renamed_away = Class.new(Ruact::Query) { def ping_a = :a }
+      renamed_to   = Class.new(Ruact::Query) { def ping_b = :b }
+      stub_const("QueryRequestSpecSupport::Renamed::StaleQuery", renamed_away)
+      stub_const("QueryRequestSpecSupport::RenamedStaleQuery", renamed_to)
+
+      ActionDispatch::Routing::RouteSet.new.draw { ruact_queries renamed_away }
+      # Simulated dev reload: the class was renamed; the NEW draw mounts only
+      # the new name. A fresh Mapper per draw means no stale-ownership reject.
+      expect do
+        ActionDispatch::Routing::RouteSet.new.draw { ruact_queries renamed_to }
+      end.not_to raise_error
     end
 
     it "the SAME class re-mounting (dev reload) is still allowed" do
