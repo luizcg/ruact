@@ -340,6 +340,54 @@ RSpec.describe "Story 9.4: Ruact::Query + ruact_queries dispatch", :story_9_4 do
     end
   end
 
+  describe "review round 1 — query method names colliding with controller plumbing are rejected" do
+    it "raises Ruact::ConfigurationError when a query method would shadow a framework method" do
+      shadowing = Class.new(Ruact::Query) do
+        def params
+          :shadowed
+        end
+      end
+      stub_const("QueryRequestSpecSupport::ParamsShadowQuery", shadowing)
+      expect { Ruact::ServerFunctions::QueryDispatch.controller_for(shadowing) }
+        .to raise_error(Ruact::ConfigurationError, /\bparams\b.*already defined/m)
+    end
+
+    it "rejects `render` too (any name on the generated controller chain)" do
+      shadowing = Class.new(Ruact::Query) do
+        def render
+          :shadowed
+        end
+      end
+      stub_const("QueryRequestSpecSupport::RenderShadowQuery", shadowing)
+      expect { Ruact::ServerFunctions::QueryDispatch.controller_for(shadowing) }
+        .to raise_error(Ruact::ConfigurationError, /\brender\b.*already defined/m)
+    end
+  end
+
+  describe "review round 1 — namespace flattening collisions are loud" do
+    it "raises Ruact::ConfigurationError when two distinct classes flatten to the same constant" do
+      namespaced = Class.new(Ruact::Query) { def ping_a = :a }
+      flat       = Class.new(Ruact::Query) { def ping_b = :b }
+      stub_const("QueryRequestSpecSupport::Collide::NsQuery", namespaced)
+      stub_const("QueryRequestSpecSupport::CollideNsQuery", flat)
+
+      Ruact::ServerFunctions::QueryDispatch.controller_for(namespaced)
+      expect { Ruact::ServerFunctions::QueryDispatch.controller_for(flat) }
+        .to raise_error(Ruact::ConfigurationError) do |error|
+          expect(error.message).to include("QueryRequestSpecSupport::Collide::NsQuery")
+          expect(error.message).to include("QueryRequestSpecSupport::CollideNsQuery")
+          expect(error.message).to include("rename one of the query classes")
+        end
+    end
+
+    it "the SAME class re-mounting (dev reload) is still allowed" do
+      expect do
+        Ruact::ServerFunctions::QueryDispatch.controller_for(QueryRequestSpecSupport::ProbeQuery)
+        Ruact::ServerFunctions::QueryDispatch.controller_for(QueryRequestSpecSupport::ProbeQuery)
+      end.not_to raise_error
+    end
+  end
+
   describe "regeneration is idempotent (dev-mode routes reload)" do
     it "controller_for builds a fresh class on every call without const warnings" do
       first  = Ruact::ServerFunctions::QueryDispatch.controller_for(QueryRequestSpecSupport::ProbeQuery)

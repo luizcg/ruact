@@ -90,6 +90,7 @@ module Ruact
         #   be resolved or +query_class+ is anonymous
         def controller_for(query_class)
           const_name = controller_const_name(query_class)
+          claim_const_ownership!(const_name, query_class)
           remove_const(const_name) if const_defined?(const_name, false)
           const_set(const_name, build_controller(query_class))
         end
@@ -121,6 +122,26 @@ module Ruact
 
         def controller_const_name(query_class)
           "#{base_name(query_class)}Controller"
+        end
+
+        # Review round 1 (finding 2) — the namespace flattening above means two
+        # DISTINCT classes can map to one generated constant
+        # (`Admin::CatalogQuery` and `AdminCatalogQuery` both →
+        # `AdminCatalogQueryController`), which would silently cross-wire the
+        # earlier class's routes to the later class's controller. Track which
+        # query class NAME owns each generated constant and fail loudly at
+        # route-draw on a mismatch. Re-mounting the SAME class (boot + every
+        # dev-mode routes reload) stays allowed.
+        def claim_const_ownership!(const_name, query_class)
+          owner = (@const_owners ||= {})[const_name]
+          if owner && owner != query_class.name
+            raise Ruact::ConfigurationError,
+                  "ruact_queries: #{query_class.name} and #{owner} both flatten to the generated " \
+                  "dispatch controller #{name}::#{const_name} — rename one of the query classes " \
+                  "so their namespace-flattened names differ."
+          end
+
+          @const_owners[const_name] = query_class.name
         end
 
         # Lazy resolution of `Ruact.config.query_parent_controller` (AC2). Both
@@ -172,8 +193,22 @@ module Ruact
           controller
         end
 
+        # Review round 1 (finding 1) — a query method whose name already exists
+        # anywhere on the generated controller chain (`params`, `render`,
+        # `session`, `process`, the gem's own `__ruact_*` plumbing, …) would
+        # OVERRIDE that method when installed as an action, corrupting request
+        # handling (e.g. `def params` shadows `ActionController#params` and
+        # recurses through the dispatch path). Reject at route-draw with a
+        # legible error instead of failing at the first request.
         def define_query_actions(controller, query_class)
           query_class.public_instance_methods(false).each do |query_method|
+            if controller.method_defined?(query_method) || controller.private_method_defined?(query_method)
+              raise Ruact::ConfigurationError,
+                    "ruact_queries: query method :#{query_method} on #{query_class.name} is already " \
+                    "defined on the dispatch controller chain (#{controller.superclass.name} / " \
+                    "ActionController / ruact plumbing) and would shadow it — rename the query method."
+            end
+
             controller.define_method(query_method) do
               __ruact_dispatch_query(query_method)
             end
