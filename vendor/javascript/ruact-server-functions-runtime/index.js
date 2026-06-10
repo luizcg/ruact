@@ -16,6 +16,13 @@
 // import path are part of the locked API — do NOT change without coordinated
 // codegen + Vite-plugin updates.
 
+// Story 9.5 — `useQuery` is a React hook, so the runtime now depends on React.
+// React is declared as a `peerDependency` (every host already has it; the
+// runtime never bundles its own copy). This is the runtime's first React
+// import — the mutation path (`_makeRef` / `_makeServerFunction`) stays
+// React-free.
+import { useState, useEffect } from "react";
+
 const RUNTIME_VERSION = 1;
 
 // Re-run-5 (2026-05-15) — module-level runtime configuration. Hosts
@@ -149,6 +156,91 @@ export function _makeServerFunction(descriptor) {
   };
 }
 
+/**
+ * Story 9.5 — the read-side (query) accessor. The codegen emits
+ * `_makeQuery({ path, kind: "query" })` for every method on a mounted
+ * `Ruact::Query` subclass. The returned callable issues a **GET** to the
+ * named query route (`GET /q/<jsId>`), serializing `params` into the query
+ * string.
+ *
+ * Reads are CSRF-free (NFR27 / the 2026-06-02 ADR addendum voids the old
+ * `POST /__ruact/fn/:id` query mechanism and restores HTTP GET semantics):
+ * no request body, no `X-CSRF-Token`. It shares `parseResponse` /
+ * `RuactActionError` / `redirect: "error"` with the mutation path so the
+ * success + failure shapes are identical.
+ *
+ * Usually consumed through {useQuery}, but the returned function is a plain
+ * `(params?) => Promise<unknown>` so it also works in imperative code.
+ *
+ * FR88 wire format: only primitives (string / number / boolean / null) are
+ * encoded into the query string; arrays and objects throw a `TypeError`
+ * client-side too — though the server-side sanitization is authoritative.
+ *
+ * @param {{ path: string, kind?: string }} descriptor
+ * @returns {(params?: Record<string, unknown>) => Promise<unknown>}
+ */
+export function _makeQuery(descriptor) {
+  const { path } = descriptor || {};
+  return function ruactQueryCall(params) {
+    const url = buildQueryUrl(path, params);
+    return ruactQueryGet(url, path);
+  };
+}
+
+/**
+ * Story 9.5 — React hook for reading a server query. Pass a query reference
+ * (the codegen-emitted `_makeQuery` accessor) and optional params; the hook
+ * issues `GET /q/<jsId>` on mount (and whenever the serialized params change)
+ * and returns `{ data, loading, error }`:
+ *
+ *   - `loading` is true until the first resolution;
+ *   - `data` carries the JSON-decoded response on success (and the last
+ *     successful value while a subsequent refetch is in flight);
+ *   - `error` carries the structured `RuactActionError` (or a transport
+ *     `Error`) on failure, and is reset to `null` on a successful refetch.
+ *
+ * A superseded in-flight response (params changed, or the component
+ * unmounted) is dropped — the hook never sets state for a stale request.
+ *
+ * Request de-duplication across components is Story 9.6; this hook fetches
+ * once per mount.
+ *
+ * @param {(params?: Record<string, unknown>) => Promise<unknown>} reference
+ * @param {Record<string, unknown>} [params]
+ * @returns {{ data: unknown, loading: boolean, error: unknown }}
+ */
+export function useQuery(reference, params) {
+  const [state, setState] = useState({ data: undefined, loading: true, error: null });
+
+  // Re-run the effect by VALUE, not identity: an inline `{ q: input }` literal
+  // is a fresh object every render, which would refetch on every render if used
+  // directly as a dependency. Serializing collapses equal params to one key.
+  const paramsKey = params == null ? "" : JSON.stringify(params);
+
+  useEffect(() => {
+    let active = true;
+    setState((prev) => ({ data: prev.data, loading: true, error: null }));
+    // Wrap in Promise.resolve so a synchronous throw inside `reference`
+    // (e.g. a non-primitive param rejected by `buildQueryUrl`) lands on the
+    // error branch instead of escaping the effect.
+    Promise.resolve()
+      .then(() => reference(params))
+      .then((data) => {
+        if (active) setState({ data, loading: false, error: null });
+      })
+      .catch((error) => {
+        if (active) setState((prev) => ({ data: prev.data, loading: false, error }));
+      });
+    return () => {
+      active = false;
+    };
+    // `params` is intentionally tracked via the serialized `paramsKey`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reference, paramsKey]);
+
+  return state;
+}
+
 // Story 8.2 — picks the argument the wire request should serialize from
 // `_makeRef`'s call-args, following the rules documented in the JSDoc
 // above. Exported through `__internals` for the vitest suite (AC10) — it
@@ -218,6 +310,8 @@ export const __internals = {
   pickWirePayload,
   interpolatePath,
   followRedirectIfPresent,
+  buildQueryUrl,
+  buildQueryFetchInit,
 };
 
 // v1 (Story 8.1) — POST to the synthetic endpoint. A thin wrapper over the
@@ -263,6 +357,88 @@ async function ruactInvoke({ method, url, args, label }) {
     throw new RuactActionError({ name: label, status: response.status, body, response });
   }
   return parseResponse(response);
+}
+
+// Story 9.5 — the GET fetch core for queries. Mirrors `ruactInvoke`'s
+// structure (loud transport error, structured `RuactActionError` on !ok,
+// shared `parseResponse`) but for a read: GET, no body, no CSRF.
+async function ruactQueryGet(url, label) {
+  let response;
+  try {
+    response = await fetch(url, buildQueryFetchInit());
+  } catch (err) {
+    throw new Error(
+      `ruact query ${label} request failed: ${err?.message ?? err}`,
+    );
+  }
+  if (!response.ok) {
+    const body = await safeParseBody(response);
+    throw new RuactActionError({ name: label, status: response.status, body, response });
+  }
+  return parseResponse(response);
+}
+
+// Story 9.5 — serialize the params object into the GET query string. FR88
+// wire format: only primitives (string / number / boolean / null) are
+// encoded. Arrays and objects throw a `TypeError` client-side for immediate
+// local feedback; the server-side sanitization in `query_dispatch.rb` is the
+// authoritative gate. `null` is encoded as an empty value (`key=`).
+function buildQueryUrl(path, params) {
+  if (params == null) return path;
+  if (typeof params !== "object" || Array.isArray(params)) {
+    throw new TypeError(
+      `ruact useQuery for ${path}: params must be a plain object of ` +
+        "string / number / boolean / null values",
+    );
+  }
+  const search = new URLSearchParams();
+  // `null` is sent as a BARE key (`?q`, no `=`) — Rack parses that as `nil`,
+  // whereas `?q=` parses as `""`. This keeps `null` distinguishable from the
+  // empty string at the Ruby query-method boundary (the server allowlist
+  // accepts both `nil` and `String`). Bare keys are collected separately
+  // because `URLSearchParams` always emits `key=`; their order relative to
+  // the `=`-valued params is irrelevant server-side.
+  const bareKeys = [];
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined) continue;
+    if (value === null) {
+      bareKeys.push(encodeURIComponent(key));
+    } else if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+    ) {
+      search.append(key, String(value));
+    } else {
+      throw new TypeError(
+        `ruact useQuery for ${path}: param "${key}" must be a string, number, ` +
+          "boolean, or null — arrays and objects are rejected",
+      );
+    }
+  }
+  const qs = [search.toString(), ...bareKeys].filter((s) => s.length > 0).join("&");
+  return qs.length === 0 ? path : `${path}?${qs}`;
+}
+
+// Story 9.5 — fetch init for a query GET. No body, no `X-CSRF-Token` (reads
+// are CSRF-free). `defaultHeaders` still apply (e.g. an API-mode
+// `Authorization: Bearer …`), with the gem's own `Accept` winning. Keeps
+// `redirect: "error"` so an auth `redirect_to "/login"` surfaces as a loud
+// failure rather than resolving with the login page HTML.
+function buildQueryFetchInit() {
+  const RESERVED = new Set(["accept"]);
+  const extra =
+    typeof runtimeOptions.defaultHeaders === "function"
+      ? runtimeOptions.defaultHeaders()
+      : runtimeOptions.defaultHeaders;
+  const headers = {};
+  if (extra && typeof extra === "object") {
+    for (const [key, value] of Object.entries(extra)) {
+      if (!RESERVED.has(key.toLowerCase())) headers[key] = value;
+    }
+  }
+  headers.Accept = "application/json";
+  return { method: "GET", credentials: "same-origin", redirect: "error", headers };
 }
 
 // Story 9.3 (D7) — substitute dynamic path segments (`:id`, …) from the single

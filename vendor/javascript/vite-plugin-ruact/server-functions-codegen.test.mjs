@@ -864,3 +864,98 @@ describe("Story 9.3 — route-driven (v2) render + parity", () => {
     expect(jsOutput).toBe(rubyOutput);
   });
 });
+
+describe("Story 9.5 — v2 query entries render + parity", () => {
+  const queryFixture = {
+    version: 2,
+    generated_at: "2026-06-10T00:00:00Z",
+    functions: [
+      {
+        js_identifier: "createPost",
+        kind: "action",
+        http_method: "POST",
+        path: "/posts",
+        segments: [],
+        controller: "posts",
+        action: "create",
+      },
+      {
+        js_identifier: "categories",
+        kind: "query",
+        http_method: "GET",
+        path: "/q/categories",
+        segments: [],
+        accepts_params: false,
+        controller: "CatalogQuery",
+        action: "categories",
+      },
+      {
+        js_identifier: "searchUsers",
+        kind: "query",
+        http_method: "GET",
+        path: "/q/searchUsers",
+        segments: [],
+        accepts_params: true,
+        controller: "CatalogQuery",
+        action: "search_users",
+      },
+    ],
+  };
+
+  it("emits _makeQuery refs with GET descriptors + the useQuery re-export", () => {
+    const out = render(queryFixture);
+    expect(out).toContain('import { _makeServerFunction, _makeQuery } from "ruact/server-functions-runtime";');
+    expect(out).toContain(
+      'export const categories: () => Promise<unknown> =\n  _makeQuery({ path: "/q/categories", kind: "query" });',
+    );
+    expect(out).toContain(
+      'export const searchUsers: (params: Record<string, unknown>) => Promise<unknown> =\n' +
+        '  _makeQuery({ path: "/q/searchUsers", kind: "query" });',
+    );
+    expect(out).toContain('export { useQuery } from "ruact/server-functions-runtime";');
+  });
+
+  it("accepts GET for a query entry but rejects a non-GET verb", () => {
+    expect(() =>
+      render({
+        version: 2,
+        generated_at: "x",
+        functions: [
+          { js_identifier: "categories", kind: "query", http_method: "POST", path: "/q/categories", segments: [] },
+        ],
+      }),
+    ).toThrow(/invalid.*http_method/i);
+  });
+
+  it("rejects an unknown kind (action/query only)", () => {
+    expect(() =>
+      render({
+        version: 2,
+        generated_at: "x",
+        functions: [
+          { js_identifier: "x", kind: "mutation", http_method: "GET", path: "/q/x", segments: [] },
+        ],
+      }),
+    ).toThrow(/"action" or "query"/);
+  });
+
+  it("Ruby's render and JS's render produce byte-identical query output", () => {
+    const jsOutput = render(queryFixture);
+    const gemLibPath = path.resolve(
+      path.dirname(new URL(import.meta.url).pathname),
+      "..",
+      "..",
+      "..",
+      "lib",
+    );
+    const fixtureJson = JSON.stringify(queryFixture);
+    const script =
+      'require "ruact/server_functions/codegen"; ' +
+      'require "json"; ' +
+      `print Ruact::ServerFunctions::Codegen.render(JSON.parse('${fixtureJson}'))`;
+    const rubyOutput = execFileSync("ruby", ["-I", gemLibPath, "-e", script], {
+      encoding: "utf8",
+    });
+    expect(jsOutput).toBe(rubyOutput);
+  });
+});

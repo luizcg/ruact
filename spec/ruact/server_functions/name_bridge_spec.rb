@@ -181,6 +181,30 @@ module Ruact
           it "R12 — accepts :_make_ref_action (suffix escape hatch keeps working)" do
             expect(described_class.to_js_identifier(:_make_ref_action)).to eq("_makeRefAction")
           end
+
+          # Story 9.5 — `_makeQuery` (the v2 query import) and `useQuery` (the
+          # query hook re-export) are new top-level bindings in the generated
+          # module; a query/action method mapping to either would redeclare the
+          # import / duplicate the export and crash at module load.
+          it "Story 9.5 — rejects :use_query because it collides with the useQuery re-export" do
+            expect { described_class.to_js_identifier(:use_query) }
+              .to raise_error(Ruact::ConfigurationError) do |error|
+                expect(error.message).to include(":use_query")
+                expect(error.message).to include("duplicate export")
+              end
+          end
+
+          it "Story 9.5 — rejects :_make_query because it collides with the codegen's runtime import" do
+            expect { described_class.to_js_identifier(:_make_query) }
+              .to raise_error(Ruact::ConfigurationError) do |error|
+                expect(error.message).to include(":_make_query")
+                expect(error.message).to include("duplicate export")
+              end
+          end
+
+          it "Story 9.5 — accepts :use_query_results (suffix escape hatch keeps working)" do
+            expect(described_class.to_js_identifier(:use_query_results)).to eq("useQueryResults")
+          end
         end
       end
     end

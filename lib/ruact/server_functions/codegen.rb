@@ -62,11 +62,25 @@ module Ruact
         "& ((formData: FormData) => Promise<void>)"
       QUERY_SIGNATURE  = "() => Promise<unknown>"
 
+      # Story 9.5 — a query method that declares keyword arguments (FR88
+      # params) gets the param-accepting signature; one with no kwargs keeps
+      # the bare {QUERY_SIGNATURE}. Queries are read-only (never reachable via
+      # `<form action>`), so neither widens to the action intersection.
+      QUERY_PARAMS_SIGNATURE = "(params: Record<string, unknown>) => Promise<unknown>"
+
       # Story 8.2 — fixed re-export appended AFTER the per-function block.
       # Emitted in BOTH branches (empty + populated registry) so
       # `import { revalidate } from "@/.ruact/server-functions"` works on
       # day one of any host app. Ruby + JS codegens emit byte-identically.
       REVALIDATE_REEXPORT = "export { revalidate } from #{RUNTIME_IMPORT};\n".freeze
+
+      # Story 9.5 — the `useQuery` hook re-export, appended (after
+      # {REVALIDATE_REEXPORT}) ONLY when the v2 snapshot carries query entries.
+      # Gating on query presence keeps the action-only and empty v2 modules
+      # byte-identical to their Story 9.3 output (minimal churn); a host that
+      # has no queries cannot call `useQuery` on anything anyway. Ruby + JS
+      # codegens emit this byte-identically.
+      USEQUERY_REEXPORT = "export { useQuery } from #{RUNTIME_IMPORT};\n".freeze
 
       # JS identifier shape — same as `NameBridge::VALID_SYMBOL` but expressed
       # in JS-identifier terms (leading letter / underscore / `$`, then alnum

@@ -119,6 +119,7 @@ module Ruact
       end
 
       # Story 8.4 — Status mapping per AC1:
+      # - `Ruact::BadRequestError` → 400 (Story 9.5 — FR88 kwargs rejection)
       # - `ActiveRecord::RecordInvalid` → 422
       # - `ActionController::InvalidAuthenticityToken` → 403
       # - `Ruact::UploadTooLargeError` → 413
@@ -127,6 +128,7 @@ module Ruact
       # at load time (parity with {ErrorSuggestion}).
       def __ruact_status_for(error)
         case error.class.name
+        when "Ruact::BadRequestError" then 400
         when "ActiveRecord::RecordInvalid" then 422
         when "ActionController::InvalidAuthenticityToken" then 403
         when "Ruact::UploadTooLargeError" then 413
