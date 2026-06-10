@@ -171,3 +171,38 @@ jobs:
 # both the gem submodule and the e2e/ Rails app live side by side.
 
 # ci-trigger-probe: harmless comment
+
+  release:
+    name: Release to RubyGems
+    needs: [name-propagation, rspec, rubocop, yard, benchmark]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+      - name: Decide bump kind & compute next version
+        id: bump
+        env:
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          KIND=patch
+          printf '%s' "$HEAD_MSG" | grep -qi '\[epic-done\]' && KIND=minor
+          VERSION="$(bundle exec rake "release:bump[$KIND]" | tail -1)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - uses: rubygems/configure-rubygems-credentials@v1
+      - name: Commit, tag & publish
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          echo "publish $VERSION"
