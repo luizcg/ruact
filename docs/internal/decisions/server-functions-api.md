@@ -1602,6 +1602,20 @@ model never reads or populates it.
    route default + conditional skips) was rejected: more complex, less
    Rails-idiomatic, and per-action callback scoping degrades.
 
+   **Namespace preservation (code-review round 4 refinement).** The generated
+   controller's constant path MIRRORS the query class's namespace rather than
+   flattening it: `Admin::CatalogQuery` →
+   `Ruact::ServerFunctions::QueryDispatch::Admin::CatalogQueryController`
+   (route target `…/query_dispatch/admin/catalog_query`). The controller
+   constant is therefore an injective function of the query class's
+   fully-qualified name, so two distinct query classes can never map to the
+   same generated constant — a const overwrite / route cross-wire is
+   impossible by construction, across any number of RouteSets or mounted
+   engines sharing the global dispatch module. (The initial implementation
+   flattened `::` out and tried to detect the resulting collisions; three
+   review rounds of detection patches converged on removing the flattening
+   instead — no collision to detect.)
+
 3. **Context source (D3): delegate to the dispatching controller, not a
    resolver lambda.** `Ruact::ServerFunctions::QueryContext` wraps the
    controller instance; `current_user` resolves through the controller's own

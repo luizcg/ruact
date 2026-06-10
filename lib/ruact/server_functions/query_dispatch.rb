@@ -89,37 +89,35 @@ module Ruact
         # @raise [Ruact::ConfigurationError] when the parent controller cannot
         #   be resolved or +query_class+ is anonymous
         def controller_for(query_class)
-          const_name = controller_const_name(query_class)
-          remove_const(const_name) if const_defined?(const_name, false)
-          const_set(const_name, build_controller(query_class))
+          *namespace_segments, base = base_segments(query_class)
+          namespace = ensure_namespace(namespace_segments)
+          const_name = "#{base}Controller"
+          namespace.send(:remove_const, const_name) if namespace.const_defined?(const_name, false)
+          namespace.const_set(const_name, build_controller(query_class))
         end
 
         # The `to:` route target for +query_class+'s generated controller —
         # the underscored constant path Rails camelizes back at dispatch time.
+        # The query class's namespace is PRESERVED (review round 4): a nested
+        # path, never flattened, so two classes whose names differ only in
+        # namespace boundary (`Admin::CatalogQuery` vs `AdminCatalogQuery`)
+        # map to DISTINCT controllers and can never cross-wire — collision is
+        # impossible by construction, across any number of RouteSets / engines.
         #
         # @param query_class [Class] a {Ruact::Query} subclass
-        # @return [String] e.g. `"ruact/server_functions/query_dispatch/catalog_query"`
+        # @return [String] e.g. `"ruact/server_functions/query_dispatch/admin/catalog_query"`
         def route_target_for(query_class)
-          "ruact/server_functions/query_dispatch/#{base_name(query_class).underscore}"
-        end
-
-        # The generated constant name for +query_class+'s dispatch controller
-        # (`Admin::CatalogQuery` → `"AdminCatalogQueryController"`). Public so
-        # the routing macro can detect flatten collisions within one draw
-        # (review round 2).
-        #
-        # @param query_class [Class] a {Ruact::Query} subclass
-        # @return [String]
-        def controller_const_name(query_class)
-          "#{base_name(query_class)}Controller"
+          path = base_segments(query_class).map(&:underscore).join("/")
+          "ruact/server_functions/query_dispatch/#{path}"
         end
 
         private
 
-        # Collapses a (possibly namespaced) query class name to one constant
-        # segment (`Admin::CatalogQuery` → `"AdminCatalogQuery"`), so every
-        # generated controller lives flat under this module.
-        def base_name(query_class)
+        # The query class's fully-qualified name split into constant segments
+        # (`Admin::CatalogQuery` → `["Admin", "CatalogQuery"]`). The namespace
+        # is preserved so the generated controller lives at a nested,
+        # collision-free constant path under {QueryDispatch}.
+        def base_segments(query_class)
           name = query_class.name
           unless name
             raise Ruact::ConfigurationError,
@@ -127,7 +125,21 @@ module Ruact
                   "assign it to a constant (e.g. `class CatalogQuery < ApplicationQuery`)."
           end
 
-          name.gsub("::", "")
+          name.split("::")
+        end
+
+        # Walks (creating as needed) the nested module path under {QueryDispatch}
+        # that mirrors the query class's namespace, returning the innermost
+        # module the controller constant is set on. Idempotent — reuses existing
+        # modules so repeated draws (boot + dev reloads) never duplicate them.
+        def ensure_namespace(segments)
+          segments.reduce(self) do |mod, segment|
+            if mod.const_defined?(segment, false)
+              mod.const_get(segment, false)
+            else
+              mod.const_set(segment, Module.new)
+            end
+          end
         end
 
         # Lazy resolution of `Ruact.config.query_parent_controller` (AC2). Both
@@ -163,10 +175,6 @@ module Ruact
             # Re-constantized on every read so dev-mode code reloading of the
             # query class can never leave the controller holding a stale ref.
             define_singleton_method(:__ruact_query_class) { query_class_name.constantize }
-
-            # Review round 3 — the owner stamp the routing macro's
-            # flatten-collision check reads (name, not class: survives reloads).
-            define_singleton_method(:__ruact_query_class_name) { query_class_name }
 
             # AC5 — the salvaged 8.4 error chain, with the same front-loading
             # trick as Ruact::Server: handlers the parent chain registered

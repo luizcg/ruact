@@ -364,57 +364,52 @@ RSpec.describe "Story 9.4: Ruact::Query + ruact_queries dispatch", :story_9_4 do
     end
   end
 
-  describe "review rounds 1–2 — namespace flattening collisions are loud, scoped to one draw" do
-    it "raises Ruact::ConfigurationError when two distinct classes flatten to the same constant" do
+  describe "review round 4 — namespace is PRESERVED so collisions are impossible by construction" do
+    it "maps Admin::CatalogQuery and AdminCatalogQuery to DISTINCT controllers + route targets" do
       namespaced = Class.new(Ruact::Query) { def ping_a = :a }
       flat       = Class.new(Ruact::Query) { def ping_b = :b }
-      stub_const("QueryRequestSpecSupport::Collide::NsQuery", namespaced)
-      stub_const("QueryRequestSpecSupport::CollideNsQuery", flat)
+      stub_const("QueryRequestSpecSupport::Nspace::CatalogQuery", namespaced)
+      stub_const("QueryRequestSpecSupport::NspaceCatalogQuery", flat)
+
+      c1 = Ruact::ServerFunctions::QueryDispatch.controller_for(namespaced)
+      c2 = Ruact::ServerFunctions::QueryDispatch.controller_for(flat)
+
+      # Every namespace segment is preserved (`::Nspace::CatalogQuery` keeps the
+      # boundary; `NspaceCatalogQuery` has no boundary) — the two map to
+      # DISTINCT nested constants, so a const overwrite / cross-wire is
+      # impossible regardless of how many RouteSets share the dispatch module.
+      expect(c1).not_to be(c2)
+      expect(c1.name).to eq(
+        "Ruact::ServerFunctions::QueryDispatch::QueryRequestSpecSupport::Nspace::CatalogQueryController"
+      )
+      expect(c2.name).to eq(
+        "Ruact::ServerFunctions::QueryDispatch::QueryRequestSpecSupport::NspaceCatalogQueryController"
+      )
+      expect(Ruact::ServerFunctions::QueryDispatch.route_target_for(namespaced))
+        .to eq("ruact/server_functions/query_dispatch/query_request_spec_support/nspace/catalog_query")
+      expect(Ruact::ServerFunctions::QueryDispatch.route_target_for(flat))
+        .to eq("ruact/server_functions/query_dispatch/query_request_spec_support/nspace_catalog_query")
+    end
+
+    it "mounts both on the same RouteSet without error, each routing to its own class (no cross-wiring)" do
+      namespaced = Class.new(Ruact::Query) { def from_ns = "ns" }
+      flat       = Class.new(Ruact::Query) { def from_flat = "flat" }
+      stub_const("QueryRequestSpecSupport::Pair::TwinQuery", namespaced)
+      stub_const("QueryRequestSpecSupport::PairTwinQuery", flat)
 
       route_set = ActionDispatch::Routing::RouteSet.new
-      colliding_draw = lambda do
+      expect do
         route_set.draw do
           ruact_queries namespaced
           ruact_queries flat
         end
-      end
+      end.not_to raise_error
 
-      expect(&colliding_draw).to raise_error(Ruact::ConfigurationError) do |error|
-        expect(error.message).to include("QueryRequestSpecSupport::Collide::NsQuery")
-        expect(error.message).to include("QueryRequestSpecSupport::CollideNsQuery")
-        expect(error.message).to include("rename one of the query classes")
-      end
-    end
-
-    it "catches the collision across SEPARATE draw blocks on the same RouteSet (round 3)" do
-      namespaced = Class.new(Ruact::Query) { def ping_c = :c }
-      flat       = Class.new(Ruact::Query) { def ping_d = :d }
-      stub_const("QueryRequestSpecSupport::Split::BlockQuery", namespaced)
-      stub_const("QueryRequestSpecSupport::SplitBlockQuery", flat)
-
-      # Multiple append/prepend blocks are evaluated by the routes_reloader
-      # with clear-and-finalize disabled — the second block must still see the
-      # first block's routes (a bare #draw would clear! between evaluations).
-      route_set = ActionDispatch::Routing::RouteSet.new
-      route_set.disable_clear_and_finalize = true
-      route_set.draw { ruact_queries namespaced }
-      expect { route_set.draw { ruact_queries flat } }
-        .to raise_error(Ruact::ConfigurationError, /rename one of the query classes/)
-    end
-
-    it "a redraw after a rename is NOT rejected against a stale owner (round 2 — dev-reload safety)" do
-      renamed_away = Class.new(Ruact::Query) { def ping_a = :a }
-      renamed_to   = Class.new(Ruact::Query) { def ping_b = :b }
-      stub_const("QueryRequestSpecSupport::Renamed::StaleQuery", renamed_away)
-      stub_const("QueryRequestSpecSupport::RenamedStaleQuery", renamed_to)
-
-      # Simulated dev reload on the SAME RouteSet: the routes_reloader clears
-      # the set, then re-evals the draw blocks — the renamed class mounts onto
-      # the same flattened constant without a stale-ownership reject.
-      route_set = ActionDispatch::Routing::RouteSet.new
-      route_set.draw { ruact_queries renamed_away }
-      route_set.clear!
-      expect { route_set.draw { ruact_queries renamed_to } }.not_to raise_error
+      targets = route_set.routes.filter_map { |r| r.defaults[:controller] }
+      expect(targets).to include(
+        "ruact/server_functions/query_dispatch/query_request_spec_support/pair/twin_query",
+        "ruact/server_functions/query_dispatch/query_request_spec_support/pair_twin_query"
+      )
     end
 
     it "the SAME class re-mounting (dev reload) is still allowed" do
