@@ -412,6 +412,21 @@ RSpec.describe "Story 9.4: Ruact::Query + ruact_queries dispatch", :story_9_4 do
       )
     end
 
+    it "round-trips acronym namespaces so Rails resolves the generated controller (round 5)" do
+      acro = Class.new(Ruact::Query) { def ping_e = :e }
+      stub_const("QueryRequestSpecSupport::APIProbe::CatalogQuery", acro)
+
+      controller = Ruact::ServerFunctions::QueryDispatch.controller_for(acro)
+      target = Ruact::ServerFunctions::QueryDispatch.route_target_for(acro)
+      # Exactly how Rails' dispatcher resolves a "controller#action" target.
+      resolved = "#{target.camelize}Controller".constantize
+
+      expect(resolved).to be(controller)
+      expect(target).to eq(
+        "ruact/server_functions/query_dispatch/query_request_spec_support/api_probe/catalog_query"
+      )
+    end
+
     it "the SAME class re-mounting (dev reload) is still allowed" do
       expect do
         Ruact::ServerFunctions::QueryDispatch.controller_for(QueryRequestSpecSupport::ProbeQuery)

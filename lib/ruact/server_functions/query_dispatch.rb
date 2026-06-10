@@ -89,7 +89,7 @@ module Ruact
         # @raise [Ruact::ConfigurationError] when the parent controller cannot
         #   be resolved or +query_class+ is anonymous
         def controller_for(query_class)
-          *namespace_segments, base = base_segments(query_class)
+          *namespace_segments, base = constant_segments(query_class)
           namespace = ensure_namespace(namespace_segments)
           const_name = "#{base}Controller"
           namespace.send(:remove_const, const_name) if namespace.const_defined?(const_name, false)
@@ -107,11 +107,30 @@ module Ruact
         # @param query_class [Class] a {Ruact::Query} subclass
         # @return [String] e.g. `"ruact/server_functions/query_dispatch/admin/catalog_query"`
         def route_target_for(query_class)
-          path = base_segments(query_class).map(&:underscore).join("/")
-          "ruact/server_functions/query_dispatch/#{path}"
+          "ruact/server_functions/query_dispatch/#{path_segments(query_class).join('/')}"
         end
 
         private
+
+        # The underscored route-path segments for +query_class+
+        # (`Admin::CatalogQuery` → `["admin", "catalog_query"]`).
+        def path_segments(query_class)
+          base_segments(query_class).map(&:underscore)
+        end
+
+        # The generated controller's constant-name segments — derived from the
+        # SAME underscored path the route target uses, then `camelize`d
+        # (review round 5). Deriving both directions from one underscored form
+        # via the shared global inflector guarantees the route target Rails
+        # `camelize`s at dispatch time resolves to EXACTLY this constant,
+        # regardless of how the query class spelled an acronym or how the host
+        # configured `inflect.acronym` (`APIProbe::CatalogQuery` and the route
+        # `.../api_probe/catalog_query` both canonicalize identically). Using
+        # the raw class spelling instead would 404 acronym constants with the
+        # default inflector.
+        def constant_segments(query_class)
+          path_segments(query_class).map(&:camelize)
+        end
 
         # The query class's fully-qualified name split into constant segments
         # (`Admin::CatalogQuery` → `["Admin", "CatalogQuery"]`). The namespace
