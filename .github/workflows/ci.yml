@@ -164,22 +164,34 @@ jobs:
       - name: Run memory benchmark
         run: bundle exec rake benchmark:memory
 
-# E2E jobs (e2e and e2e-next) were removed from this workflow in Story 6.7.
-# They depend on the `e2e/` Rails app in the planning monorepo and cannot run
-# here (this repo has no `e2e/` directory). When/if a host-app system test
-# is desired in CI, host the workflow in the monorepo (luizcg/ruact-dev) where
-# both the gem submodule and the e2e/ Rails app live side by side.
-
-# ci-trigger-probe: harmless comment
-
   release:
+    # Auto-release to RubyGems on every GREEN push to main. The full set of
+    # required checks above is the gate (`needs:`), so a release can only happen
+    # after RSpec/RuboCop/YARD/benchmark/name-propagation have all passed.
+    #
+    # Versioning (single source of truth: lib/ruact/version.rb):
+    #   - story verde  -> patch bump (default)
+    #   - epic  verde  -> minor bump, triggered by an `[epic-done]` marker in
+    #                     the merge-commit message (the dev<->Codex loop adds it
+    #                     to the PR that closes an epic).
+    #   - major stays manual for the 1.0.0 cut.
+    #
+    # Auth is RubyGems Trusted Publishing (OIDC) — no API key / OTP, which is
+    # what `rubygems_mfa_required = "true"` in the gemspec requires. The repo
+    # must be registered as a Trusted Publisher for the `ruact` gem on
+    # rubygems.org (one-time, RubyGems UI) or `gem push` fails.
+    #
+    # Anti-loop: the bump commit carries `[skip ci]`, so pushing it back to main
+    # does not re-trigger this workflow. NB: the job pushes that commit straight
+    # to main, so `github-actions[bot]` must be allowed to bypass any
+    # branch-protection rule that would otherwise require a PR.
     name: Release to RubyGems
     needs: [name-propagation, rspec, rubocop, yard, benchmark]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
-      contents: write
+      id-token: write # OIDC -> RubyGems trusted publishing
+      contents: write # push the bump commit + version tag
     concurrency:
       group: release
       cancel-in-progress: false
@@ -191,18 +203,36 @@ jobs:
         with:
           ruby-version: "3.3"
           bundler-cache: true
+
       - name: Decide bump kind & compute next version
         id: bump
         env:
+          # Read via env (not direct ${{ }} interpolation) so an arbitrary
+          # commit message can't break out of the shell command.
           HEAD_MSG: ${{ github.event.head_commit.message }}
         run: |
           KIND=patch
           printf '%s' "$HEAD_MSG" | grep -qi '\[epic-done\]' && KIND=minor
           VERSION="$(bundle exec rake "release:bump[$KIND]" | tail -1)"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-      - uses: rubygems/configure-rubygems-credentials@v1
+          echo "::notice::Release bump $KIND -> v$VERSION"
+
+      - uses: rubygems/configure-rubygems-credentials@v1 # OIDC -> short-lived credential
+
       - name: Commit, tag & publish
         env:
           VERSION: ${{ steps.bump.outputs.version }}
         run: |
-          echo "publish $VERSION"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Release v$VERSION [skip ci]"
+          git tag "v$VERSION"
+          git push origin HEAD --tags
+          gem build ruact.gemspec
+          gem push "ruact-$VERSION.gem"
+
+# E2E jobs (e2e and e2e-next) were removed from this workflow in Story 6.7.
+# They depend on the `e2e/` Rails app in the planning monorepo and cannot run
+# here (this repo has no `e2e/` directory). When/if a host-app system test
+# is desired in CI, host the workflow in the monorepo (luizcg/ruact-dev) where
+# both the gem submodule and the e2e/ Rails app live side by side.
