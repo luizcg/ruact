@@ -164,6 +164,10 @@ module Ruact
             # query class can never leave the controller holding a stale ref.
             define_singleton_method(:__ruact_query_class) { query_class_name.constantize }
 
+            # Review round 3 — the owner stamp the routing macro's
+            # flatten-collision check reads (name, not class: survives reloads).
+            define_singleton_method(:__ruact_query_class_name) { query_class_name }
+
             # AC5 — the salvaged 8.4 error chain, with the same front-loading
             # trick as Ruact::Server: handlers the parent chain registered
             # (inherited OR declared later) stay more recent and keep

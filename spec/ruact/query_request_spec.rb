@@ -386,18 +386,35 @@ RSpec.describe "Story 9.4: Ruact::Query + ruact_queries dispatch", :story_9_4 do
       end
     end
 
+    it "catches the collision across SEPARATE draw blocks on the same RouteSet (round 3)" do
+      namespaced = Class.new(Ruact::Query) { def ping_c = :c }
+      flat       = Class.new(Ruact::Query) { def ping_d = :d }
+      stub_const("QueryRequestSpecSupport::Split::BlockQuery", namespaced)
+      stub_const("QueryRequestSpecSupport::SplitBlockQuery", flat)
+
+      # Multiple append/prepend blocks are evaluated by the routes_reloader
+      # with clear-and-finalize disabled — the second block must still see the
+      # first block's routes (a bare #draw would clear! between evaluations).
+      route_set = ActionDispatch::Routing::RouteSet.new
+      route_set.disable_clear_and_finalize = true
+      route_set.draw { ruact_queries namespaced }
+      expect { route_set.draw { ruact_queries flat } }
+        .to raise_error(Ruact::ConfigurationError, /rename one of the query classes/)
+    end
+
     it "a redraw after a rename is NOT rejected against a stale owner (round 2 — dev-reload safety)" do
       renamed_away = Class.new(Ruact::Query) { def ping_a = :a }
       renamed_to   = Class.new(Ruact::Query) { def ping_b = :b }
       stub_const("QueryRequestSpecSupport::Renamed::StaleQuery", renamed_away)
       stub_const("QueryRequestSpecSupport::RenamedStaleQuery", renamed_to)
 
-      ActionDispatch::Routing::RouteSet.new.draw { ruact_queries renamed_away }
-      # Simulated dev reload: the class was renamed; the NEW draw mounts only
-      # the new name. A fresh Mapper per draw means no stale-ownership reject.
-      expect do
-        ActionDispatch::Routing::RouteSet.new.draw { ruact_queries renamed_to }
-      end.not_to raise_error
+      # Simulated dev reload on the SAME RouteSet: the routes_reloader clears
+      # the set, then re-evals the draw blocks — the renamed class mounts onto
+      # the same flattened constant without a stale-ownership reject.
+      route_set = ActionDispatch::Routing::RouteSet.new
+      route_set.draw { ruact_queries renamed_away }
+      route_set.clear!
+      expect { route_set.draw { ruact_queries renamed_to } }.not_to raise_error
     end
 
     it "the SAME class re-mounting (dev reload) is still allowed" do
