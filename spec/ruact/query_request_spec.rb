@@ -155,17 +155,35 @@ module QueryRequestSpecSupport # rubocop:disable Style/OneClassPerFile
 
   # Custom parent for the AC2 configurability unit assertion.
   class AltParentController < ActionController::Base; end
+
+  # Story 9.5 (FR88) fixture — a required kwarg (`q`), an optional kwarg with
+  # a default (`limit`), and a separate required-only method. Mounted on the
+  # shared app alongside CatalogQuery so the FR88 sanitization is exercised
+  # end-to-end through the host chain.
+  class SearchQuery < ApplicationQuery
+    # `q` is the natural query parameter name and is asserted verbatim in the
+    # FR88 rejection messages below.
+    def search(q:, limit: "10") # rubocop:disable Naming/MethodParameterName
+      { "q" => q, "limit" => limit }
+    end
+
+    def tags(filter:)
+      { "filter" => filter }
+    end
+  end
 end
 
 if defined?(ControllerRequestSpecSupport) &&
    !ControllerRequestSpecSupport.instance_variable_get(:@__ruact_query_routes_appended)
   ControllerRequestSpecSupport.instance_variable_set(:@__ruact_query_routes_appended, true)
   ControllerRequestSpecSupport.app_class.routes.append do
-    ruact_queries QueryRequestSpecSupport::CatalogQuery, QueryRequestSpecSupport::PublicCatalogQuery
+    ruact_queries QueryRequestSpecSupport::CatalogQuery,
+                  QueryRequestSpecSupport::PublicCatalogQuery,
+                  QueryRequestSpecSupport::SearchQuery
   end
 end
 
-RSpec.describe "Story 9.4: Ruact::Query + ruact_queries dispatch", :story_9_4 do
+RSpec.describe "Story 9.4: Ruact::Query + ruact_queries dispatch", :story_9_4 do # rubocop:disable RSpec/MultipleDescribes
   include Rack::Test::Methods
 
   let(:app_class) { ControllerRequestSpecSupport.app_class }
@@ -441,6 +459,93 @@ RSpec.describe "Story 9.4: Ruact::Query + ruact_queries dispatch", :story_9_4 do
       second = Ruact::ServerFunctions::QueryDispatch.controller_for(QueryRequestSpecSupport::ProbeQuery)
       expect(second).not_to be(first)
       expect(second.superclass).to be(ApplicationController)
+    end
+  end
+end
+
+RSpec.describe "Story 9.5: FR88 query kwargs sanitization", :story_9_5 do
+  include Rack::Test::Methods
+
+  let(:app_class) { ControllerRequestSpecSupport.app_class }
+  let(:app)       { app_class.instance }
+
+  let(:login_headers) { { "HTTP_X_TEST_LOGIN" => "1" } }
+
+  before do
+    Rails.logger = Logger.new(IO::NULL)
+    ControllerRequestSpecSupport.boot!
+  end
+
+  def structured_error(response)
+    expect(response.status).to eq(400)
+    body = JSON.parse(response.body)
+    expect(body.fetch("_ruact_server_action_error")).to be(true)
+    expect(body.fetch("error_class")).to eq("Ruact::BadRequestError")
+    body
+  end
+
+  describe "AC3 happy path — declared primitives pass" do
+    it "passes a required + optional kwarg by name (values arrive as strings)" do
+      get "/q/search?q=ruby&limit=5", {}, login_headers
+      expect(last_response.status).to eq(200)
+      expect(JSON.parse(last_response.body)).to eq("q" => "ruby", "limit" => "5")
+    end
+
+    it "omits an absent optional kwarg so the method default applies" do
+      get "/q/search?q=ruby", {}, login_headers
+      expect(last_response.status).to eq(200)
+      expect(JSON.parse(last_response.body)).to eq("q" => "ruby", "limit" => "10")
+    end
+
+    it "accepts boolean-ish / numeric-ish primitive strings on the wire" do
+      get "/q/search?q=true&limit=0", {}, login_headers
+      expect(last_response.status).to eq(200)
+      expect(JSON.parse(last_response.body)).to eq("q" => "true", "limit" => "0")
+    end
+  end
+
+  describe "AC3 — array param rejected (only string/number/boolean/null allowed)" do
+    it "400s with a descriptive error naming the key and the allowlist" do
+      get "/q/search?q[]=a&q[]=b", {}, login_headers
+      body = structured_error(last_response)
+      expect(body.fetch("message")).to match(/:q must be a string, number, boolean, or null/)
+      expect(body.fetch("message")).to match(/arrays and objects are rejected/)
+    end
+  end
+
+  describe "AC3 — object (hash) param rejected" do
+    it "400s with a descriptive error naming the offending key" do
+      get "/q/search?q[deep]=1", {}, login_headers
+      body = structured_error(last_response)
+      expect(body.fetch("message")).to match(/:q must be a string, number, boolean, or null/)
+    end
+  end
+
+  describe "AC3 — missing required kwarg → 400 naming the missing parameter" do
+    it "400s naming :q when it is absent" do
+      get "/q/search?limit=5", {}, login_headers
+      body = structured_error(last_response)
+      expect(body.fetch("message")).to match(/missing required parameter\(s\) :q/)
+      expect(body.fetch("action_name")).to eq("search")
+    end
+
+    it "400s naming :filter on a required-only method" do
+      get "/q/tags", {}, login_headers
+      body = structured_error(last_response)
+      expect(body.fetch("message")).to match(/missing required parameter\(s\) :filter/)
+    end
+  end
+
+  describe "AC3 — unknown param → 400 (rejected, not silently dropped)" do
+    it "400s naming the unknown parameter" do
+      get "/q/search?q=ruby&bogus=1", {}, login_headers
+      body = structured_error(last_response)
+      expect(body.fetch("message")).to match(/unknown parameter :bogus/)
+    end
+
+    it "rejects before running the query even when the declared param is also present" do
+      get "/q/search?q=ruby&bogus=1", {}, login_headers
+      expect(last_response.status).to eq(400)
     end
   end
 end

@@ -63,6 +63,17 @@ module Ruact
     end
   end
 
+  # Story 9.5 (FR88) — raised by the query dispatch controller when a
+  # `useQuery` request's parameters violate the kwargs allowlist: a complex
+  # value (array / object) where only `string | number | boolean | null` is
+  # accepted, a missing required keyword, or an unknown parameter that matches
+  # no declared kwarg. Inherits from `Ruact::Error` so the Story 8.4
+  # `rescue_from StandardError` chain on the dispatch controller catches it
+  # cleanly; `__ruact_status_for` maps it to HTTP 400 (Bad Request). The
+  # message names the offending key and the allowlist so the React dev can
+  # fix the call site without reading the server source.
+  class BadRequestError < Error; end
+
   # Story 8.5 — raised by `EndpointController#__ruact_enforce_upload_limit!`
   # when an inbound multipart / urlencoded request's `Content-Length` exceeds
   # `Ruact.config.max_upload_bytes`. The exception inherits from

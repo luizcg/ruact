@@ -88,6 +88,40 @@ export function _makeServerFunction(descriptor: {
   ((formData: RuactFormData) => Promise<void>);
 
 /**
+ * Story 9.5 — the read-side (query) accessor. The codegen emits
+ * `_makeQuery({ path, kind: "query" })` for every method on a mounted
+ * `Ruact::Query` subclass. The returned callable issues a GET to the named
+ * query route (`GET /q/<jsId>`), serializing `params` into the query string
+ * (FR88: string / number / boolean / null only). Reads are CSRF-free: no
+ * body, no `X-CSRF-Token`.
+ *
+ * Usually consumed through {@link useQuery}, but callable directly in
+ * imperative code. The emitted module narrows the param surface per query
+ * (`() => Promise<unknown>` when the Ruby method declares no kwargs;
+ * `(params: Record<string, unknown>) => Promise<unknown>` when it does).
+ */
+export function _makeQuery(descriptor: {
+  path: string;
+  kind?: string;
+}): (params?: Record<string, unknown>) => Promise<unknown>;
+
+/**
+ * Story 9.5 — React hook for reading a server query. Pass a query reference
+ * (the codegen-emitted `_makeQuery` accessor) and optional params; issues
+ * `GET /q/<jsId>` on mount (and whenever the serialized params change) and
+ * returns `{ data, loading, error }`. `loading` is true until the first
+ * resolution; `error` carries the structured {@link RuactActionError} on
+ * failure. A superseded in-flight response is dropped.
+ *
+ * Request de-duplication across components is Story 9.6; this hook fetches
+ * once per mount.
+ */
+export function useQuery<T = unknown>(
+  reference: (params?: Record<string, unknown>) => Promise<unknown>,
+  params?: Record<string, unknown>,
+): { data: T | undefined; loading: boolean; error: unknown };
+
+/**
  * Story 8.2 — issues a Flight refetch of the supplied path (or the
  * current URL when omitted) and swaps the React tree in place. Mirrors
  * Next.js' `revalidatePath` ergonomic: call it after a server action

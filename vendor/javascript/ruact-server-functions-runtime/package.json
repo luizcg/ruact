@@ -1,7 +1,7 @@
 {
   "name": "ruact-server-functions-runtime",
-  "version": "0.2.0",
-  "description": "Server-functions runtime for ruact gem (Stories 8.1 + 8.2). Provides `_makeRef(name)` (POSTs to `/__ruact/fn/:name` with CSRF + JSON / FormData support, including the useActionState two-arg shape) and `revalidate(path?)` (Flight refetch via the installed ruact-router).",
+  "version": "0.3.0",
+  "description": "Server-functions runtime for ruact gem (Stories 8.1 + 8.2 + 9.5). Provides `_makeRef(name)` / `_makeServerFunction(descriptor)` (mutations: POST/PUT/PATCH/DELETE with CSRF + JSON / FormData), `revalidate(path?)` (Flight refetch), and `_makeQuery(descriptor)` + `useQuery(ref, params?)` (reads: GET /q/<jsId>, CSRF-free, FR88 primitive params → { data, loading, error }).",
   "type": "module",
   "main": "index.js",
   "types": "./index.d.ts",
@@ -16,7 +16,14 @@
   "scripts": {
     "test": "vitest run"
   },
+  "peerDependencies": {
+    "react": ">=18"
+  },
   "devDependencies": {
+    "@testing-library/react": "^16.1.0",
+    "jsdom": "^25.0.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "vitest": "^2.1.9"
   }
 }

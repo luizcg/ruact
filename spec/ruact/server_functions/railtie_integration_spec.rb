@@ -125,6 +125,73 @@ module Ruact
       end
     end
 
+    RSpec.describe "Ruact::ServerFunctions.write_v2_snapshot! — queries (Story 9.5)", :story_9_5 do
+      # `ruact_queries` + query dispatch live behind these requires (loaded
+      # explicitly here as the railtie would at boot).
+      require "ruact/routing"
+      require "ruact/query"
+
+      around do |example|
+        Dir.mktmpdir { |dir| @tmpdir = dir and example.run }
+      end
+
+      before do
+        stub_const("V2QueryParentController", Class.new(ActionController::Base))
+        Ruact.configure { |c| c.query_parent_controller = "V2QueryParentController" }
+        stub_const("V2CatalogQuery", Class.new(Ruact::Query) do
+          def categories; end
+          def search(term:); end
+        end)
+      end
+
+      def route_set
+        route_set = ActionDispatch::Routing::RouteSet.new
+        route_set.draw { ruact_queries V2CatalogQuery }
+        route_set
+      end
+
+      def write!(routes = route_set)
+        Ruact::ServerFunctions.write_v2_snapshot!(route_set: routes, root: Pathname.new(@tmpdir))
+      end
+
+      let(:next_ts) { File.join(@tmpdir, "app/javascript/.ruact/server-functions.next.ts") }
+
+      it "emits query entries (route-truth) merged into the v2 snapshot" do
+        entries = write!
+        expect(entries.map { |e| e["js_identifier"] }).to match_array(%w[categories search])
+        expect(entries).to all(include("kind" => "query", "http_method" => "GET"))
+      end
+
+      it "renders _makeQuery refs + the useQuery re-export into the .next TS" do
+        write!
+        ts = File.read(next_ts)
+        expect(ts).to include('import { _makeQuery } from "ruact/server-functions-runtime";')
+        expect(ts).to include('_makeQuery({ path: "/q/categories", kind: "query" });')
+        expect(ts).to include("export const categories: () => Promise<unknown> =")
+        expect(ts).to include("export const search: (params: Record<string, unknown>) => Promise<unknown> =")
+        expect(ts).to include('export { useQuery } from "ruact/server-functions-runtime";')
+      end
+
+      it "raises a route×query collision when an action and a query share a js_identifier" do
+        stub_const("CategoriesController", Class.new(ActionController::Base) { include Ruact::Server })
+        stub_const("CollideQuery", Class.new(Ruact::Query) { def categories; end })
+        rs = ActionDispatch::Routing::RouteSet.new
+        rs.draw do
+          # POST /categories#create would derive js_identifier "createCategory" — to
+          # force a clash, use a custom collection route named to collide head-on.
+          post "categories", to: "categories#categories"
+          ruact_queries CollideQuery
+        end
+        # Rename the action's js_identifier to exactly "categories" so it collides
+        # with the query method.
+        CategoriesController.define_singleton_method(:__ruact_function_name_overrides) do
+          { "categories" => "categories" }
+        end
+        expect { Ruact::ServerFunctions.write_v2_snapshot!(route_set: rs, root: Pathname.new(@tmpdir)) }
+          .to raise_error(Ruact::ConfigurationError, /both map to JS identifier "categories".*ruact_function_name/m)
+      end
+    end
+
     RSpec.describe "Ruact::Railtie registry-clear hook (Story 8.1)", :story_8_1 do
       # The Railtie attaches a `before_class_unload` callback that clears both
       # registries before Zeitwerk tears down constants — this prevents removed

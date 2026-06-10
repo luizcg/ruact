@@ -40,6 +40,14 @@ module Ruact
         # The Method#parameters types that mark keyword arguments (D7).
         KEYWORD_PARAM_TYPES = %i[key keyreq].freeze
 
+        # Story 9.5 (FR88) — the wire is GET query-string values, so every
+        # primitive the client sends arrives as a String (`?limit=5` →
+        # `"5"`); `nil` is the only non-String primitive Rack can produce for
+        # a scalar param. Arrays (`?q[]=`) and Hashes (`?q[k]=`) are the
+        # rejected complex shapes. Membership here = "this is a primitive the
+        # allowlist accepts".
+        PRIMITIVE_PARAM_CLASSES = [String, NilClass].freeze
+
         private
 
         # The action body of every query action: fresh context + fresh query
@@ -55,17 +63,67 @@ module Ruact
           render json: ActiveSupport::JSON.encode(serialized)
         end
 
-        # D7 — minimal, best-effort param passing: only the keyword arguments
-        # the query method declares, read by name from the GET query params
-        # (values arrive as Strings). The strict FR88 sanitization contract
-        # (primitive allowlist, reject objects, 400 on invalid) is Story 9.5,
-        # coupled to the `useQuery` wire format.
+        # Story 9.5 (FR88) — the AUTHORITATIVE kwargs sanitization. The query
+        # method's declared keyword arguments are the contract; the client's
+        # `useQuery(ref, params)` call sends those as GET query-string values.
+        # Reads the RAW client params from `request.query_parameters` (not
+        # `params`, which is polluted with Rails' `controller`/`action`/
+        # `format` routing defaults — those must not count as "unknown
+        # parameters"). Enforces, in order:
+        #
+        #   1. **Allowlist** — every provided value must be a primitive
+        #      (`string | number | boolean | null`; on the wire: String or
+        #      nil). An Array (`?q[]=`) or Hash (`?q[k]=`) is rejected with a
+        #      descriptive `Ruact::BadRequestError` naming the offending key
+        #      and the allowlist → 400.
+        #   2. **Unknown param** — a provided key matching no declared kwarg
+        #      (and the method has no `**rest`) is rejected, not silently
+        #      dropped → 400.
+        #   3. **Missing required** — a declared `keyreq` the client did not
+        #      send → 400 naming the missing parameter.
+        #
+        # Returns the symbol-keyed kwargs hash to splat into the query method.
         def __ruact_query_kwargs(query, query_method)
-          query.method(query_method).parameters.each_with_object({}) do |(type, name), kwargs|
-            next unless KEYWORD_PARAM_TYPES.include?(type)
+          signature = query.method(query_method).parameters
+          required = signature.filter_map { |type, name| name.to_s if type == :keyreq }
+          optional = signature.filter_map { |type, name| name.to_s if type == :key }
+          accepts_rest = signature.any? { |type, _name| type == :keyrest }
+          declared = required + optional
 
-            kwargs[name] = params[name.to_s] if params.key?(name.to_s)
+          provided = request.query_parameters
+
+          provided.each do |key, value|
+            __ruact_validate_query_param!(query_method, key, value, declared, accepts_rest)
           end
+
+          missing = required.reject { |name| provided.key?(name) }
+          unless missing.empty?
+            raise Ruact::BadRequestError,
+                  "ruact query :#{query_method} is missing required parameter(s) " \
+                  "#{missing.map { |n| n.to_sym.inspect }.join(', ')}."
+          end
+
+          provided.each_with_object({}) do |(key, value), kwargs|
+            kwargs[key.to_sym] = value if declared.include?(key) || accepts_rest
+          end
+        end
+
+        # FR88 per-param gate — see {#__ruact_query_kwargs}. Order matters:
+        # the unknown-param check precedes the type check so an unknown
+        # complex param is reported as "unknown" (the more actionable error).
+        def __ruact_validate_query_param!(query_method, key, value, declared, accepts_rest)
+          unless declared.include?(key) || accepts_rest
+            raise Ruact::BadRequestError,
+                  "ruact query :#{query_method} received unknown parameter #{key.to_sym.inspect} " \
+                  "— it matches no keyword argument of the query method."
+          end
+
+          return if PRIMITIVE_PARAM_CLASSES.any? { |klass| value.is_a?(klass) }
+
+          raise Ruact::BadRequestError,
+                "ruact query :#{query_method} parameter #{key.to_sym.inspect} must be a " \
+                "string, number, boolean, or null — arrays and objects are rejected " \
+                "(got #{value.class})."
         end
 
         # D5 — the {Ruact::Server} mutation gate returns false for GET/HEAD so

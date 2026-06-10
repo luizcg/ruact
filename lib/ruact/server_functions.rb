@@ -26,6 +26,7 @@ module Ruact
     autoload :SnapshotWriter,     "ruact/server_functions/snapshot_writer"
     autoload :Codegen,            "ruact/server_functions/codegen"
     autoload :RouteSource,        "ruact/server_functions/route_source"
+    autoload :QuerySource,        "ruact/server_functions/query_source"
     autoload :ErrorRendering,     "ruact/server_functions/error_rendering"
     autoload :EndpointController, "ruact/server_functions/endpoint_controller"
     autoload :StandaloneContext, "ruact/server_functions/standalone_context"
@@ -45,13 +46,23 @@ module Ruact
     # AC2 — transparency over silence: the exposed names are ALWAYS logged so a
     # routed non-GET action never becomes a callable server function silently.
     #
+    # Story 9.5 — the `entries` array now carries BOTH mutation actions (from
+    # {RouteSource}) and read queries (from {QuerySource}); they share ONE
+    # merged JS namespace. {.detect_merged_namespace_collisions!} catches a
+    # route×query clash (each source already catches its own intra-kind
+    # collisions); the rename-override macro `ruact_function_name` on the
+    # mutation side (or renaming the query method) resolves it.
+    #
     # @param route_set [#routes] the Rails route set.
     # @param root [Pathname] the app root (for `tmp/cache` + `app/javascript`).
     # @param logger [#info, nil] logger for the exposure line; defaults to
     #   `Rails.logger` when Rails is loaded, else nil.
-    # @return [Array<Hash>] the exposed v2 entries.
+    # @return [Array<Hash>] the exposed v2 entries (actions + queries).
     def self.write_v2_snapshot!(route_set:, root:, logger: default_logger)
-      entries = RouteSource.collect(route_set)
+      actions = RouteSource.collect(route_set)
+      queries = QuerySource.collect(route_set)
+      entries = (actions + queries).sort_by { |entry| entry["js_identifier"] }
+      detect_merged_namespace_collisions!(entries)
 
       json_path = root.join("tmp/cache/ruact/server-functions.next.json")
       ts_path   = root.join("app/javascript/.ruact/server-functions.next.ts")
@@ -70,6 +81,31 @@ module Ruact
 
     def self.default_logger
       defined?(Rails) && Rails.respond_to?(:logger) ? Rails.logger : nil
+    end
+
+    # Story 9.5 (Task 2) — the merged JS namespace covers route (action)
+    # entries AND query entries. {RouteSource} already rejects action×action
+    # collisions and {QuerySource} rejects query×query; this final pass catches
+    # a route×query clash — two distinct origins (one a mutation route, one a
+    # query method) mapping to the same `js_identifier` would emit two
+    # `export const <id>` lines and crash the generated module at load. Fail
+    # loudly at boot naming BOTH origins. The escape hatch is the
+    # `ruact_function_name :<action>, as: "<id>"` rename macro on the mutation
+    # controller (Story 9.3) or renaming the colliding query method.
+    #
+    # @param entries [Array<Hash>] merged action + query entries.
+    # @raise [Ruact::ConfigurationError]
+    def self.detect_merged_namespace_collisions!(entries)
+      entries.group_by { |entry| entry["js_identifier"] }.each do |js_id, group|
+        next if group.size < 2
+
+        origins = group.map { |entry| "#{entry['controller']}##{entry['action']}" }
+        raise Ruact::ConfigurationError,
+              "server-function naming collision: #{origins.join(' and ')} " \
+              "both map to JS identifier \"#{js_id}\" — disambiguate with " \
+              "`ruact_function_name :<action>, as: \"<other-name>\"` on the mutation " \
+              "controller, or rename the query method."
+      end
     end
   end
 end

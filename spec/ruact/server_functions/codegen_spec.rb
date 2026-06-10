@@ -377,13 +377,13 @@ module Ruact
             .to raise_error(Ruact::ConfigurationError, /absent from path/)
         end
 
-        it "rejects a v2 entry with a non-action kind" do
+        it "rejects a v2 entry with an unknown kind (Story 9.5 — action/query only)" do
           evil = v2_snapshot.merge(functions: [
-                                     { "js_identifier" => "createPost", "kind" => "query",
+                                     { "js_identifier" => "createPost", "kind" => "mutation",
                                        "http_method" => "POST", "path" => "/posts", "segments" => [] }
                                    ])
           expect { described_class.render(evil) }
-            .to raise_error(Ruact::ConfigurationError, /v2 entries are always/)
+            .to raise_error(Ruact::ConfigurationError, /v2 entries are "action" or "query"/)
         end
 
         it "rejects a v2 entry whose js_identifier is reserved" do
@@ -422,6 +422,71 @@ module Ruact
                                    ])
           expect { described_class.render(evil) }
             .to raise_error(Ruact::ConfigurationError, /absent from path/)
+        end
+      end
+
+      describe ".render — v2 query entries (Story 9.5)", :story_9_5 do
+        def query_entry(js_id, path, accepts_params:)
+          {
+            "js_identifier" => js_id, "kind" => "query", "http_method" => "GET",
+            "path" => path, "segments" => [], "accepts_params" => accepts_params,
+            "controller" => "CatalogQuery", "action" => js_id
+          }
+        end
+
+        it "emits a no-param query as _makeQuery with the () signature + useQuery re-export" do
+          out = described_class.render(version: 2, generated_at: "t", functions: [
+                                         query_entry("categories", "/q/categories", accepts_params: false)
+                                       ])
+          expect(out).to include('import { _makeQuery } from "ruact/server-functions-runtime";')
+          expect(out).to include("export const categories: () => Promise<unknown> =")
+          expect(out).to include('_makeQuery({ path: "/q/categories", kind: "query" });')
+          expect(out).to include('export { useQuery } from "ruact/server-functions-runtime";')
+          expect(out).to include('export { revalidate } from "ruact/server-functions-runtime";')
+        end
+
+        it "emits a param-declaring query with the (params) signature" do
+          out = described_class.render(version: 2, generated_at: "t", functions: [
+                                         query_entry("searchUsers", "/q/searchUsers", accepts_params: true)
+                                       ])
+          expect(out).to include("export const searchUsers: (params: Record<string, unknown>) => Promise<unknown> =")
+          expect(out).to include('_makeQuery({ path: "/q/searchUsers", kind: "query" });')
+        end
+
+        it "imports both accessors and re-exports useQuery for a mixed action+query snapshot" do
+          out = described_class.render(version: 2, generated_at: "t", functions: [
+                                         { "js_identifier" => "createPost", "kind" => "action",
+                                           "http_method" => "POST", "path" => "/posts", "segments" => [] },
+                                         query_entry("categories", "/q/categories", accepts_params: false)
+                                       ])
+          expect(out).to include('import { _makeServerFunction, _makeQuery } from "ruact/server-functions-runtime";')
+          expect(out).to include("_makeServerFunction({ method: \"POST\"")
+          expect(out).to include("_makeQuery({ path: \"/q/categories\", kind: \"query\" })")
+          expect(out).to include('export { useQuery } from "ruact/server-functions-runtime";')
+        end
+
+        it "accepts GET for a query entry (queries are GET-only)" do
+          expect do
+            described_class.render(version: 2, generated_at: "t", functions: [
+                                     query_entry("categories", "/q/categories", accepts_params: false)
+                                   ])
+          end.not_to raise_error
+        end
+
+        it "rejects a non-GET verb on a query entry" do
+          evil = { "js_identifier" => "categories", "kind" => "query", "http_method" => "POST",
+                   "path" => "/q/categories", "segments" => [] }
+          expect { described_class.render(version: 2, generated_at: "t", functions: [evil]) }
+            .to raise_error(Ruact::ConfigurationError, /invalid http_method/)
+        end
+
+        it "does NOT re-export useQuery for an action-only snapshot (byte-stable with 9.3)" do
+          out = described_class.render(version: 2, generated_at: "t", functions: [
+                                         { "js_identifier" => "createPost", "kind" => "action",
+                                           "http_method" => "POST", "path" => "/posts", "segments" => [] }
+                                       ])
+          expect(out).not_to include("useQuery")
+          expect(out).to end_with("export { revalidate } from \"ruact/server-functions-runtime\";\n")
         end
       end
     end

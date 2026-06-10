@@ -1678,3 +1678,102 @@ model never reads or populates it.
 **Deferred (noted, not ACs here):** install-generator scaffolding for
 `app/queries/application_query.rb`; codegen + `useQuery` + FR88 kwargs (9.5);
 dedup (9.6); docs rewrite (9.7); playground migration (9.8).
+
+---
+
+## 2026-06-10 — Story 9.5 — Queries in codegen, `useQuery` re-pointed, kwargs sanitized
+
+Closes the read-side of the route-driven redesign: queries now appear in the
+v2 codegen module, `useQuery` issues a real `GET /q/<jsId>`, and the FR88
+kwargs contract is enforced server-side. Append-only addendum to the
+2026-06-02 (route-driven) and 2026-06-09 (Story 9.4) entries.
+
+1. **Query codegen source = the drawn route table (route-truth), not the set
+   of `Ruact::Query` subclasses (AC1).** `Ruact::ServerFunctions::QuerySource`
+   enumerates drawn GET routes whose controller path is under
+   `ruact/server_functions/query_dispatch/` (the generated dispatch
+   controllers from Story 9.4) and emits one v2 query entry each. This is the
+   sibling of `RouteSource` (mutations) and was chosen over enumerating
+   `Ruact::Query.subclasses` deliberately: a host exposes a query ONLY by
+   mounting it with `ruact_queries` in `routes.rb`, so the route table is the
+   single source of truth. Reading subclasses would over-expose query classes
+   that are defined but never mounted (and `useQuery` would 404 on their
+   non-existent routes). **Consequence:** the "force-load `app/queries/` at
+   `config.to_prepare`" gap flagged in the story is *moot* — mounting a class
+   in `routes.rb` already autoloads it, so no force-load was added (avoiding
+   the over-exposure a blind force-load-then-enumerate would cause). `QuerySource`
+   is pure: the route set + a `query_class_for` resolver are injected (the
+   railtie passes the real `__ruact_query_class` lookup; specs inject a lambda).
+
+2. **Entry shape carries `accepts_params` for the TS signature (AC1).** A query
+   entry is `{ js_identifier, kind: "query", http_method: "GET", path,
+   segments: [], accepts_params, controller, action }`. `accepts_params` is
+   true iff the query method declares any keyword argument
+   (`:key`/`:keyreq`/`:keyrest`) and drives the emitted signature:
+   `(params: Record<string, unknown>) => Promise<unknown>` when true,
+   `() => Promise<unknown>` when false. `NameBridge.to_js_identifier` is reused
+   verbatim (single source of truth for snake→camel), so the codegen jsId is
+   byte-identical to the route the `ruact_queries` macro drew.
+
+3. **Merged JS namespace + collision detection (AC1, Task 2).** Action entries
+   (`RouteSource`) and query entries (`QuerySource`) share ONE namespace.
+   `RouteSource` rejects action×action and `QuerySource` rejects query×query
+   intra-kind; `ServerFunctions.detect_merged_namespace_collisions!` (run at
+   the `write_v2_snapshot!` combine point) rejects route×query. All three name
+   BOTH origins (`posts#categories and CatalogQuery#categories`). **Escape
+   hatch:** the `ruact_function_name :<action>, as: "<id>"` rename macro on the
+   *mutation controller* (Story 9.3) resolves a route×query clash; a
+   query×query clash is resolved by renaming a query method. The query side has
+   no rename macro because `routing.rb#draw_query_routes` derives the jsId
+   purely from the method name via `NameBridge` (kept read-only this story) —
+   renaming the method is the single, consistent lever, and keeps the route the
+   macro draws and the codegen jsId in lockstep by construction.
+
+4. **`useQuery` issues `GET /q/<jsId>` — the stale `POST /__ruact/fn/:id`
+   mechanism is VOIDED (AC2).** The 2026-05-13 ADR clarification #5 ("hook reads
+   `$$id`, POSTs `/__ruact/fn/:id`") is dead: Story 9.4 mounts queries as real
+   named GET routes and the 2026-06-02 addendum restored HTTP GET semantics for
+   reads (CSRF-free). The codegen emits `export const <id> = _makeQuery({ path,
+   kind: "query" })`; `useQuery(reference, params?) → { data, loading, error }`
+   invokes that reference inside a `useEffect`, tracking state and dropping a
+   superseded in-flight response (params changed / unmounted). The reference is
+   also directly callable for imperative use. `useQuery` and `_makeQuery` are
+   re-exported from `@/.ruact/server-functions` by the codegen — `useQuery` only
+   when the snapshot has ≥1 query entry, which keeps action-only and empty v2
+   modules **byte-identical to Story 9.3** (minimal-churn import list:
+   `_makeServerFunction` and/or `_makeQuery` are imported only when used).
+
+5. **`useQuery` wire format = primitives in the query string; server validation
+   is authoritative (AC3, FR88).** The client serializes `params` into the GET
+   query string: `string`/`number`/`boolean` → `key=value`, `null` → `key=`
+   (empty), and arrays/objects throw a client-side `TypeError` for immediate
+   feedback. The SERVER is the authority: `query_dispatch.rb#__ruact_query_kwargs`
+   reads `request.query_parameters` (the raw client params — NOT `params`, which
+   carries Rails' `controller`/`action`/`format` defaults that must not count as
+   "unknown") and enforces, in order: (a) **allowlist** — a value Rack parsed as
+   an Array (`?q[]=`) or Hash (`?q[k]=`) is rejected (a scalar arrives as a
+   String, the only non-`nil` primitive on the wire); (b) **unknown param** — a
+   key matching no declared kwarg (and no `**rest`) is rejected, not dropped;
+   (c) **missing required** — a `keyreq` the client omitted. All three raise the
+   new `Ruact::BadRequestError` (`< Ruact::Error`) → **HTTP 400** via a new case
+   in `__ruact_status_for`, rendered through the same Story 8.4 structured
+   payload (`_ruact_server_action_error: true`, `error_class`, `message` naming
+   the offending key + allowlist). Values are delivered to the query method as
+   Strings (GET semantics, unchanged from 9.4's best-effort) — FR88 governs the
+   *shape* on the wire, not type coercion, which stays the method's concern.
+
+6. **React becomes a `peerDependency` of the runtime package.** `useQuery` is
+   the runtime's first React import (`useState`/`useEffect`). React is declared
+   as a `peerDependency` (`">=18"`) — every host already has it; the runtime
+   never bundles its own copy. The mutation path (`_makeRef` /
+   `_makeServerFunction`) stays React-free. Package version `0.2.0` → `0.3.0`.
+   The hook is covered by jsdom + `@testing-library/react` vitest
+   (`usequery.test.mjs`); those dev-only deps live in the runtime package and
+   run via its own `npm test` (the vite-plugin parity run globs only the
+   node-environment `index.test.mjs`).
+
+7. **Scope guards (unchanged from the story plan).** 9.5 writes ONLY the
+   parallel `.next` codegen target (the ownership flip to the real
+   `server-functions.ts` is 9.8). Request de-duplication for `useQuery` is 9.6
+   (the hook fetches once per mount; a `useSyncExternalStore` refactor can layer
+   dedup later). The v1 substrate is untouched (demolition is 9.9).

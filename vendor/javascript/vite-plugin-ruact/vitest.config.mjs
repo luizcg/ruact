@@ -9,7 +9,13 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["**/*.test.mjs", "../ruact-server-functions-runtime/*.test.mjs"],
+    // The runtime's `index.test.mjs` is node-environment + dependency-free, so
+    // it rides along here for a single parity-plus-runtime run. Its jsdom +
+    // React hook tests (`usequery.test.mjs`, Story 9.5) need
+    // `@testing-library/react` from the runtime package's own node_modules and
+    // run via that package's `npm test` — they are intentionally NOT globbed
+    // in here (a `*.test.mjs` glob would pull them in and fail to resolve).
+    include: ["**/*.test.mjs", "../ruact-server-functions-runtime/index.test.mjs"],
     globals: false,
   },
 });
