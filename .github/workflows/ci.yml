@@ -218,7 +218,7 @@ jobs:
           ' "$KIND")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "::notice::Release bump $KIND -> v$VERSION"
-      - uses: rubygems/configure-rubygems-credentials@v1
+      - uses: rubygems/configure-rubygems-credentials@v2.0.0 # OIDC -> short-lived credential
       - name: Commit, tag & publish
         env:
           VERSION: ${{ steps.bump.outputs.version }}
