@@ -152,8 +152,10 @@ describe("Story 9.5 — _makeQuery / buildQueryUrl wire format (FR88)", () => {
     );
   });
 
-  it("encodes null as an empty value", () => {
-    expect(buildQueryUrl("/q/search", { q: null })).toBe("/q/search?q=");
+  it("encodes null as a BARE key (Rack parses `?q` as nil, distinct from `?q=` empty string)", () => {
+    expect(buildQueryUrl("/q/search", { q: null })).toBe("/q/search?q");
+    // value-bearing params keep `key=value`; a null alongside is a bare key
+    expect(buildQueryUrl("/q/search", { limit: 5, q: null })).toBe("/q/search?limit=5&q");
   });
 
   it("rejects an array value (FR88 — arrays are not primitives)", () => {

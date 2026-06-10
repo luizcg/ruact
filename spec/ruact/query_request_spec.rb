@@ -170,6 +170,18 @@ module QueryRequestSpecSupport # rubocop:disable Style/OneClassPerFile
     def tags(filter:)
       { "filter" => filter }
     end
+
+    # A `**rest` query: it opts into arbitrary kwargs, so extra params are NOT
+    # "unknown" — but the FR88 type allowlist still rejects arrays/objects.
+    def flexible(q:, **rest) # rubocop:disable Naming/MethodParameterName
+      { "q" => q, "rest" => rest.transform_keys(&:to_s) }
+    end
+
+    # For the null-wire contract: `useQuery` sends `null` as a bare key (`?opt`),
+    # which Rack parses as `nil` (distinct from `?opt=` → `""`).
+    def nullable(opt: "default")
+      { "opt" => opt }
+    end
   end
 end
 
@@ -546,6 +558,41 @@ RSpec.describe "Story 9.5: FR88 query kwargs sanitization", :story_9_5 do
     it "rejects before running the query even when the declared param is also present" do
       get "/q/search?q=ruby&bogus=1", {}, login_headers
       expect(last_response.status).to eq(400)
+    end
+  end
+
+  describe "AC3 — a `**rest` query opts into extra kwargs, but the type allowlist still applies" do
+    it "accepts extra primitive params (not 'unknown' for a **rest signature)" do
+      get "/q/flexible?q=ruby&extra=1&flag=true", {}, login_headers
+      expect(last_response.status).to eq(200)
+      expect(JSON.parse(last_response.body)).to eq(
+        "q" => "ruby", "rest" => { "extra" => "1", "flag" => "true" }
+      )
+    end
+
+    it "STILL rejects an array param on a **rest query (FR88 type boundary holds)" do
+      get "/q/flexible?q=ruby&bad[]=1", {}, login_headers
+      body = structured_error(last_response)
+      expect(body.fetch("message")).to match(/:bad must be a string, number, boolean, or null/)
+    end
+
+    it "STILL rejects an object param on a **rest query" do
+      get "/q/flexible?q=ruby&bad[x]=1", {}, login_headers
+      body = structured_error(last_response)
+      expect(body.fetch("message")).to match(/:bad must be a string, number, boolean, or null/)
+    end
+  end
+
+  describe "null wire contract — a bare key (`?opt`) is delivered as nil, not empty string" do
+    it "delivers nil (the bare-key wire form useQuery sends for null)" do
+      get "/q/nullable?opt", {}, login_headers
+      expect(last_response.status).to eq(200)
+      expect(JSON.parse(last_response.body)).to eq("opt" => nil)
+    end
+
+    it "delivers an empty string for `?opt=` (distinct from null)" do
+      get "/q/nullable?opt=", {}, login_headers
+      expect(JSON.parse(last_response.body)).to eq("opt" => "")
     end
   end
 end

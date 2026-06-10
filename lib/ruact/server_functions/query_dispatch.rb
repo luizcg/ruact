@@ -111,6 +111,13 @@ module Ruact
         # FR88 per-param gate — see {#__ruact_query_kwargs}. Order matters:
         # the unknown-param check precedes the type check so an unknown
         # complex param is reported as "unknown" (the more actionable error).
+        #
+        # `accepts_rest` (the method declares `**rest`) relaxes ONLY the
+        # named-parameter restriction — a `**rest` signature is the author's
+        # explicit opt-in to arbitrary kwargs, so no provided key is "unknown".
+        # The TYPE allowlist below STILL runs for every param including the
+        # rest-captured ones, so the FR88 security boundary (reject
+        # arrays/objects) holds regardless of `**rest`.
         def __ruact_validate_query_param!(query_method, key, value, declared, accepts_rest)
           unless declared.include?(key) || accepts_rest
             raise Ruact::BadRequestError,

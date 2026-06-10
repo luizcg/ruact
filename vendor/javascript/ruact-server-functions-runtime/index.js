@@ -392,10 +392,17 @@ function buildQueryUrl(path, params) {
     );
   }
   const search = new URLSearchParams();
+  // `null` is sent as a BARE key (`?q`, no `=`) — Rack parses that as `nil`,
+  // whereas `?q=` parses as `""`. This keeps `null` distinguishable from the
+  // empty string at the Ruby query-method boundary (the server allowlist
+  // accepts both `nil` and `String`). Bare keys are collected separately
+  // because `URLSearchParams` always emits `key=`; their order relative to
+  // the `=`-valued params is irrelevant server-side.
+  const bareKeys = [];
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined) continue;
     if (value === null) {
-      search.append(key, "");
+      bareKeys.push(encodeURIComponent(key));
     } else if (
       typeof value === "string" ||
       typeof value === "number" ||
@@ -409,7 +416,7 @@ function buildQueryUrl(path, params) {
       );
     }
   }
-  const qs = search.toString();
+  const qs = [search.toString(), ...bareKeys].filter((s) => s.length > 0).join("&");
   return qs.length === 0 ? path : `${path}?${qs}`;
 }
 
