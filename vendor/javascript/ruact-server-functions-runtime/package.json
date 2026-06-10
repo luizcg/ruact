@@ -1,7 +1,7 @@
 {
   "name": "ruact-server-functions-runtime",
-  "version": "0.3.0",
-  "description": "Server-functions runtime for ruact gem (Stories 8.1 + 8.2 + 9.5). Provides `_makeRef(name)` / `_makeServerFunction(descriptor)` (mutations: POST/PUT/PATCH/DELETE with CSRF + JSON / FormData), `revalidate(path?)` (Flight refetch), and `_makeQuery(descriptor)` + `useQuery(ref, params?)` (reads: GET /q/<jsId>, CSRF-free, FR88 primitive params → { data, loading, error }).",
+  "version": "0.4.0",
+  "description": "Server-functions runtime for ruact gem (Stories 8.1 + 8.2 + 9.5 + 9.6). Provides `_makeRef(name)` / `_makeServerFunction(descriptor)` (mutations: POST/PUT/PATCH/DELETE with CSRF + JSON / FormData), `revalidate(path?)` (Flight refetch), and `_makeQuery(descriptor)` + `useQuery(ref, params?)` (reads: GET /q/<jsId>, CSRF-free, FR88 primitive params → { data, loading, error }; identical concurrent calls share one in-flight request).",
   "type": "module",
   "main": "index.js",
   "types": "./index.d.ts",

@@ -113,8 +113,10 @@ export function _makeQuery(descriptor: {
  * resolution; `error` carries the structured {@link RuactActionError} on
  * failure. A superseded in-flight response is dropped.
  *
- * Request de-duplication across components is Story 9.6; this hook fetches
- * once per mount.
+ * Story 9.6 — identical concurrent calls (same reference + same params,
+ * order-independent) share ONE in-flight request. Dedup is in-flight only:
+ * once a request settles the shared entry is dropped, so a fresh mount
+ * refetches (no TTL cache, no stale-while-revalidate).
  */
 export function useQuery<T = unknown>(
   reference: (params?: Record<string, unknown>) => Promise<unknown>,
