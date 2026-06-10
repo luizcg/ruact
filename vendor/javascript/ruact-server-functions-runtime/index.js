@@ -187,6 +187,73 @@ export function _makeQuery(descriptor) {
   };
 }
 
+// Story 9.6 — in-flight request de-duplication for `useQuery`. Identical
+// concurrent calls (same query reference + same params) share ONE network
+// request instead of each firing its own GET. The registry maps a query
+// reference (the codegen-emitted `_makeQuery` accessor — stable module identity,
+// so the same import is the same key) to a `Map` of canonical-params-key →
+// in-flight Promise. Each promise is removed the instant it settles, so dedup is
+// strictly IN-FLIGHT-ONLY: no TTL, no stale-while-revalidate (Story 9.7 documents
+// that scope). A mount AFTER the previous request settled always refetches.
+//
+// Keyed by the reference FUNCTION via a WeakMap so dynamically-created references
+// can be GC'd; the inner `Map` self-empties as requests settle. `let` (not
+// `const`) so the test-only `__resetQueryDedup` can swap a fresh registry in
+// between cases — `dedupedQuery` closes over the binding, so the swap is seen.
+let inflightQueries = new WeakMap();
+
+// Order-independent serialization of the params object, used BOTH as the dedup
+// key and as the `useEffect` dependency. FR88 guarantees `params` is a flat
+// object of primitives (string / number / boolean / null — arrays/objects are
+// rejected upstream by `buildQueryUrl` and server-side), so sorting the
+// top-level keys is sufficient to collapse `{a:1,b:2}` and `{b:2,a:1}` onto the
+// same key. `undefined` values are skipped to mirror `buildQueryUrl` (which
+// omits them from the wire). `null` / no params both serialize to "".
+function canonicalParamsKey(params) {
+  if (params == null || typeof params !== "object" || Array.isArray(params)) return "";
+  const keys = Object.keys(params)
+    .filter((key) => params[key] !== undefined)
+    .sort();
+  if (keys.length === 0) return "";
+  const canonical = {};
+  for (const key of keys) canonical[key] = params[key];
+  return JSON.stringify(canonical);
+}
+
+// Share the in-flight request for (reference, canonical params). The first
+// caller creates the promise and registers it; concurrent callers with the same
+// key get the SAME promise back — one fetch, shared resolution, shared error.
+// The settle handler removes the entry, guarded by promise identity so a newer
+// in-flight request for the same key (started after this one settled but before
+// its handler ran) is never clobbered. A rejected promise is removed the same
+// way, so a failed shared request does not poison the key — the next mount
+// retries fresh.
+function dedupedQuery(reference, params) {
+  const key = canonicalParamsKey(params);
+  let perRef = inflightQueries.get(reference);
+  if (perRef) {
+    const existing = perRef.get(key);
+    if (existing) return existing;
+  } else {
+    perRef = new Map();
+    inflightQueries.set(reference, perRef);
+  }
+  // Wrap in Promise.resolve so a SYNCHRONOUS throw inside `reference` (e.g. a
+  // non-primitive param rejected by `buildQueryUrl`) becomes a rejected promise
+  // on the error path, preserving the Story 9.5 "sync throw surfaces as error"
+  // behavior.
+  const promise = Promise.resolve().then(() => reference(params));
+  perRef.set(key, promise);
+  const forget = () => {
+    if (perRef.get(key) === promise) perRef.delete(key);
+  };
+  // `.then(forget, forget)` (not `.finally`) so the cleanup branch swallows a
+  // rejection rather than spawning a derived promise that could surface as an
+  // unhandled rejection. The original `promise` is what callers handle.
+  promise.then(forget, forget);
+  return promise;
+}
+
 /**
  * Story 9.5 — React hook for reading a server query. Pass a query reference
  * (the codegen-emitted `_makeQuery` accessor) and optional params; the hook
@@ -202,8 +269,10 @@ export function _makeQuery(descriptor) {
  * A superseded in-flight response (params changed, or the component
  * unmounted) is dropped — the hook never sets state for a stale request.
  *
- * Request de-duplication across components is Story 9.6; this hook fetches
- * once per mount.
+ * Story 9.6 — identical CONCURRENT calls (same reference + same params,
+ * order-independent) share ONE in-flight request. Dedup is in-flight only:
+ * once the request settles the shared entry is dropped, so a fresh mount
+ * refetches — there is no TTL cache and no stale-while-revalidate.
  *
  * @param {(params?: Record<string, unknown>) => Promise<unknown>} reference
  * @param {Record<string, unknown>} [params]
@@ -214,17 +283,16 @@ export function useQuery(reference, params) {
 
   // Re-run the effect by VALUE, not identity: an inline `{ q: input }` literal
   // is a fresh object every render, which would refetch on every render if used
-  // directly as a dependency. Serializing collapses equal params to one key.
-  const paramsKey = params == null ? "" : JSON.stringify(params);
+  // directly as a dependency. The canonical (sorted-key) serialization collapses
+  // equal params — including reordered keys — to one string, and is the SAME key
+  // the dedup registry uses, so the effect dependency and the shared-request
+  // identity stay in lockstep.
+  const paramsKey = canonicalParamsKey(params);
 
   useEffect(() => {
     let active = true;
     setState((prev) => ({ data: prev.data, loading: true, error: null }));
-    // Wrap in Promise.resolve so a synchronous throw inside `reference`
-    // (e.g. a non-primitive param rejected by `buildQueryUrl`) lands on the
-    // error branch instead of escaping the effect.
-    Promise.resolve()
-      .then(() => reference(params))
+    dedupedQuery(reference, params)
       .then((data) => {
         if (active) setState({ data, loading: false, error: null });
       })
@@ -312,6 +380,15 @@ export const __internals = {
   followRedirectIfPresent,
   buildQueryUrl,
   buildQueryFetchInit,
+  // Story 9.6 — exposed for the dedup vitest suite. `canonicalParamsKey` is the
+  // order-independent dedup/effect key; `__resetQueryDedup` swaps a fresh
+  // in-flight registry so a test asserting mid-flight state starts from a clean
+  // slate (the registry self-empties on settle, so this only matters for tests
+  // that deliberately leave a request pending).
+  canonicalParamsKey,
+  __resetQueryDedup: () => {
+    inflightQueries = new WeakMap();
+  },
 };
 
 // v1 (Story 8.1) — POST to the synthetic endpoint. A thin wrapper over the
