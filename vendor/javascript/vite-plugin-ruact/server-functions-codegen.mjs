@@ -49,12 +49,18 @@ const RESERVED_JS_IDENTIFIERS = new Set([
 ]);
 
 // Story 8.2 R12 (2026-05-17) — names ALREADY bound at module top by the
-// codegen itself: `_makeRef` (imported from the runtime) and `revalidate`
-// (re-exported unconditionally from the runtime). A snapshot that
-// declared either as an action `js_identifier` would emit a duplicate
-// binding and crash at module-load time. Mirrors Ruby
-// `NameBridge::RESERVED_BY_RUACT`.
-const RESERVED_BY_RUACT = new Set(["_makeRef", "_makeServerFunction", "revalidate"]);
+// codegen itself: the runtime imports (`_makeRef`, `_makeServerFunction`,
+// `_makeQuery`) and the re-exports (`revalidate`, `useQuery`). A snapshot that
+// declared any as a `js_identifier` would emit a duplicate binding and crash
+// at module-load time. Mirrors Ruby `NameBridge::RESERVED_BY_RUACT`.
+// Story 9.5 added `_makeQuery` + `useQuery`.
+const RESERVED_BY_RUACT = new Set([
+  "_makeQuery",
+  "_makeRef",
+  "_makeServerFunction",
+  "revalidate",
+  "useQuery",
+]);
 
 // Story 9.3 — the route-driven snapshot schema version + its verb allowlist.
 // A version-2 snapshot renders `_makeServerFunction({...})` calls; `render`

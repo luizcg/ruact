@@ -47,16 +47,21 @@ module Ruact
 
       # Story 8.2 (2026-05-17 review patches R2 + R12) — names already
       # bound at the top of `app/javascript/.ruact/server-functions.ts`,
-      # either by the helper re-export (`revalidate`) or the runtime
-      # import (`_makeRef`). A `ruact_action :revalidate` or
-      # `ruact_action :_make_ref` would emit a clashing `export const`
-      # next to the existing binding and crash at module-load time.
-      # The rule fires at controller-class load so the failure
-      # surfaces during boot, not at first request.
+      # either by a helper re-export (`revalidate`, `useQuery`) or a runtime
+      # import (`_makeRef`, `_makeServerFunction`, `_makeQuery`). A
+      # `ruact_action :revalidate` / a query method `use_query` would emit a
+      # clashing `export const` / duplicate export next to the existing
+      # binding and crash the generated module at load time. The rule fires
+      # at controller-class load / route-draw so the failure surfaces during
+      # boot, not at first request.
+      # Story 9.5 added `_makeQuery` (the v2 query import) and `useQuery` (the
+      # query hook re-export) to this list.
       RESERVED_BY_RUACT = %w[
+        _makeQuery
         _makeRef
         _makeServerFunction
         revalidate
+        useQuery
       ].to_set.freeze
 
       class << self

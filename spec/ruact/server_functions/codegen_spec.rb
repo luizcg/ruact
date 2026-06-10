@@ -480,6 +480,20 @@ module Ruact
             .to raise_error(Ruact::ConfigurationError, /invalid http_method/)
         end
 
+        it "rejects a query entry whose js_identifier is the useQuery re-export name" do
+          evil = { "js_identifier" => "useQuery", "kind" => "query", "http_method" => "GET",
+                   "path" => "/q/useQuery", "segments" => [], "accepts_params" => false }
+          expect { described_class.render(version: 2, generated_at: "t", functions: [evil]) }
+            .to raise_error(Ruact::ConfigurationError, /reserved/)
+        end
+
+        it "rejects a query entry whose js_identifier is the _makeQuery import name" do
+          evil = { "js_identifier" => "_makeQuery", "kind" => "query", "http_method" => "GET",
+                   "path" => "/q/_makeQuery", "segments" => [], "accepts_params" => false }
+          expect { described_class.render(version: 2, generated_at: "t", functions: [evil]) }
+            .to raise_error(Ruact::ConfigurationError, /reserved/)
+        end
+
         it "does NOT re-export useQuery for an action-only snapshot (byte-stable with 9.3)" do
           out = described_class.render(version: 2, generated_at: "t", functions: [
                                          { "js_identifier" => "createPost", "kind" => "action",
