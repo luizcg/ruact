@@ -177,9 +177,21 @@ jobs:
     # `[epic-done]` marker in the merge-commit message; major manual for 1.0.0.
     # Auth is RubyGems Trusted Publishing (OIDC) — satisfies
     # rubygems_mfa_required. The bump commit carries [skip ci] (no re-trigger).
+    #
+    # KILL SWITCH (added 2026-06-14): publishing is OFF by default. The job only
+    # runs when the repo variable RUACT_AUTO_RELEASE is exactly "true". When the
+    # variable is unset (current state), `vars.RUACT_AUTO_RELEASE` is the empty
+    # string, the `== 'true'` test is false, and this job is skipped — every
+    # other check still runs, merges stay green, nothing is published.
+    #   Turn ON :  gh variable set    RUACT_AUTO_RELEASE -b true -R luizcg/ruact
+    #   Turn OFF:  gh variable delete  RUACT_AUTO_RELEASE      -R luizcg/ruact
+    # (or GitHub UI: Settings -> Secrets and variables -> Actions -> Variables)
     name: Release to RubyGems
     needs: [name-propagation, rspec, rubocop, yard, benchmark]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name == 'push'
+      && github.ref == 'refs/heads/main'
+      && vars.RUACT_AUTO_RELEASE == 'true'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -217,6 +229,12 @@ jobs:
             print v
           ' "$KIND")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # Resync Gemfile.lock to the bumped path-gem version. Without this the
+          # release commit carries a new version.rb but a stale lock, and every
+          # frozen-mode job (rubocop/yard/benchmark) goes red on the next push
+          # with bundler exit 16 ("gemspecs for path gems changed"). `git commit
+          # -am` below then picks up the updated lock alongside version.rb.
+          bundle lock --local
           echo "::notice::Release bump $KIND -> v$VERSION"
       - uses: rubygems/configure-rubygems-credentials@v2.0.0 # OIDC -> short-lived credential
       - name: Commit, tag & publish
