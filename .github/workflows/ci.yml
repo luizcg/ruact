@@ -229,6 +229,12 @@ jobs:
             print v
           ' "$KIND")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # Resync Gemfile.lock to the bumped path-gem version. Without this the
+          # release commit carries a new version.rb but a stale lock, and every
+          # frozen-mode job (rubocop/yard/benchmark) goes red on the next push
+          # with bundler exit 16 ("gemspecs for path gems changed"). `git commit
+          # -am` below then picks up the updated lock alongside version.rb.
+          bundle lock --local
           echo "::notice::Release bump $KIND -> v$VERSION"
       - uses: rubygems/configure-rubygems-credentials@v2.0.0 # OIDC -> short-lived credential
       - name: Commit, tag & publish
