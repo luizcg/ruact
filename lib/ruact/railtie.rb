@@ -60,6 +60,14 @@ module Ruact
     # Detect streaming capability at boot and log the active mode (AC#1–3).
     # Also warns in development if the Vite dev server is not running (AC#4, #7).
     config.after_initialize do
+      # Story 9.9 — guaranteed-correct first-boot codegen. By `after_initialize`
+      # the route table is fully drawn on EVERY Rails version, so this write
+      # always sees the complete route set (the `to_prepare` write above can run
+      # mid-finalization on Rails < 8, before routes exist — that write is the
+      # dev-reload refresh path; this one is the authoritative boot write).
+      # Write-if-changed makes the pair idempotent — at most one real write.
+      Ruact::Railtie.write_server_functions_snapshot!
+
       Ruact::Railtie.detect_streaming_mode!
       next unless Rails.env.development?
 
@@ -112,12 +120,36 @@ module Ruact
     # route table to load first via `routes_reloader.execute_unless_loaded` so
     # RouteSource/QuerySource see every route.
     #
+    # The force-load is guarded: when `to_prepare` fires from INSIDE the
+    # boot finisher (Rails draws routes during `initialize!`, and on Rails < 8
+    # re-entering `execute_unless_loaded` there raises `FrozenError` against the
+    # in-progress route set), skip the explicit force — the routes initializer
+    # that runs right after will populate the table, and the next `to_prepare`
+    # (dev reload) or the request-cycle codegen sees the full set. We only force
+    # when the reloader is genuinely safe to run (not yet loaded AND not raising).
+    #
     # @return [Array<Hash>] the exposed v2 entries (actions + queries).
     def self.write_server_functions_snapshot!
-      Rails.application.routes_reloader.execute_unless_loaded
+      force_routes_loaded!
       Ruact::ServerFunctions.write_v2_snapshot!(
         route_set: Rails.application.routes, root: Rails.root
       )
+    end
+
+    # Idempotently force the route table to load, tolerating the boot-finisher
+    # re-entrancy that raises `FrozenError` on Rails < 8 (routes are mid-draw).
+    # A skipped force is harmless: the routes initializer finishes the draw, and
+    # the dev-reload `to_prepare` / first-request codegen re-runs with the full
+    # table.
+    def self.force_routes_loaded!
+      reloader = Rails.application.routes_reloader
+      return unless reloader.respond_to?(:execute_unless_loaded)
+
+      reloader.execute_unless_loaded
+    rescue FrozenError
+      # Routes are being drawn by the boot finisher right now; the in-progress
+      # set is frozen. Leave it to that draw — do not re-enter.
+      nil
     end
 
     # Checks whether the manifest exists and either warns (dev) or raises (prod).
