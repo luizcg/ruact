@@ -36,7 +36,7 @@ module Ruact
           expect { described_class.to_js_identifier(:CreatePost) }
             .to raise_error(Ruact::ConfigurationError) do |error|
               expect(error.message).to include(":CreatePost")
-              expect(error.message).to include("ruact_action / ruact_query")
+              expect(error.message).to include("ruact server-function name")
             end
         end
 
@@ -150,10 +150,10 @@ module Ruact
 
         describe "Ruact-reserved names (Story 8.2 review patch R2 — 2026-05-17)", :story_8_2 do
           # The codegen unconditionally re-exports certain runtime helpers
-          # from `@/.ruact/server-functions` (e.g. `revalidate`). A
-          # `ruact_action :revalidate` would emit `export const revalidate`
+          # from `@/.ruact/server-functions` (e.g. `revalidate`). A server
+          # function named `revalidate` would emit `export const revalidate`
           # next to the helper re-export and crash at module load with a
-          # duplicate-export error. Reject at controller load instead.
+          # duplicate-export error. Reject at route-draw instead.
           it "rejects :revalidate because it collides with the unconditional helper re-export" do
             expect { described_class.to_js_identifier(:revalidate) }
               .to raise_error(Ruact::ConfigurationError) do |error|
@@ -170,16 +170,16 @@ module Ruact
             expect(described_class.to_js_identifier(:_revalidate)).to eq("_revalidate")
           end
 
-          it "R12 — rejects :_make_ref because it collides with the codegen's runtime import" do
-            expect { described_class.to_js_identifier(:_make_ref) }
+          it "rejects :_make_server_function because it collides with the codegen's runtime import" do
+            expect { described_class.to_js_identifier(:_make_server_function) }
               .to raise_error(Ruact::ConfigurationError) do |error|
-                expect(error.message).to include(":_make_ref")
+                expect(error.message).to include(":_make_server_function")
                 expect(error.message).to include("duplicate export")
               end
           end
 
-          it "R12 — accepts :_make_ref_action (suffix escape hatch keeps working)" do
-            expect(described_class.to_js_identifier(:_make_ref_action)).to eq("_makeRefAction")
+          it "accepts :_make_ref now that the demolished v1 runtime export is no longer reserved (Story 9.9)" do
+            expect(described_class.to_js_identifier(:_make_ref)).to eq("_makeRef")
           end
 
           # Story 9.5 — `_makeQuery` (the v2 query import) and `useQuery` (the

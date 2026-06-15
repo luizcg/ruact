@@ -1,12 +1,14 @@
-// Story 8.1 — vitest suite for the real server-functions runtime.
+// Vitest suite for the route-driven server-functions runtime.
 //
-// Covers AC10 of Story 8.1: argument-shape branching (JSON vs FormData),
-// CSRF meta-tag injection, success vs. failure response handling, and
-// error wrapping. Uses `vi.fn()` to stub `fetch` — no real network.
+// Covers the shared mutation fetch core via `_makeServerFunction`: argument-
+// shape branching (JSON vs FormData), CSRF meta-tag injection, success vs.
+// failure response handling, error wrapping, and the useActionState two-arg
+// shape. Uses `vi.fn()` to stub `fetch` — no real network. Story 9.9 demolished
+// the v1 `_makeRef` accessor; these tests now exercise the same core through the
+// route-driven accessor (which `_makeRef` used to share verbatim).
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
-  _makeRef,
   _makeServerFunction,
   __RUNTIME_VERSION__,
   __internals,
@@ -14,6 +16,13 @@ import {
   configureRuactRuntime,
   revalidate,
 } from "./index.js";
+
+// Helper — a route-driven accessor targeting `POST /posts` (the canonical
+// mutation shape). The shared fetch core is identical regardless of verb/path,
+// so this stands in for the demolished `_makeRef("name")` in the core tests.
+function makePostFn() {
+  return _makeServerFunction({ method: "POST", path: "/posts", segments: [] });
+}
 
 let originalFetch;
 let originalDocument;
@@ -67,27 +76,27 @@ function mockMetaTag(token) {
   };
 }
 
-describe("Story 8.1 — _makeRef", () => {
+describe("runtime — accessor basics", () => {
   it("exports the runtime-version sentinel (placeholder __PLACEHOLDER__ is gone)", () => {
     expect(__RUNTIME_VERSION__).toBe(1);
   });
 
   it("returns a callable accessor", () => {
-    const ref = _makeRef("create_post");
+    const ref = makePostFn();
     expect(typeof ref).toBe("function");
   });
 });
 
-describe("Story 8.1 — JSON body branch", () => {
-  it("POSTs JSON.stringify(args) with Content-Type: application/json", async () => {
+describe("mutation core — JSON body branch", () => {
+  it("sends JSON.stringify(args) with Content-Type: application/json over the real path+verb", async () => {
     mockFetchOk({ ok: true });
     mockMetaTag(null);
 
-    await _makeRef("create_post")({ title: "Hi" });
+    await makePostFn()({ title: "Hi" });
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     const [url, init] = globalThis.fetch.mock.calls[0];
-    expect(url).toBe("/__ruact/fn/create_post");
+    expect(url).toBe("/posts");
     expect(init.method).toBe("POST");
     expect(init.credentials).toBe("same-origin");
     expect(init.headers["Content-Type"]).toBe("application/json");
@@ -97,7 +106,7 @@ describe("Story 8.1 — JSON body branch", () => {
   it("treats undefined args as an empty JSON object {}", async () => {
     mockFetchOk({});
     mockMetaTag(null);
-    await _makeRef("categories")();
+    await makePostFn()();
 
     const [, init] = globalThis.fetch.mock.calls[0];
     expect(init.body).toBe("{}");
@@ -106,7 +115,7 @@ describe("Story 8.1 — JSON body branch", () => {
   it("treats null args as an empty JSON object {}", async () => {
     mockFetchOk({});
     mockMetaTag(null);
-    await _makeRef("categories")(null);
+    await makePostFn()(null);
 
     const [, init] = globalThis.fetch.mock.calls[0];
     expect(init.body).toBe("{}");
@@ -115,14 +124,14 @@ describe("Story 8.1 — JSON body branch", () => {
   it("resolves with parsed JSON for application/json responses", async () => {
     mockFetchOk({ id: 7 });
     mockMetaTag(null);
-    const result = await _makeRef("create_post")({ title: "x" });
+    const result = await makePostFn()({ title: "x" });
     expect(result).toEqual({ id: 7 });
   });
 
   it("attaches Accept: application/json header (re-run-2 #8 — host respond_to branching)", async () => {
     mockFetchOk({});
     mockMetaTag(null);
-    await _makeRef("create_post")({});
+    await makePostFn()({});
     const [, init] = globalThis.fetch.mock.calls[0];
     expect(init.headers.Accept).toBe("application/json");
   });
@@ -138,7 +147,7 @@ describe("Story 8.1 — JSON body branch", () => {
     globalThis.fetch = vi.fn().mockResolvedValue(r);
     mockMetaTag(null);
 
-    const result = await _makeRef("ping")({});
+    const result = await makePostFn()({});
     expect(result).toBe("hello");
     expect(r.text).toHaveBeenCalled();
     expect(r.json).not.toHaveBeenCalled();
@@ -156,7 +165,7 @@ describe("Story 8.1 — JSON body branch", () => {
     globalThis.fetch = vi.fn().mockResolvedValue(r);
     mockMetaTag(null);
 
-    const result = await _makeRef("noop")({});
+    const result = await makePostFn()({});
     expect(result).toBeNull();
     expect(r.json).not.toHaveBeenCalled();
   });
@@ -172,7 +181,7 @@ describe("Story 8.1 — JSON body branch", () => {
     globalThis.fetch = vi.fn().mockResolvedValue(r);
     mockMetaTag(null);
 
-    const result = await _makeRef("noop")({});
+    const result = await makePostFn()({});
     expect(result).toBeNull();
   });
 
@@ -190,21 +199,21 @@ describe("Story 8.1 — JSON body branch", () => {
     globalThis.fetch = vi.fn().mockResolvedValue(r);
     mockMetaTag(null);
 
-    const result = await _makeRef("noop")({});
+    const result = await makePostFn()({});
     expect(result).toBeNull();
     expect(r.json).not.toHaveBeenCalled();
   });
 });
 
-describe("Story 8.1 — FormData branch", () => {
-  it("POSTs the FormData as-is with NO manual Content-Type header (browser sets boundary)", async () => {
+describe("mutation core — FormData branch", () => {
+  it("sends the FormData as-is with NO manual Content-Type header (browser sets boundary)", async () => {
     mockFetchOk({ ok: true });
     mockMetaTag(null);
 
     const fd = new FormData();
     fd.append("title", "From form");
 
-    await _makeRef("create_post")(fd);
+    await makePostFn()(fd);
 
     const [, init] = globalThis.fetch.mock.calls[0];
     expect(init.body).toBe(fd);
@@ -212,12 +221,12 @@ describe("Story 8.1 — FormData branch", () => {
   });
 });
 
-describe("Story 8.1 — CSRF header injection", () => {
+describe("mutation core — CSRF header injection", () => {
   it("attaches X-CSRF-Token header when <meta name=\"csrf-token\"> is present", async () => {
     mockFetchOk({ ok: true });
     mockMetaTag("token-abc123");
 
-    await _makeRef("create_post")({ title: "x" });
+    await makePostFn()({ title: "x" });
 
     const [, init] = globalThis.fetch.mock.calls[0];
     expect(init.headers["X-CSRF-Token"]).toBe("token-abc123");
@@ -227,7 +236,7 @@ describe("Story 8.1 — CSRF header injection", () => {
     mockFetchOk({ ok: true });
     mockMetaTag(null);
 
-    await _makeRef("create_post")({ title: "x" });
+    await makePostFn()({ title: "x" });
 
     const [, init] = globalThis.fetch.mock.calls[0];
     expect(init.headers["X-CSRF-Token"]).toBeUndefined();
@@ -237,17 +246,17 @@ describe("Story 8.1 — CSRF header injection", () => {
     mockFetchOk({ ok: true });
     globalThis.document = undefined;
 
-    await expect(_makeRef("create_post")({ title: "x" })).resolves.toEqual({ ok: true });
+    await expect(makePostFn()({ title: "x" })).resolves.toEqual({ ok: true });
   });
 });
 
-describe("Story 8.1 — error responses", () => {
+describe("mutation core — error responses", () => {
   it("rejects with a structured Error on 4xx responses", async () => {
     mockFetchError(422, "validation failed");
     mockMetaTag(null);
 
-    await expect(_makeRef("create_post")({ title: "" })).rejects.toThrow(
-      /ruact action :create_post failed: 422 validation failed/,
+    await expect(makePostFn()({ title: "" })).rejects.toThrow(
+      /ruact action :\/posts failed: 422 validation failed/,
     );
   });
 
@@ -255,8 +264,8 @@ describe("Story 8.1 — error responses", () => {
     mockFetchError(500, "boom");
     mockMetaTag(null);
 
-    await expect(_makeRef("create_post")({})).rejects.toThrow(
-      /ruact action :create_post failed: 500 boom/,
+    await expect(makePostFn()({})).rejects.toThrow(
+      /ruact action :\/posts failed: 500 boom/,
     );
   });
 
@@ -264,13 +273,13 @@ describe("Story 8.1 — error responses", () => {
     globalThis.fetch = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
     mockMetaTag(null);
 
-    await expect(_makeRef("create_post")({})).rejects.toThrow(
-      /ruact action :create_post request failed: Failed to fetch/,
+    await expect(makePostFn()({})).rejects.toThrow(
+      /ruact action :\/posts request failed: Failed to fetch/,
     );
   });
 });
 
-describe("Story 8.1 — Re-run-4 — RuactActionError carries status/body (#6)", () => {
+describe("mutation core — RuactActionError carries status/body", () => {
   it("rejects with a RuactActionError exposing status and parsed JSON body on 422", async () => {
     const r = {
       ok: false,
@@ -284,13 +293,13 @@ describe("Story 8.1 — Re-run-4 — RuactActionError carries status/body (#6)",
 
     let captured = null;
     try {
-      await _makeRef("create_post")({ title: "" });
+      await makePostFn()({ title: "" });
     } catch (err) {
       captured = err;
     }
     expect(captured).toBeInstanceOf(RuactActionError);
     expect(captured.status).toBe(422);
-    expect(captured.actionName).toBe("create_post");
+    expect(captured.actionName).toBe("/posts");
     expect(captured.body).toEqual({ errors: { title: ["can't be blank"] } });
   });
 
@@ -300,7 +309,7 @@ describe("Story 8.1 — Re-run-4 — RuactActionError carries status/body (#6)",
 
     let captured = null;
     try {
-      await _makeRef("create_post")({});
+      await makePostFn()({});
     } catch (err) {
       captured = err;
     }
@@ -310,7 +319,7 @@ describe("Story 8.1 — Re-run-4 — RuactActionError carries status/body (#6)",
   });
 });
 
-describe("Story 8.1 — Re-run-4 — +json structured-syntax-suffix media types (#7)", () => {
+describe("mutation core — +json structured-syntax-suffix media types", () => {
   it("parses application/problem+json as JSON (RFC 6838 §4.2.8)", async () => {
     const r = {
       ok: true,
@@ -322,7 +331,7 @@ describe("Story 8.1 — Re-run-4 — +json structured-syntax-suffix media types 
     globalThis.fetch = vi.fn().mockResolvedValue(r);
     mockMetaTag(null);
 
-    const result = await _makeRef("noop")({});
+    const result = await makePostFn()({});
     expect(result).toEqual({ type: "about:blank", title: "ok" });
   });
 
@@ -337,24 +346,12 @@ describe("Story 8.1 — Re-run-4 — +json structured-syntax-suffix media types 
     globalThis.fetch = vi.fn().mockResolvedValue(r);
     mockMetaTag(null);
 
-    const result = await _makeRef("noop")({});
+    const result = await makePostFn()({});
     expect(result).toEqual({ data: { id: "1" } });
   });
 });
 
-describe("Story 8.1 — Re-run-3 — URL encoding of name (#6)", () => {
-  it("encodeURIComponent's the name so a stray '/' cannot rewrite the path", async () => {
-    mockFetchOk({ ok: true });
-    mockMetaTag(null);
-
-    await _makeRef("../foo?x=1")({});
-
-    const [url] = globalThis.fetch.mock.calls[0];
-    expect(url).toBe("/__ruact/fn/..%2Ffoo%3Fx%3D1");
-  });
-});
-
-describe("Story 8.1 — Re-run-3 — Content-Type matching is case-insensitive (#5)", () => {
+describe("mutation core — Content-Type matching is case-insensitive", () => {
   it("parses JSON when Content-Type is `Application/JSON` (RFC 9110 — case-insensitive media type)", async () => {
     const r = {
       ok: true,
@@ -366,24 +363,24 @@ describe("Story 8.1 — Re-run-3 — Content-Type matching is case-insensitive (
     globalThis.fetch = vi.fn().mockResolvedValue(r);
     mockMetaTag(null);
 
-    const result = await _makeRef("noop")({});
+    const result = await makePostFn()({});
     expect(result).toEqual({ id: 42 });
   });
 });
 
-describe("Story 8.1 — Re-run-5 — fetch redirect: 'error' (#5)", () => {
+describe("mutation core — fetch redirect: 'error'", () => {
   it("sets redirect: 'error' on the fetch init so auth `redirect_to` failures surface as errors", async () => {
     mockFetchOk({ ok: true });
     mockMetaTag(null);
 
-    await _makeRef("create_post")({});
+    await makePostFn()({});
 
     const [, init] = globalThis.fetch.mock.calls[0];
     expect(init.redirect).toBe("error");
   });
 });
 
-describe("Story 8.1 — Re-run-5 — configureRuactRuntime (#6)", () => {
+describe("mutation core — configureRuactRuntime", () => {
   afterEach(() => {
     configureRuactRuntime({ defaultHeaders: null });
   });
@@ -393,7 +390,7 @@ describe("Story 8.1 — Re-run-5 — configureRuactRuntime (#6)", () => {
     mockMetaTag(null);
     configureRuactRuntime({ defaultHeaders: { Authorization: "Bearer abc" } });
 
-    await _makeRef("create_post")({});
+    await makePostFn()({});
 
     const [, init] = globalThis.fetch.mock.calls[0];
     expect(init.headers.Authorization).toBe("Bearer abc");
@@ -410,8 +407,8 @@ describe("Story 8.1 — Re-run-5 — configureRuactRuntime (#6)", () => {
       },
     });
 
-    await _makeRef("create_post")({});
-    await _makeRef("create_post")({});
+    await makePostFn()({});
+    await makePostFn()({});
 
     expect(globalThis.fetch.mock.calls[0][1].headers.Authorization).toBe("Bearer t1");
     expect(globalThis.fetch.mock.calls[1][1].headers.Authorization).toBe("Bearer t2");
@@ -428,7 +425,7 @@ describe("Story 8.1 — Re-run-5 — configureRuactRuntime (#6)", () => {
       },
     });
 
-    await _makeRef("create_post")({});
+    await makePostFn()({});
 
     const [, init] = globalThis.fetch.mock.calls[0];
     expect(init.headers["X-CSRF-Token"]).toBe("real-csrf");
@@ -458,7 +455,7 @@ describe("Story 8.1 — Re-run-5 — configureRuactRuntime (#6)", () => {
       },
     });
 
-    await _makeRef("create_post")({});
+    await makePostFn()({});
 
     const [, init] = globalThis.fetch.mock.calls[0];
     expect(init.headers.Accept).toBe("application/json");
@@ -483,7 +480,7 @@ describe("Story 8.1 — Re-run-5 — configureRuactRuntime (#6)", () => {
 
     const fd = new FormData();
     fd.append("title", "Hello");
-    await _makeRef("upload")(fd);
+    await makePostFn()(fd);
 
     const [, init] = globalThis.fetch.mock.calls[0];
     expect(init.headers["Content-Type"]).toBeUndefined();
@@ -508,12 +505,12 @@ describe("Story 8.1 — __internals (test-only surface)", () => {
 // Story 8.2 — useActionState two-arg invocation
 // =============================================================================
 
-describe("Story 8.2 — _makeRef call-shape detection", () => {
+describe("Story 8.2 — call-shape detection (useActionState two-arg)", () => {
   it("fn() — zero args sends an empty JSON body (parity with Story 8.1 fn() shape)", async () => {
     mockFetchOk({});
     mockMetaTag(null);
 
-    await _makeRef("noop")();
+    await makePostFn()();
 
     const [, init] = globalThis.fetch.mock.calls[0];
     expect(init.body).toBe("{}");
@@ -524,7 +521,7 @@ describe("Story 8.2 — _makeRef call-shape detection", () => {
     mockFetchOk({});
     mockMetaTag(null);
 
-    await _makeRef("create_post")({ title: "Hi" });
+    await makePostFn()({ title: "Hi" });
 
     const [, init] = globalThis.fetch.mock.calls[0];
     expect(init.body).toBe(JSON.stringify({ title: "Hi" }));
@@ -536,7 +533,7 @@ describe("Story 8.2 — _makeRef call-shape detection", () => {
 
     const fd = new FormData();
     fd.append("title", "Hi");
-    await _makeRef("create_post")(fd);
+    await makePostFn()(fd);
 
     const [, init] = globalThis.fetch.mock.calls[0];
     expect(init.body).toBe(fd);
@@ -550,7 +547,7 @@ describe("Story 8.2 — _makeRef call-shape detection", () => {
 
     const fd = new FormData();
     fd.append("title", "From form");
-    await _makeRef("create_post")({ message: "previous state" }, fd);
+    await makePostFn()({ message: "previous state" }, fd);
 
     const [, init] = globalThis.fetch.mock.calls[0];
     expect(init.body).toBe(fd);
@@ -562,7 +559,7 @@ describe("Story 8.2 — _makeRef call-shape detection", () => {
     mockFetchOk({});
     mockMetaTag(null);
 
-    await _makeRef("create_post")({ message: "previous state" }, { title: "Hi" });
+    await makePostFn()({ message: "previous state" }, { title: "Hi" });
 
     const [, init] = globalThis.fetch.mock.calls[0];
     expect(init.body).toBe(JSON.stringify({ title: "Hi" }));
@@ -576,16 +573,16 @@ describe("Story 8.2 — _makeRef call-shape detection", () => {
 
     const fd = new FormData();
     fd.append("title", "FD");
-    await _makeRef("create_post")(fd, { title: "obj" });
+    await makePostFn()(fd, { title: "obj" });
 
     const [, init] = globalThis.fetch.mock.calls[0];
     expect(init.body).toBe(fd);
   });
 
-  it("fn(a, b, c) — three or more args throws TypeError with a descriptive message", () => {
-    expect(() => _makeRef("create_post")(1, 2, 3)).toThrow(TypeError);
-    expect(() => _makeRef("create_post")(1, 2, 3)).toThrow(
-      /ruact action :create_post called with 3 arguments — expected 0, 1, or 2/,
+  it("fn(a, b, c) — three or more args rejects with a descriptive TypeError", async () => {
+    await expect(makePostFn()(1, 2, 3)).rejects.toThrow(TypeError);
+    await expect(makePostFn()(1, 2, 3)).rejects.toThrow(
+      /ruact server function POST \/posts called with 3 arguments — expected 0, 1, or 2/,
     );
   });
 
@@ -601,7 +598,7 @@ describe("Story 8.2 — _makeRef call-shape detection", () => {
     // Pre-Story-8.2 this would have thrown on JSON.stringify(circular). The
     // wire path never sees prevState, so circular references are harmless.
     await expect(
-      _makeRef("create_post")(circular, fd),
+      makePostFn()(circular, fd),
     ).resolves.not.toThrow();
 
     const [, init] = globalThis.fetch.mock.calls[0];

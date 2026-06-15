@@ -1,26 +1,27 @@
-// Story 8.1 — real server-functions runtime.
+// Server-functions runtime (route-driven, v2).
 //
-// Replaces the Story 8.0a placeholder. Each export of the generated module
-// `app/javascript/.ruact/server-functions.ts` calls `_makeRef("<symbol>")`
-// and gets back a function that, when invoked, POSTs to
-// `/__ruact/fn/<symbol>` with the args serialized as JSON or FormData.
+// Each export of the generated module `app/javascript/.ruact/server-functions.ts`
+// is built by `_makeServerFunction({ method, path, segments })` (mutations) or
+// `_makeQuery({ path, kind: "query" })` (reads), targeting the REAL Rails route
+// + verb. Story 9.9 demolished the v1 `_makeRef` accessor + the synthetic
+// endpoint it POSTed to.
 //
-// Wire contract (locked by Story 8.0 ADR Decision-log clarification of
-// 2026-05-13, items 2–3): POST for everything (actions AND queries),
-// request body carries the args, response is JSON. CSRF symmetric — the
-// runtime forwards the `<meta name="csrf-token">` value as `X-CSRF-Token`
-// if the meta tag is present in the document (the gem does not impose its
-// own CSRF; the host's `protect_from_forgery` is what enforces).
+// Wire contract: mutations send the args as JSON or FormData over the route's
+// real verb; reads issue a GET with params serialized into the query string;
+// responses are JSON. CSRF (mutations only) — the runtime forwards the
+// `<meta name="csrf-token">` value as `X-CSRF-Token` if the meta tag is present
+// (the gem does not impose its own CSRF; the host's `protect_from_forgery`
+// enforces). Reads are CSRF-free (GET semantics).
 //
-// The `_makeRef` export surface and the `"ruact/server-functions-runtime"`
-// import path are part of the locked API — do NOT change without coordinated
-// codegen + Vite-plugin updates.
+// The export surface (`_makeServerFunction`, `_makeQuery`, `useQuery`,
+// `revalidate`, `configureRuactRuntime`, `RuactActionError`) and the
+// `"ruact/server-functions-runtime"` import path are part of the locked API —
+// do NOT change without coordinated codegen + Vite-plugin updates.
 
 // Story 9.5 — `useQuery` is a React hook, so the runtime now depends on React.
 // React is declared as a `peerDependency` (every host already has it; the
-// runtime never bundles its own copy). This is the runtime's first React
-// import — the mutation path (`_makeRef` / `_makeServerFunction`) stays
-// React-free.
+// runtime never bundles its own copy). The mutation path
+// (`_makeServerFunction`) stays React-free.
 import { useState, useEffect } from "react";
 
 const RUNTIME_VERSION = 1;
@@ -28,8 +29,8 @@ const RUNTIME_VERSION = 1;
 // Re-run-5 (2026-05-15) — module-level runtime configuration. Hosts
 // in API mode (no session cookie / no CSRF meta tag) need a way to
 // inject auth headers (`Authorization: Bearer …`) on every call.
-// `_makeRef`'s signature is locked by the codegen so we don't widen
-// it; instead, hosts call `configureRuactRuntime` once at app boot
+// the accessor signatures are locked by the codegen so we don't widen
+// them; instead, hosts call `configureRuactRuntime` once at app boot
 // to register a headers-producing function. The function runs on
 // every fetch so dynamic tokens (refreshed at runtime) are picked up.
 const runtimeOptions = {
@@ -73,59 +74,22 @@ export class RuactActionError extends Error {
 }
 
 /**
- * Returns a callable accessor for a server function registered with the
- * given Ruby symbol name. The accessor, when invoked, POSTs the args to
- * `/__ruact/fn/${name}` and resolves with the response (JSON-decoded for
- * application/json responses, text for everything else).
+ * Story 9.3 — the route-driven (v2) accessor. The codegen emits
+ * `_makeServerFunction({ method, path, segments })` for every non-GET routed
+ * action on a `Ruact::Server` controller. The returned callable targets the
+ * REAL Rails route + verb (e.g. `POST /posts`, `PUT /posts/:id`).
  *
- * Story 8.2 — the returned function accepts up to TWO positional
- * arguments to support React 19's `useActionState` shape:
- *
- *   useActionState(action, initialState)
- *
- * calls `action(prevState, formData)` on every submit. `_makeRef` picks
- * the FormData-typed candidate from the call and discards the prevState
- * argument silently — prev-state is a client-only concern, never
+ * Story 8.2 — the returned function accepts up to TWO positional arguments to
+ * support React 19's `useActionState` shape: `useActionState(action,
+ * initialState)` calls `action(prevState, formData)` on every submit. The
+ * accessor picks the FormData-typed candidate from the call and discards the
+ * prevState argument silently — prev-state is a client-only concern, never
  * transmitted to the server. The single-arg shape (`fn(args)` from event
  * handlers; `<form action={fn}>` passing FormData directly) is preserved.
  *
- * Argument shape selection rules (first match wins):
- *   - 0 args                                     → JSON body, `{}`
- *   - 1 arg, FormData                            → multipart
- *   - 1 arg, plain object / null / undefined     → JSON body
- *   - 2 args, FormData in either slot            → multipart (FormData wins;
- *                                                  the other arg is discarded)
- *   - 2 args, neither FormData                   → JSON body of the SECOND arg
- *                                                  (the `useActionState` payload
- *                                                  slot); first arg discarded
- *                                                  as prev-state
- *   - 3+ args                                    → TypeError
- *
- * @param {string} name
- * @returns {(arg1?: Record<string, unknown> | FormData, arg2?: FormData | Record<string, unknown>) => Promise<unknown>}
- */
-export function _makeRef(name) {
-  return function ruactServerFunctionCall(...callArgs) {
-    if (callArgs.length > 2) {
-      throw new TypeError(
-        `ruact action :${name} called with ${callArgs.length} arguments — ` +
-          "expected 0, 1, or 2 (the useActionState shape)",
-      );
-    }
-    return ruactPost(name, pickWirePayload(callArgs));
-  };
-}
-
-/**
- * Story 9.3 — the route-driven (v2) accessor. The codegen emits
- * `_makeServerFunction({ method, path, segments })` for every non-GET routed
- * action on a `Ruact::Server` controller (instead of v1's `_makeRef("<sym>")`).
- * The returned callable targets the REAL Rails route + verb (e.g. `POST /posts`,
- * `PUT /posts/:id`) rather than the v1 synthetic `POST /__ruact/fn/:name`.
- *
- * It shares the exact fetch core (`ruactInvoke`) with `_makeRef` — FormData
- * branching, CSRF meta injection, text-first parsing, `RuactActionError`,
- * `redirect: "error"` — so all the salvaged 8.1/8.2 behaviors are preserved.
+ * It uses the shared fetch core (`ruactInvoke`) — FormData branching, CSRF
+ * meta injection, text-first parsing, `RuactActionError`, `redirect: "error"`
+ * — so all the salvaged 8.1/8.2 behaviors are preserved.
  * Two additions over v1:
  *   - **Path-param interpolation (D7):** dynamic `:id`-style segments are read
  *     BY NAME from the single call argument (FormData.get / object property) and
@@ -163,9 +127,9 @@ export function _makeServerFunction(descriptor) {
  * named query route (`GET /q/<jsId>`), serializing `params` into the query
  * string.
  *
- * Reads are CSRF-free (NFR27 / the 2026-06-02 ADR addendum voids the old
- * `POST /__ruact/fn/:id` query mechanism and restores HTTP GET semantics):
- * no request body, no `X-CSRF-Token`. It shares `parseResponse` /
+ * Reads are CSRF-free (NFR27 / the 2026-06-02 ADR addendum restored HTTP GET
+ * semantics for queries): no request body, no `X-CSRF-Token`. It shares
+ * `parseResponse` /
  * `RuactActionError` / `redirect: "error"` with the mutation path so the
  * success + failure shapes are identical.
  *
@@ -333,8 +297,8 @@ export function useQuery(reference, params) {
 }
 
 // Story 8.2 — picks the argument the wire request should serialize from
-// `_makeRef`'s call-args, following the rules documented in the JSDoc
-// above. Exported through `__internals` for the vitest suite (AC10) — it
+// `_makeServerFunction`'s call-args, following the useActionState rules
+// documented above. Exported through `__internals` for the vitest suite (AC10) — it
 // is intentionally NOT part of the public runtime surface.
 function pickWirePayload(callArgs) {
   const isFD = (v) => typeof FormData !== "undefined" && v instanceof FormData;
@@ -414,29 +378,10 @@ export const __internals = {
   },
 };
 
-// v1 (Story 8.1) — POST to the synthetic endpoint. A thin wrapper over the
-// shared `ruactInvoke` core; the URL, verb, and error label are exactly what
-// 8.1 used so the v1 path stays byte-behavior-identical (Story 9.3 AC6).
-//
-// Re-run-3 (2026-05-15) — `encodeURIComponent(name)` so a stray `/`, `?`, or
-// `#` in a name (only reachable through direct/buggy `_makeRef` calls — the
-// gem-side route constraint and the codegen validator both refuse
-// non-identifier characters) cannot rewrite the path or hijack the
-// query/fragment of the request URL.
-function ruactPost(name, args) {
-  return ruactInvoke({
-    method: "POST",
-    url: `/__ruact/fn/${encodeURIComponent(name)}`,
-    args,
-    label: name,
-  });
-}
-
-// Story 9.3 — the shared fetch core for BOTH v1 (`_makeRef`) and v2
-// (`_makeServerFunction`). Extracted verbatim from the original `ruactPost` so
-// neither path drifts: same FormData branching, CSRF injection, `redirect:
-// "error"`, text-first parsing, and structured `RuactActionError`. The only
-// parameters are the verb + URL + the wire payload + a human label for errors.
+// Story 9.3 — the shared fetch core for the route-driven (`_makeServerFunction`)
+// mutation path: FormData branching, CSRF injection, `redirect: "error"`,
+// text-first parsing, and structured `RuactActionError`. The only parameters
+// are the verb + URL + the wire payload + a human label for errors.
 async function ruactInvoke({ method, url, args, label }) {
   const init = buildFetchInit(args, method);
   let response;
@@ -572,8 +517,7 @@ function readSegment(args, seg) {
 // Story 9.3 (AC8 / D2) — the client half of the `$redirect` contract 9.2
 // deferred. A Bucket-2 mutation that `redirect_to`s returns
 // `{ "$redirect": "<path>" }`; follow it via the router handoff and resolve
-// `null` (consistent with the 204→null contract). Only applied on the v2 path
-// — the v1 endpoint never emits `$redirect`, so `_makeRef` is unaffected (AC6).
+// `null` (consistent with the 204→null contract).
 function followRedirectIfPresent(parsed) {
   if (
     parsed &&

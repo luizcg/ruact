@@ -9,9 +9,8 @@ module Ruact
     #
     # The route table is the single source of truth (FR61): every non-GET routed
     # action on a controller that includes {Ruact::Server} is a callable server
-    # function. This module is the route-driven replacement for the v1 registry
-    # source consumed by {Ruact::ServerFunctions::Snapshot} — it reads routes,
-    # not `ruact_action` declarations.
+    # function. As of Story 9.9 this is the SOLE codegen source consumed by
+    # {Ruact::ServerFunctions::Snapshot} — it reads the drawn routes directly.
     #
     # Pure by construction: {.collect} takes the route set and two resolver
     # callables (host predicate + override lookup). The railtie passes the real
@@ -96,7 +95,7 @@ module Ruact
         # (after rename overrides) would emit two `export const` lines the same
         # name; fail loudly at boot naming BOTH origins so the dev knows exactly
         # which routes to disambiguate (via `ruact_function_name`). Mirrors the
-        # cross-registry collision raise in {Ruact::ServerFunctions::Snapshot}.
+        # merged-namespace collision raise in {Ruact::ServerFunctions}.
         def detect_collisions!(entries)
           entries.group_by { |entry| entry["js_identifier"] }.each do |js_id, group|
             next if group.size < 2

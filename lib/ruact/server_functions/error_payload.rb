@@ -6,7 +6,7 @@ require_relative "error_suggestion"
 module Ruact
   module ServerFunctions
     # Story 8.4 — Builds the structured JSON body returned by
-    # {EndpointController#__ruact_render_action_error} for any server-action
+    # {ErrorRendering#__ruact_render_action_error} for any server-action
     # exception that bubbles past a host's `rescue_from` chain.
     #
     # The function is pure (no `Rails.env`, no `Ruact.config` reads) — the

@@ -17,7 +17,6 @@ module Ruact
       strict_serialization
       suspense_timeout
       vite_dev_server
-      current_user_resolver
       dev_error_payload_enabled
       max_upload_bytes
       query_route_prefix
@@ -38,17 +37,6 @@ module Ruact
     # @!attribute [r] vite_dev_server
     #   @return [String] Base URL of the Vite dev server. Default: "http://localhost:5173".
     #
-    # @!attribute [r] current_user_resolver
-    #   @return [Proc, nil] Story 8.3 — Lambda invoked by the standalone
-    #     server-action dispatcher when a block reads `current_user`. Receives
-    #     `request.env` (Hash) and returns the authenticated user (or nil).
-    #     Memoized per-dispatch; left nil by default so apps that don't use
-    #     standalone actions never get a phantom `current_user` resolver.
-    #   @example Devise
-    #     Ruact.configure { |c| c.current_user_resolver = ->(env) { env['warden']&.user } }
-    #   @example Hand-rolled session
-    #     Ruact.configure { |c| c.current_user_resolver = ->(env) { User.find_by(id: env['rack.session'][:user_id]) } }
-    #
     # @!attribute [r] dev_error_payload_enabled
     #   @return [Boolean, nil] Story 8.4 — When true, server-action failures
     #     respond with a verbose JSON payload (action name, error class,
@@ -56,8 +44,8 @@ module Ruact
     #     When false, the wire body carries only the four baseline fields
     #     (`_ruact_server_action_error`, `action_name`, `error_class`,
     #     `message`) so React components can render their own UI without
-    #     accidental backtrace leakage. Default `nil` — the endpoint
-    #     controller resolves nil to `Rails.env.development? || Rails.env.test?`,
+    #     accidental backtrace leakage. Default `nil` — the error-rendering
+    #     layer resolves nil to `Rails.env.development? || Rails.env.test?`,
     #     keeping the Configuration trivially constructible in non-Rails specs.
     #   @example Force production-shape errors in development
     #     Ruact.configure { |c| c.dev_error_payload_enabled = false }
@@ -65,9 +53,9 @@ module Ruact
     # @!attribute [r] max_upload_bytes
     #   @return [Integer, nil] Story 8.5 — upper bound (in bytes) on the
     #     `Content-Length` of `multipart/form-data` and
-    #     `application/x-www-form-urlencoded` requests dispatched through
-    #     `POST /__ruact/fn/:name`. When the inbound `Content-Length` exceeds
-    #     this value, the endpoint controller raises
+    #     `application/x-www-form-urlencoded` requests dispatched to a
+    #     `Ruact::Server` mutation route. When the inbound `Content-Length`
+    #     exceeds this value, the server concern raises
     #     `Ruact::UploadTooLargeError` BEFORE Rack's multipart parser runs,
     #     producing a 413 with the Story 8.4 structured error body.
     #     Default: `10 * 1024 * 1024` (10 MB). Set to `nil` to disable the
@@ -135,11 +123,10 @@ module Ruact
       if template
         ATTRIBUTES.each do |attr|
           value = template.public_send(attr)
-          # Procs are immutable from the outside (Story 8.3 — current_user_resolver).
-          # Duping creates a different Proc instance, breaking identity comparisons
-          # across re-configurations. Procs are inherently re-entrant safe (no
-          # mutable internal state surface) so the dup is unnecessary; the freeze
-          # at seal! time is enough.
+          # Procs are immutable from the outside. Duping creates a different Proc
+          # instance, breaking identity comparisons across re-configurations.
+          # Procs are inherently re-entrant safe (no mutable internal state
+          # surface) so the dup is unnecessary; the freeze at seal! time is enough.
           cloned = value.is_a?(Proc) ? value : value.dup
           instance_variable_set("@#{attr}", cloned)
         end
@@ -152,7 +139,6 @@ module Ruact
         end
         @suspense_timeout     = 5.0
         @vite_dev_server      = "http://localhost:5173"
-        @current_user_resolver = nil
         @dev_error_payload_enabled = nil
         @max_upload_bytes = 10 * 1024 * 1024
         @query_route_prefix = "/q"
@@ -186,11 +172,10 @@ module Ruact
 
         # Story 8.3 review — Procs CAN be frozen (`.freeze` flips the frozen
         # flag; no operational effect on `.call`). Freezing in place preserves
-        # object identity (vital for code that compares the resolver across
-        # re-configurations) AND keeps the deep-freeze contract honest —
-        # `Ruact.config.current_user_resolver.freeze` later would otherwise
-        # silently no-op an already-frozen reference, but a caller probing
-        # `frozen?` would see the right answer.
+        # object identity (vital for code that compares a Proc-valued attribute
+        # across re-configurations) AND keeps the deep-freeze contract honest —
+        # a later `.freeze` would otherwise silently no-op an already-frozen
+        # reference, but a caller probing `frozen?` would see the right answer.
         if value.is_a?(Proc)
           value.freeze
         else

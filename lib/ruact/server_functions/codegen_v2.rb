@@ -25,8 +25,8 @@ module Ruact
 
         # Story 9.5 — the verb a v2 QUERY entry may carry. Queries are reads,
         # mounted by {Ruact::Routing#ruact_queries} as named GET routes; the
-        # 2026-06-02 ADR addendum voided the old `POST /__ruact/fn/:id` query
-        # mechanism, so a query entry is GET-only.
+        # 2026-06-02 ADR addendum restored HTTP GET semantics for queries, so a
+        # query entry is GET-only.
         QUERY_HTTP_METHODS = %w[GET].to_set.freeze
 
         class << self
@@ -87,9 +87,8 @@ module Ruact
 
           # Story 9.5 — a query export binds a `_makeQuery` accessor carrying
           # its GET descriptor `{ path, kind: "query" }`. `useQuery(<id>, …)`
-          # consumes it (the SUPERSEDED `POST /__ruact/fn/:id` mechanism is
-          # gone — reads go to `GET /q/<jsId>`). The signature accepts params
-          # only when the query method declares kwargs (FR88).
+          # consumes it — reads go to `GET /q/<jsId>`. The signature accepts
+          # params only when the query method declares kwargs (FR88).
           def render_query_export(entry)
             js_id = fetch(entry, "js_identifier")
             path = fetch(entry, "path")

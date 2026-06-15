@@ -4,33 +4,23 @@ require_relative "error_payload"
 
 module Ruact
   module ServerFunctions
-    # Story 9.1 — the shared salvage core for the Story 8.4 structured-error
-    # rendering and the Story 8.5 upload guard. Extracted from
-    # {EndpointController} so the SAME implementation serves both homes during
-    # the strangler-fig transition:
+    # Story 9.1 — the shared core for the Story 8.4 structured-error rendering
+    # and the Story 8.5 upload guard, included by {Ruact::Server} (the
+    # route-driven concern hosts include). Story 9.9 demolished the v1 endpoint
+    # that previously shared this code, so {Ruact::Server} is now the sole home.
     #
-    #   - {EndpointController} (v1 — synthetic `POST /__ruact/fn/:name`
-    #     endpoint; removed by Story 9.9)
-    #   - {Ruact::Server} (v2 — the route-driven concern hosts include)
-    #
-    # Keeping one source guarantees the 8.4/8.5 wire contract is byte-for-byte
-    # identical across both homes by construction; behavioral differences are
-    # expressed exclusively through the three private hooks below, which each
-    # home may override:
+    # Behavioral specialization is expressed through three private hooks, which
+    # the including controller may override:
     #
     #   - {#__ruact_error_action_name} — where the payload's `action_name`
-    #     comes from. Default: the controller's own `action_name` (correct for
-    #     v2 host controllers). The v1 endpoint overrides it with its
-    #     registry-symbol / `path_parameters[:name]` fallback chain.
+    #     comes from. Default: the controller's own `action_name`.
     #   - {#__ruact_render_structured_error?} — whether the rescue handler
     #     renders the structured JSON payload for this request, or re-raises so
-    #     Rails' default error handling proceeds. Default: always render
-    #     (v1 endpoint semantics — every request there is a function call).
-    #     {Ruact::Server} gates this on the function-call predicate.
-    #   - {#__ruact_upload_guard_applicable?} — whether the upload guard
-    #     applies to this request at all. Default: always (the v1 endpoint is
-    #     POST-only). {Ruact::Server} skips GET/HEAD so page actions stay
-    #     byte-for-byte untouched.
+    #     Rails' default error handling proceeds. {Ruact::Server} gates this on
+    #     its function-call predicate.
+    #   - {#__ruact_upload_guard_applicable?} — whether the upload guard applies
+    #     to this request at all. {Ruact::Server} skips GET/HEAD so page actions
+    #     stay byte-for-byte untouched.
     #
     # All methods are private on the including controller; nothing here is
     # public API surface.
@@ -98,22 +88,23 @@ module Ruact
       end
 
       # Hook — where the structured payload's `action_name` field comes from.
-      # The controller's own `action_name` is correct for v2 host controllers
+      # The controller's own `action_name` is correct for host controllers
       # (it is populated by routing before any callback runs, including the
       # prepended upload guard — no early-rejection fallback dance needed).
       def __ruact_error_action_name
         action_name
       end
 
-      # Hook — render the structured payload for this request? The v1
-      # endpoint's answer is "always" (every request hitting
-      # `POST /__ruact/fn/:name` is a function call by construction).
+      # Hook — render the structured payload for this request? The default is
+      # "always"; {Ruact::Server} overrides it to gate on its function-call
+      # predicate (page/Flight requests re-raise so Rails' default error
+      # handling proceeds untouched).
       def __ruact_render_structured_error?(_error)
         true
       end
 
-      # Hook — does the upload guard apply to this request? The v1 endpoint's
-      # answer is "always" (the route is POST-only).
+      # Hook — does the upload guard apply to this request? The default is
+      # "always"; {Ruact::Server} overrides it to skip GET/HEAD.
       def __ruact_upload_guard_applicable?
         true
       end

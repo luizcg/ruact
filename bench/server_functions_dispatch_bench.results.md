@@ -119,3 +119,32 @@ scenarios above are the load-bearing gates.
 If a future change pushes the error path above ~5 ms p50 without a clear
 reason (e.g., a backtrace-cleaning algorithmic regression, an expensive
 suggestion lookup, or a serialiser change), surface it for review.
+
+## Story 9.9 re-point (NFR21 — route-driven dispatch)
+
+The v1 synthetic endpoint + `ruact_action` DSL were demolished in Story 9.9, so
+the bench is re-pointed at REAL routes: a non-GET REST route (`POST /posts`) on a
+`include Ruact::Server` controller (Bucket-2 JSON), the multipart `<form action>`
+shape on a plain route, and a `ruact_queries`-mounted query route (`GET /q/recent`).
+
+NOTE (D2): the v2 path is a real Rails route through the full router + the
+`Ruact::Server` concern — a different code path than the deleted v1 synthetic
+endpoint, so the per-call delta vs. plain is NOT apples-to-apples with the v1
+baseline above. The honest NFR21 gate is "p50/p95 < 20 ms holds."
+
+| Metric | Value |
+| --- | --- |
+| Target | server-function dispatch p50/p95 < 20 ms per call |
+| Status | PASS |
+
+| Scenario | p50 | p95 |
+| --- | --- | --- |
+| `Ruact::Server` JSON dispatch (`POST /posts`, `Post.create!`) | ~0.79 ms | ~1.2 ms |
+| Plain controller action (same `Post.create!`) | ~0.78 ms | ~1.22 ms |
+| Per-call overhead (p50) | ~+0.01 ms | — |
+| Multipart (`<form action>` shape) | ~0.86 ms | ~1.37 ms |
+| Query (`GET /q/recent`, `ruact_queries`) | ~4.23 ms | ~5.90 ms |
+
+Local reference run (2026-06-15, rbenv Ruby 3.4.5, Rails 8.1, 1000 samples).
+The query path is heavier than the mutation path (it boots the gem's internal
+query dispatch controller + sanitizes params) but stays comfortably < 20 ms.

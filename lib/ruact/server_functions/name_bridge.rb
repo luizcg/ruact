@@ -48,30 +48,28 @@ module Ruact
       # Story 8.2 (2026-05-17 review patches R2 + R12) — names already
       # bound at the top of `app/javascript/.ruact/server-functions.ts`,
       # either by a helper re-export (`revalidate`, `useQuery`) or a runtime
-      # import (`_makeRef`, `_makeServerFunction`, `_makeQuery`). A
-      # `ruact_action :revalidate` / a query method `use_query` would emit a
+      # import (`_makeServerFunction`, `_makeQuery`). A server function /
+      # query method named `revalidate` (or `use_query`) would emit a
       # clashing `export const` / duplicate export next to the existing
       # binding and crash the generated module at load time. The rule fires
-      # at controller-class load / route-draw so the failure surfaces during
-      # boot, not at first request.
+      # at route-draw so the failure surfaces during boot, not at first request.
       # Story 9.5 added `_makeQuery` (the v2 query import) and `useQuery` (the
-      # query hook re-export) to this list.
+      # query hook re-export) to this list. Story 9.9 removed `_makeRef` (the
+      # demolished v1 runtime export).
       RESERVED_BY_RUACT = %w[
         _makeQuery
-        _makeRef
         _makeServerFunction
         revalidate
         useQuery
       ].to_set.freeze
 
       class << self
-        # @param symbol [Symbol, String] the Ruby identifier registered via
-        #   `ruact_action` / `ruact_query` (Phase 2 stories 8.1 and 9.1).
+        # @param symbol [Symbol, String] the Ruby identifier of a routed server
+        #   function (a mutation action name or a `Ruact::Query` method name).
         # @return [String] the corresponding JS identifier.
         # @raise [Ruact::ConfigurationError] when +symbol+ does not match the
         #   allowed shape, is all-underscores, or maps to a JS reserved word —
-        #   caught at controller load time so misnamed routes never reach
-        #   production.
+        #   caught at route-draw time so misnamed routes never reach production.
         # @example
         #   Ruact::ServerFunctions::NameBridge.to_js_identifier(:create_post)
         #   # => "createPost"
@@ -83,12 +81,12 @@ module Ruact
 
           unless str.match?(VALID_SYMBOL)
             raise Ruact::ConfigurationError,
-                  "ruact_action / ruact_query symbol :#{symbol} must match /^[a-z_][a-z0-9_]*$/"
+                  "ruact server-function name :#{symbol} must match /^[a-z_][a-z0-9_]*$/"
           end
 
           if str.match?(UNDERSCORE_ONLY)
             raise Ruact::ConfigurationError,
-                  "ruact_action / ruact_query symbol :#{symbol} cannot be composed " \
+                  "ruact server-function name :#{symbol} cannot be composed " \
                   "entirely of underscores (no semantic content)"
           end
 
@@ -98,16 +96,16 @@ module Ruact
 
           if RESERVED_JS_IDENTIFIERS.include?(js_id)
             raise Ruact::ConfigurationError,
-                  "ruact_action / ruact_query symbol :#{symbol} maps to JS reserved " \
-                  "word \"#{js_id}\" — pick a different Ruby symbol (e.g. :#{symbol}_action)"
+                  "ruact server-function name :#{symbol} maps to JS reserved " \
+                  "word \"#{js_id}\" — pick a different name (e.g. :#{symbol}_fn)"
           end
 
           if RESERVED_BY_RUACT.include?(js_id)
             raise Ruact::ConfigurationError,
-                  "ruact_action / ruact_query symbol :#{symbol} maps to \"#{js_id}\", " \
+                  "ruact server-function name :#{symbol} maps to \"#{js_id}\", " \
                   "which is already exported by the ruact runtime from " \
                   "`@/.ruact/server-functions` and would emit a duplicate export. " \
-                  "Pick a different Ruby symbol (e.g. :#{symbol}_action)."
+                  "Pick a different name (e.g. :#{symbol}_fn)."
           end
 
           js_id
