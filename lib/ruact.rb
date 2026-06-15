@@ -13,7 +13,6 @@ require_relative "ruact/render_pipeline"
 require_relative "ruact/view_helper"
 require_relative "ruact/erb_preprocessor_hook"
 require_relative "ruact/server_functions"
-require_relative "ruact/server_action"
 require_relative "ruact/query"
 # Railtie loads ruact/controller when inside a Rails app
 require_relative "ruact/railtie" if defined?(Rails)
@@ -21,24 +20,6 @@ require_relative "ruact/railtie" if defined?(Rails)
 module Ruact
   class << self
     attr_accessor :manifest, :streaming_mode
-
-    # Registry of `ruact_action` declarations. Populated by Story 8.1's
-    # controller macro; consumed by {Ruact::ServerFunctions::Snapshot} when
-    # writing the Rails↔Vite bridge JSON.
-    #
-    # @return [Ruact::ServerFunctions::Registry] lazy-initialized singleton.
-    def action_registry
-      @action_registry ||= ServerFunctions::Registry.new
-    end
-
-    # Registry of `ruact_query` declarations. Populated by Story 9.1's
-    # controller macro; consumed by {Ruact::ServerFunctions::Snapshot} when
-    # writing the Rails↔Vite bridge JSON.
-    #
-    # @return [Ruact::ServerFunctions::Registry] lazy-initialized singleton.
-    def query_registry
-      @query_registry ||= ServerFunctions::Registry.new
-    end
 
     # Story 8.4 — Absolute path to the gem's `lib/` root. Used by
     # {Ruact::ServerFunctions::BacktraceCleaner} to classify backtrace frames as

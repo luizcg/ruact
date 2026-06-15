@@ -267,45 +267,11 @@ module Ruact
         expect(config.strict_serialization).to be(false)
         expect(config.suspense_timeout).to eq(5.0)
         expect(config.vite_dev_server).to eq("http://localhost:5173")
-        expect(config.current_user_resolver).to be_nil
       end
 
       it "rejects post-boot mutation against the default-frozen instance (AC5)" do
         expect { Ruact.config.suspense_timeout = 10.0 }
           .to raise_error(Ruact::ConfigurationError)
-      end
-    end
-
-    describe "Story 8.3 — current_user_resolver attribute", :story_8_3 do
-      it "defaults to nil so apps without standalone actions never get a phantom resolver" do
-        expect(Ruact.config.current_user_resolver).to be_nil
-      end
-
-      it "accepts a lambda inside Ruact.configure and exposes it after publication" do
-        resolver = ->(env) { env["warden"]&.user }
-        Ruact.configure { |c| c.current_user_resolver = resolver }
-        expect(Ruact.config.current_user_resolver).to be(resolver)
-      end
-
-      it "is sealed by the standard freeze contract — direct mutation raises ConfigurationError" do
-        Ruact.configure { |c| c.current_user_resolver = ->(_env) {} }
-        expect { Ruact.config.current_user_resolver = ->(_env) { "other" } }
-          .to raise_error(Ruact::ConfigurationError, /Ruact::Configuration#current_user_resolver/)
-      end
-
-      it "is carried across atomic re-configuration (template clone)" do
-        first = ->(_env) { :first }
-        Ruact.configure { |c| c.current_user_resolver = first }
-        Ruact.configure { |c| c.suspense_timeout = 6.0 } # untouched
-        expect(Ruact.config.current_user_resolver).to be(first)
-      end
-
-      it "deep-freezes the resolver lambda at publication time (Story 8.3 review R6) — " \
-         "identity is preserved AND `frozen?` reports true" do
-        resolver = ->(_env) {}
-        Ruact.configure { |c| c.current_user_resolver = resolver }
-        expect(Ruact.config.current_user_resolver).to be(resolver)
-        expect(Ruact.config.current_user_resolver).to be_frozen
       end
     end
 

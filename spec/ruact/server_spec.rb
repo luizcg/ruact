@@ -10,8 +10,8 @@
 #     host until then).
 #   - AC2 / D3: the `__ruact_function_call?` predicate matrix — the single
 #     named discrimination point Story 9.2 reuses. Keyed on the raw `Accept`
-#     header containing `application/json` (what the 8.1 runtime sends on
-#     every `_makeRef` fetch); deliberately NOT `request.format`, which is
+#     header containing `application/json` (what the runtime sends on
+#     every server-function fetch); deliberately NOT `request.format`, which is
 #     influenced by path extensions and `params[:format]`.
 #
 # Request-cycle behavior (error chain, upload guard) is pinned by
@@ -59,11 +59,6 @@ RSpec.describe Ruact::Server, :story_9_1 do
       added = ServerConcernUnitSupport::ConcernController.public_instance_methods -
               ServerConcernUnitSupport::PlainController.public_instance_methods
       expect(added).to eq([])
-    end
-
-    it "registers nothing in the v1 registries (codegen exposure is Story 9.3, not 9.1)" do
-      expect(Ruact.action_registry.entries).to be_empty
-      expect(Ruact.query_registry.entries).to be_empty
     end
 
     it "keeps INHERITED host rescue_from handlers more recent than its own (review patch)",

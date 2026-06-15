@@ -39,7 +39,7 @@ RSpec.describe "Ruact::Server.ruact_function_name", :story_9_3 do
     end.to raise_error(Ruact::ConfigurationError, /reserved/)
   end
 
-  it "rejects a runtime-bound name (revalidate / _makeRef)" do
+  it "rejects a runtime-bound name (revalidate)" do
     expect do
       host.ruact_function_name(:create, as: "revalidate")
     end.to raise_error(Ruact::ConfigurationError, /reserved|ruact runtime/)

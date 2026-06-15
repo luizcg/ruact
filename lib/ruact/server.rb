@@ -59,10 +59,9 @@ module Ruact
   #   Contract simplification: the concern assumes the host includes it after
   #   `protect_from_forgery`; no runtime callback-order verifier runs here.
   #
-  # Both bodies live in {Ruact::ServerFunctions::ErrorRendering}, shared with
-  # the v1 {Ruact::ServerFunctions::EndpointController} during the
-  # strangler-fig transition so the wire contract is identical by
-  # construction. Dual-bucket response negotiation (ivar serialization,
+  # Both bodies live in {Ruact::ServerFunctions::ErrorRendering} (Story 9.9 —
+  # this concern is now the sole home; the v1 endpoint that previously shared it
+  # was demolished). Dual-bucket response negotiation (ivar serialization,
   # `$redirect`, 204, `Vary: Accept`) is Story 9.2; this concern only
   # contributes the discrimination predicate 9.2 will reuse.
   module Server

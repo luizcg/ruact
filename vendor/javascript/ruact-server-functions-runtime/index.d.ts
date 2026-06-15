@@ -1,15 +1,11 @@
-// Story 8.1 — TypeScript declarations for the real server-functions runtime.
+// TypeScript declarations for the route-driven server-functions runtime.
 // Mirrors the JS exports in `index.js` so the generated module's
-// `import { _makeRef } from "ruact/server-functions-runtime"` resolves under
-// `tsc --noEmit` (AC10's import guarantee).
+// `import { _makeServerFunction } from "ruact/server-functions-runtime"`
+// resolves under `tsc --noEmit`. Story 9.9 demolished the v1 `_makeRef` accessor.
 //
-// The generated module's per-export signature is
-// `(args?: Record<string, unknown>) => Promise<unknown>` per the 8.0a
-// codegen contract; the runtime accepts a wider `FormData` argument too
-// (Story 8.2 owns the codegen signature widening if it picks the FormData
-// path). Devs writing call sites against the 8.0a-emitted module continue
-// to see the conservative Record<string, unknown> signature; the FormData
-// branch only fires through Story 8.2's `<form action={fn}>` wiring.
+// The runtime accepts a wider `FormData` argument as well as the conservative
+// `Record<string, unknown>` shape; the FormData branch fires through the
+// `<form action={fn}>` wiring.
 
 /**
  * Re-run-3 (2026-05-15), refined Re-run-4 (2026-05-15) — local alias
@@ -36,46 +32,25 @@ type RuactResponse = typeof globalThis extends { Response: new (...args: never[]
   : unknown;
 
 /**
- * Returns a callable accessor for a server function registered with the
- * given Ruby symbol name. The accessor, when invoked, POSTs the args to
- * `/__ruact/fn/${name}`.
- *
- * Story 8.2 (refined 2026-05-17 per review patch R1) — the return type
- * is an intersection of FOUR call signatures so the same exported
- * reference is usable from every call site:
- *
- *   1. `()` / `(args)` / `(prevState, formData)` — direct callers and
- *      `useActionState`'s two-arg invocation; returns `Promise<unknown>`.
- *   2. `(formData: FormData)` — assignable to React 19's `<form action>`
- *      prop, which is typed as `(formData: FormData) => void | Promise<void>`.
- *      Promise generics are invariant in TS, so `Promise<unknown>` is
- *      NOT assignable to `Promise<void>` even via the void-discard rule;
- *      the intersection lets `<form action={createPost}>` typecheck
- *      DIRECTLY against the emitted module without a call-site cast.
- *
- * Runtime behavior is unchanged — `_makeRef` always resolves with the
- * JSON-decoded value. The `Promise<void>` overload is a TYPE-ONLY
- * surface: when React invokes the function from a `<form action>` prop,
- * the return value is discarded by React anyway.
- */
-export function _makeRef(
-  name: string,
-): ((
-  arg1?: Record<string, unknown> | RuactFormData,
-  arg2?: RuactFormData | Record<string, unknown>,
-) => Promise<unknown>) &
-  ((formData: RuactFormData) => Promise<void>);
-
-/**
- * Story 9.3 — the route-driven (v2) accessor. The codegen emits
+ * Story 9.3 — the route-driven accessor. The codegen emits
  * `_makeServerFunction({ method, path, segments })` for every non-GET routed
  * action on a `Ruact::Server` controller. The returned callable targets the
  * REAL Rails route + verb (e.g. `POST /posts`, `PUT /posts/:id`), interpolating
  * dynamic path segments by name from the single call argument, and follows a
  * Bucket-2 `{ "$redirect": "<path>" }` response client-side.
  *
- * Shares the same intersection call-signature contract as {@link _makeRef} so
- * `<form action={createPost}>` and `useActionState` keep type-checking.
+ * Story 8.2 (refined 2026-05-17 per review patch R1) — the return type is an
+ * intersection of call signatures so the same exported reference is usable from
+ * every call site:
+ *
+ *   1. `()` / `(args)` / `(prevState, formData)` — direct callers and
+ *      `useActionState`'s two-arg invocation; returns `Promise<unknown>`.
+ *   2. `(formData: FormData)` — assignable to React 19's `<form action>`
+ *      prop, which is typed as `(formData: FormData) => void | Promise<void>`.
+ *      Promise generics are invariant in TS, so `Promise<unknown>` is NOT
+ *      assignable to `Promise<void>` even via the void-discard rule; the
+ *      intersection lets `<form action={createPost}>` typecheck DIRECTLY
+ *      against the emitted module without a call-site cast.
  */
 export function _makeServerFunction(descriptor: {
   method: string;

@@ -2,9 +2,9 @@
 
 # Story 9.1 — request-cycle spec for the Story 8.4 structured-error chain
 # RE-ANCHORED on the `Ruact::Server` concern (its final, v2 home). Replaces
-# `server_functions/endpoint_controller_rescue_spec.rb` (removed in the same
-# commit — AC5: no orphan salvage, no double coverage). Pins, against REAL
-# host-controller routes (no `/__ruact/fn/` anywhere):
+# the removed v1 endpoint rescue spec (AC5: no orphan salvage, no double
+# coverage). Pins, against REAL host-controller routes (no synthetic gem
+# endpoint anywhere):
 #
 #   - structured payload on function-call requests: discriminator, baseline
 #     fields, dev extras, validation_errors, suggestion (inventory A1, A2,
@@ -56,7 +56,7 @@ I18n.backend.load_translations
 require_relative "controller_request_spec" unless defined?(ControllerRequestSpecSupport)
 
 module ServerRescueSpecSupport
-  # The exact wire shape the 8.1 runtime sends on every `_makeRef` fetch:
+  # The exact wire shape the runtime sends on every server-function fetch:
   # JSON body + `Accept: application/json` — the Bucket-2 / function-call
   # request shape the concern's predicate keys on.
   FUNCTION_CALL_HEADERS = {
@@ -177,8 +177,8 @@ module ServerRescueSpecSupport
   # Host with real CSRF enforcement — the concern's explicit
   # InvalidAuthenticityToken registration must render the structured 403
   # for function-call requests (inventory A13). Forgery is flipped on
-  # per-example via `allow_forgery_protection` (class-level), mirroring the
-  # v1 spec pattern — but on the HOST controller now, not EndpointController.
+  # per-example via `allow_forgery_protection` (class-level), on the host
+  # controller that includes Ruact::Server.
   class ForgeryServerController < ActionController::Base
     include Ruact::Server
 

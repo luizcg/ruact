@@ -49,28 +49,26 @@ const RESERVED_JS_IDENTIFIERS = new Set([
 ]);
 
 // Story 8.2 R12 (2026-05-17) — names ALREADY bound at module top by the
-// codegen itself: the runtime imports (`_makeRef`, `_makeServerFunction`,
-// `_makeQuery`) and the re-exports (`revalidate`, `useQuery`). A snapshot that
-// declared any as a `js_identifier` would emit a duplicate binding and crash
-// at module-load time. Mirrors Ruby `NameBridge::RESERVED_BY_RUACT`.
-// Story 9.5 added `_makeQuery` + `useQuery`.
+// codegen itself: the runtime imports (`_makeServerFunction`, `_makeQuery`) and
+// the re-exports (`revalidate`, `useQuery`). A snapshot that declared any as a
+// `js_identifier` would emit a duplicate binding and crash at module-load time.
+// Mirrors Ruby `NameBridge::RESERVED_BY_RUACT`. Story 9.5 added `_makeQuery` +
+// `useQuery`; Story 9.9 removed the demolished v1 `_makeRef`.
 const RESERVED_BY_RUACT = new Set([
   "_makeQuery",
-  "_makeRef",
   "_makeServerFunction",
   "revalidate",
   "useQuery",
 ]);
 
 // Story 9.3 — the route-driven snapshot schema version + its verb allowlist.
-// A version-2 snapshot renders `_makeServerFunction({...})` calls; `render`
-// dispatches on `version` so the v1 path stays byte-for-byte untouched.
-// Mirrors Ruby `Codegen::VERSION_V2` / `V2_HTTP_METHODS`.
+// A version-2 snapshot renders `_makeServerFunction({...})` calls; as of Story
+// 9.9 it is the only supported version. Mirrors Ruby `Codegen::VERSION_V2` /
+// `V2_HTTP_METHODS`.
 export const VERSION_V2 = 2;
 const V2_HTTP_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-// Story 9.5 — queries are GET-only (the `POST /__ruact/fn/:id` query mechanism
-// is voided by the 2026-06-02 ADR addendum). Mirrors Ruby
-// `Codegen::V2::QUERY_HTTP_METHODS`.
+// Story 9.5 — queries are GET-only (the 2026-06-02 ADR addendum restored HTTP
+// GET semantics for queries). Mirrors Ruby `Codegen::V2::QUERY_HTTP_METHODS`.
 const V2_QUERY_HTTP_METHODS = new Set(["GET"]);
 
 /**
@@ -148,90 +146,21 @@ function validateMetadata(snapshot) {
   }
 }
 
-function validateSnapshot(snapshot) {
-  validateMetadata(snapshot);
-  const { functions } = snapshot;
-
-  if (!Array.isArray(functions)) {
-    throw new Error(
-      `ruact server-function codegen: snapshot.functions must be an array, got ${typeof functions}`,
-    );
-  }
-
-  const seen = new Set();
-  for (const fn of functions) {
-    if (!fn || typeof fn !== "object" || Array.isArray(fn)) {
-      throw new Error(
-        `ruact server-function codegen: snapshot.functions entry is not an object: ${JSON.stringify(fn)}`,
-      );
-    }
-    if (typeof fn.ruby_symbol !== "string" || fn.ruby_symbol.length === 0) {
-      throw new Error(
-        "ruact server-function codegen: snapshot.functions entry has missing or " +
-          `empty ruby_symbol (got ${JSON.stringify(fn.ruby_symbol)}); the bridge ` +
-          "JSON is corrupted — regenerate via `bin/rails ruact:server_functions:generate`.",
-      );
-    }
-    if (fn.kind !== "action" && fn.kind !== "query") {
-      throw new Error(
-        "ruact server-function codegen: snapshot.functions entry has invalid kind " +
-          `${JSON.stringify(fn.kind)} (must be "action" or "query") for ` +
-          `ruby_symbol=${JSON.stringify(fn.ruby_symbol)}`,
-      );
-    }
-    if (typeof fn.js_identifier !== "string" || !VALID_JS_IDENTIFIER.test(fn.js_identifier)) {
-      throw new Error(
-        "ruact server-function codegen rejected a snapshot entry: " +
-          `ruby_symbol=${JSON.stringify(fn.ruby_symbol)} ` +
-          `js_identifier=${JSON.stringify(fn.js_identifier)} is not a valid JS identifier ` +
-          "(must match /^[A-Za-z_$][A-Za-z0-9_$]*$/). The snapshot JSON is " +
-          "corrupted or was hand-edited — regenerate via " +
-          "`bin/rails ruact:server_functions:generate`.",
-      );
-    }
-    if (RESERVED_JS_IDENTIFIERS.has(fn.js_identifier)) {
-      throw new Error(
-        `ruact server-function codegen: js_identifier "${fn.js_identifier}" is a reserved ` +
-          `JS word — ruby_symbol=${JSON.stringify(fn.ruby_symbol)} would emit an invalid ` +
-          "TS module. Ruby NameBridge should have rejected this; regenerate via " +
-          "`bin/rails ruact:server_functions:generate`.",
-      );
-    }
-    if (RESERVED_BY_RUACT.has(fn.js_identifier)) {
-      throw new Error(
-        `ruact server-function codegen: js_identifier "${fn.js_identifier}" is reserved by ` +
-          "the ruact runtime/codegen surface (would clash with the module's `revalidate` " +
-          `re-export or \`_makeRef\` import) — ruby_symbol=${JSON.stringify(fn.ruby_symbol)} ` +
-          "cannot be exported. NameBridge should have rejected this; regenerate via " +
-          "`bin/rails ruact:server_functions:generate`.",
-      );
-    }
-    if (seen.has(fn.js_identifier)) {
-      throw new Error(
-        `ruact server-function codegen: duplicate js_identifier "${fn.js_identifier}" in ` +
-          "snapshot — two entries would emit conflicting `export const` declarations. " +
-          "The snapshot JSON is corrupted or was hand-edited — regenerate via " +
-          "`bin/rails ruact:server_functions:generate`.",
-      );
-    }
-    seen.add(fn.js_identifier);
-  }
-}
-
 /**
- * Renders the snapshot Hash into the TS module text. MUST stay byte-identical
- * to {Ruact::ServerFunctions::Codegen.render}.
+ * Renders the route-driven (version-2) snapshot Hash into the TS module text.
+ * MUST stay byte-identical to {Ruact::ServerFunctions::Codegen.render}. Story
+ * 9.9 demolished the v1 (registry / `_makeRef`) render path; only version 2 is
+ * supported.
  *
  * @param {{ version: number, generated_at: string, functions: Array<{
- *   ruby_symbol: string, js_identifier: string, kind: string, controller?: string|null
+ *   js_identifier: string, kind: string, http_method?: string, path?: string,
+ *   segments?: string[]
  * }> }} snapshot
  * @returns {string}
  */
 export function render(snapshot) {
-  // Story 9.3 — dispatch on snapshot version. A version-2 (route-driven)
-  // snapshot renders `_makeServerFunction({...})` calls; the v1 path below is
-  // untouched. The version peek is shape-guarded so a corrupt non-object
-  // snapshot still falls through to validateSnapshot's loud failure.
+  // The version peek is shape-guarded so a corrupt non-object snapshot still
+  // falls through to the loud validation failure below.
   if (
     snapshot &&
     typeof snapshot === "object" &&
@@ -241,34 +170,15 @@ export function render(snapshot) {
     return renderV2(snapshot);
   }
 
-  validateSnapshot(snapshot);
-  const { version, generated_at, functions } = snapshot;
-  let out = "";
-  out += "// AUTO-GENERATED by vite-plugin-ruact (Story 8.0a). DO NOT EDIT.\n";
-  out += `// Source: tmp/cache/ruact/server-functions.json (version ${version})\n`;
-  out += `// Generated at: ${generated_at}\n`;
-  out += `import { _makeRef } from "${RUNTIME_IMPORT_SPECIFIER}";\n`;
-
-  if (functions.length === 0) {
-    out += "\n// (no server functions registered yet — Stories 8.1 / 9.1 populate)\n";
-    // `noUnusedLocals` would otherwise flag the `_makeRef` import. The `void`
-    // discard pattern keeps the import alive at zero runtime cost; once an
-    // action / query is registered the export below references `_makeRef`
-    // directly and this line is omitted.
-    out += "void _makeRef;\n";
-  } else {
-    out += "\n";
-    for (const fn of functions) {
-      out += renderExport(fn);
-    }
-  }
-  // Story 8.2 — `revalidate()` re-export. Emitted in both branches
-  // (empty + populated registry) because the helper is unconditional;
-  // see codegen.rb's REVALIDATE_REEXPORT and the 2026-05-16 Decision-log
-  // entry for the rationale.
-  out += "\n";
-  out += `export { revalidate } from "${RUNTIME_IMPORT_SPECIFIER}";\n`;
-  return out;
+  // Any non-v2 snapshot is corrupt as of Story 9.9. validateMetadata still
+  // produces a precise message for the common shape errors; otherwise reject
+  // the unsupported version explicitly.
+  validateMetadata(snapshot);
+  throw new Error(
+    `ruact server-function codegen: unsupported snapshot version ${JSON.stringify(snapshot.version)} ` +
+      `(only the route-driven version ${VERSION_V2} is supported as of Story 9.9); the bridge ` +
+      "JSON is corrupted — regenerate via `bin/rails ruact:server_functions:generate`.",
+  );
 }
 
 /**
@@ -444,28 +354,6 @@ function renderQueryExportV2(fn) {
   return (
     `export const ${fn.js_identifier}: ${signature} =\n` +
     `  _makeQuery(${descriptor});\n`
-  );
-}
-
-function renderExport(fn) {
-  // Story 8.2 (refined 2026-05-17 per review patch R1) — action signature
-  // is an intersection of two call signatures so `<form action={fn}>`
-  // typechecks DIRECTLY against React 19's `(formData: FormData) =>
-  // void | Promise<void>` while direct callers keep the `Promise<unknown>`
-  // return surface for `await createPost(...)`. Mirrors
-  // `Ruact::ServerFunctions::Codegen::ACTION_SIGNATURE` byte-for-byte.
-  const signature =
-    fn.kind === "query"
-      ? "() => Promise<unknown>"
-      : "((args?: FormData | Record<string, unknown>) => Promise<unknown>) & ((formData: FormData) => Promise<void>)";
-  // JSON.stringify produces a JSON string literal — escaping backslashes,
-  // double quotes, and control characters — so an arbitrary `ruby_symbol`
-  // (from a corrupted or hand-edited snapshot) cannot break out of the
-  // `_makeRef("<here>")` argument.
-  const rubySymLiteral = JSON.stringify(String(fn.ruby_symbol));
-  return (
-    `export const ${fn.js_identifier}: ${signature} =\n` +
-    `  _makeRef(${rubySymLiteral});\n`
   );
 }
 
