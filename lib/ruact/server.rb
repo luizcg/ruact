@@ -158,7 +158,7 @@ module Ruact
           raise Ruact::ConfigurationError,
                 "ruact_function_name :#{action}, as: #{as.inspect} — " \
                 "\"#{js}\" is a reserved JS word or is already bound by the ruact runtime " \
-                "(`_makeRef` / `_makeServerFunction` / `revalidate`); pick another name"
+                "(`_makeServerFunction` / `_makeQuery` / `revalidate` / `useQuery`); pick another name"
         end
 
         __ruact_function_name_overrides[action.to_s] = js

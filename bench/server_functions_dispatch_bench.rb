@@ -84,6 +84,14 @@ class PostsController < ActionController::Base
     @post = Post.create!(title: payload["title"], body: payload["body"])
     render(json: { id: @post.id, title: @post.title })
   end
+
+  # Multipart (`<form action={fn}>`) dispatch on the SAME Ruact::Server host:
+  # the request still flows through the concern (upload guard + error gate +
+  # Accept negotiation) — reads Rack-parsed multipart params.
+  def create_multipart
+    @post = Post.create!(title: params[:title], body: params[:body])
+    render(json: { id: @post.id, title: @post.title })
+  end
 end
 
 # Plain baseline — same Post.create! work, no concern. `create_multipart` reads
@@ -110,6 +118,7 @@ end
 
 BenchApp.routes.append do
   post "/posts", to: "posts#create"
+  post "/posts_mp", to: "posts#create_multipart"
   post "/plain", to: "plain#create"
   post "/plain_mp", to: "plain#create_multipart"
   ruact_queries CatalogQuery
@@ -226,7 +235,7 @@ multipart_counter = 0
 multipart_post = lambda do
   multipart_counter += 1
   data, boundary = multipart_body("MP Post #{multipart_counter}", "multipart body")
-  post("/plain_mp", data, multipart_headers.call(boundary))
+  post("/posts_mp", data, multipart_headers.call(boundary))
 end
 
 multipart_post.call
@@ -238,8 +247,8 @@ mp_p95 = percentile(multipart_samples, 95) * 1000
 mp_total_ms = (multipart_samples.sum * 1000).round(1)
 
 puts ""
-puts "#{SAMPLES} multipart requests (`<form action>` shape):"
-puts "  multipart dispatch:       total=#{mp_total_ms}ms  p50=#{mp_p50.round(3)}ms  p95=#{mp_p95.round(3)}ms"
+puts "#{SAMPLES} multipart requests (`<form action>` shape) — Ruact::Server route /posts_mp:"
+puts "  Ruact::Server multipart dispatch:  total=#{mp_total_ms}ms  p50=#{mp_p50.round(3)}ms  p95=#{mp_p95.round(3)}ms"
 puts ""
 puts "NFR21 target: multipart p50/p95 < 20 ms per call " \
      "(p50 #{mp_p50.round(3)}ms #{mp_p50 < 20 ? 'PASS' : 'FAIL'}, " \
