@@ -1792,9 +1792,9 @@ nothing.
 1. **The invariant (the rule).** ruact **may emit** Flight (`text/x-component`)
    from the Ruby server, but must **never deserialize externally-supplied Flight
    into live Ruby objects.** No inbound `*Deserializer`, no `parse_flight` /
-   `from_flight` / `deserialize_flight` reading a request body, no Ruby call to a
-   React Flight reader (`createFromNodeStream` / `createFromReadableStream` /
-   `createFromFetch`). Reads stay GET-with-primitives (FR88); writes stay
+   `from_flight` / `deserialize_flight` / `decode_flight` reading a request body,
+   no Ruby call to a React Flight reader (`createFromNodeStream` /
+   `createFromReadableStream` / `createFromFetch`). Reads stay GET-with-primitives (FR88); writes stay
    form/JSON over the host's own CSRF — neither path parses Flight inbound.
 
 2. **Out of scope — the client `createFromFlightPayload`.** The generated
@@ -1816,7 +1816,8 @@ nothing.
    job is to *stay at zero* (consistent with the single-dependency / "make invalid
    states unconstructible, simply" discipline). The signal literals are assembled
    from fragments via `Array#join` and `doctor.rb` is excluded from its own scan
-   (mirrors the Story 5.1 F4 self-reference lesson).
+   by exact file path — not basename, so a differently-located future namesake is
+   still scanned (mirrors the Story 5.1 F4 self-reference lesson).
 
 4. **Escape hatch — `# ruact:allow-flight-deserialization <reason>`.** A line
    carrying that annotation is treated as guarded, so a deliberate, reviewed
@@ -1825,7 +1826,9 @@ nothing.
 
 5. **Middleware warn (non-failing).** `check_flight_middleware` introduces a new
    `:warn` doctor status (rendered `⚠`; a `:warn` does **not** flip the run to
-   failure — the pass computation moved from `status == :pass` to `status != :fail`).
+   failure — the pass computation moved from `status == :pass` to an allowlist,
+   `SUCCESS_STATUSES = %i[pass warn]`, so a `:warn` passes while any unexpected
+   status fails loudly rather than being silently treated as a pass).
    It warns when a response-transforming middleware (`Rack::Deflater` + a small
    curated list) is mounted, since recompressing/mutating a streamed
    `text/x-component` body breaks the Flight wire contract / streaming
