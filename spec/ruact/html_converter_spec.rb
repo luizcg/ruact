@@ -53,6 +53,13 @@ module Ruact
         html = %(<ruact-suspense data-ruact-fallback="loading" data-ruact-delay=" 2.5 "><p>content</p></ruact-suspense>)
         expect(convert.call(html).delay).to eq(2.5)
       end
+
+      it "falls back to the default delay when the value overflows to a non-finite Float" do
+        # Float("1e309") => Infinity (Float() does not raise on overflow); a
+        # non-finite delay must not reach the renderer's sleep (RangeError).
+        html = %(<ruact-suspense data-ruact-fallback="loading" data-ruact-delay="1e309"><p>content</p></ruact-suspense>)
+        expect(convert.call(html).delay).to eq(default_delay)
+      end
     end
 
     describe "single DOM element" do

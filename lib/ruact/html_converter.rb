@@ -203,10 +203,17 @@ module Ruact
 
       # Optional `delay="2.5"` from the ERB → SuspenseElement#delay (the
       # server-side wait, in seconds, before the deferred chunk streams). When
-      # absent or unparseable, SuspenseElement falls back to its default.
+      # absent, blank, unparseable, or non-finite, SuspenseElement falls back to
+      # its default.
       delay_attr = node["data-ruact-delay"]
       delay = begin
-        delay_attr && !delay_attr.to_s.strip.empty? ? Float(delay_attr) : nil
+        if delay_attr && !delay_attr.to_s.strip.empty?
+          # A string overflow like "1e309" parses to Infinity (Float() does not
+          # raise) — guard finiteness so a non-finite delay can't reach the
+          # renderer's sleep(delay) and raise RangeError.
+          parsed = Float(delay_attr)
+          parsed.finite? ? parsed : nil
+        end
       rescue ArgumentError, TypeError
         nil
       end
