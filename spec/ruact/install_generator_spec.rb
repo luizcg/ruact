@@ -301,5 +301,76 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(content).to include("app/javascript/.ruact/server-functions.ts")
       end
     end
+
+    # REGRESSION (Sprint Change Proposal 2026-06-16 §4.5): a fresh `rails new`
+    # crashed `rails generate ruact:install` on Rails 8.1 / Thor because the
+    # generator called `destination_root.join(...)` — Thor returns
+    # `destination_root` as a String (`File.expand_path`), which has no
+    # path-style `#join`, so the installer raised `NoMethodError` before writing
+    # a single file. The fix wraps every site in `Pathname(destination_root)`.
+    #
+    # The "generator action helpers" tests above reimplement the file logic with
+    # `File.join`, so they never run Thor's path handling and masked the bug.
+    # These tests invoke the REAL generator against a String destination_root, so
+    # a revert of the Pathname fix fails loudly here.
+    describe "real generator invocation against a String destination_root" do
+      require "stringio"
+      require "generators/ruact/install/install_generator"
+
+      let(:app_root) { Dir.mktmpdir("ruact_install_real") }
+
+      after { FileUtils.rm_rf(app_root) }
+
+      def build_generator(root)
+        Ruact::Generators::InstallGenerator.new([], {}, destination_root: root)
+      end
+
+      def silently
+        original = $stdout
+        $stdout = StringIO.new
+        yield
+      ensure
+        $stdout = original
+      end
+
+      before do
+        FileUtils.mkdir_p(File.join(app_root, "app/controllers"))
+        File.write(File.join(app_root, "app/controllers/application_controller.rb"),
+                   "class ApplicationController < ActionController::Base\nend\n")
+        FileUtils.mkdir_p(File.join(app_root, "app/views/layouts"))
+        File.write(File.join(app_root, "app/views/layouts/application.html.erb"),
+                   "<!DOCTYPE html>\n<html>\n  <body>\n    <%= yield %>\n  </body>\n</html>\n")
+        File.write(File.join(app_root, ".gitignore"), "/log/*\n")
+      end
+
+      it "hands the generator a String destination_root (the exact crashing condition)" do
+        expect(build_generator(app_root).destination_root).to be_a(String)
+      end
+
+      it "runs every path-touching action without raising and writes the files", :aggregate_failures do
+        gen = build_generator(app_root)
+
+        silently do
+          expect do
+            gen.inject_controller_concern
+            gen.inject_layout_shell
+            gen.create_components_directory
+            gen.create_server_functions_directory
+            gen.append_gitignore_entries
+            gen.create_vite_config
+          end.not_to raise_error
+        end
+
+        expect(File.read(File.join(app_root, "app/controllers/application_controller.rb")))
+          .to include("include Ruact::Controller")
+        expect(File.read(File.join(app_root, "app/views/layouts/application.html.erb")))
+          .to include('<div id="root"></div>')
+        expect(File).to exist(File.join(app_root, "app/javascript/components/.keep"))
+        expect(File).to exist(File.join(app_root, "app/javascript/.ruact/.gitkeep"))
+        expect(File.read(File.join(app_root, ".gitignore")))
+          .to include("app/javascript/.ruact/server-functions.ts")
+        expect(File).to exist(File.join(app_root, "vite.config.js"))
+      end
+    end
   end
 end

@@ -85,5 +85,30 @@ module Ruact
         expect(result).to match(/__ruact_component__\("LikeButton"/)
       end
     end
+
+    # Bugfix (Sprint Change Proposal 2026-06-16 §4.5): `<Suspense delay="2.5">`
+    # used to be ignored — the preprocessor never carried the attribute, so the
+    # SuspenseElement always took its default delay. It now forwards an optional
+    # `delay` as `data-ruact-delay` on the emitted <ruact-suspense> element.
+    describe "Suspense delay attribute" do
+      it "forwards delay to the ruact-suspense element as data-ruact-delay" do
+        result = transform.call(%(<Suspense fallback="loading" delay="2.5"><Spinner /></Suspense>))
+        expect(result).to include(%(data-ruact-delay="2.5"))
+        expect(result).to include(%(data-ruact-fallback="loading"))
+        expect(result).to include("</ruact-suspense>")
+      end
+
+      it "omits data-ruact-delay when no delay attribute is present" do
+        result = transform.call(%(<Suspense fallback="loading"><Spinner /></Suspense>))
+        expect(result).to include(%(data-ruact-fallback="loading"))
+        expect(result).not_to include("data-ruact-delay")
+      end
+
+      it "extracts delay regardless of attribute order" do
+        result = transform.call(%(<Suspense delay="0.75" fallback="wait"><X /></Suspense>))
+        expect(result).to include(%(data-ruact-delay="0.75"))
+        expect(result).to include(%(data-ruact-fallback="wait"))
+      end
+    end
   end
 end
