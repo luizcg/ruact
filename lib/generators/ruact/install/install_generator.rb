@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "pathname"
 require "rails/generators"
 require "ruact"
 
@@ -27,9 +28,9 @@ module Ruact
 
       def inject_controller_concern
         controller_file = "app/controllers/application_controller.rb"
-        return unless File.exist?(destination_root.join(controller_file))
+        return unless File.exist?(Pathname(destination_root).join(controller_file))
 
-        content = File.read(destination_root.join(controller_file))
+        content = File.read(Pathname(destination_root).join(controller_file))
         if content.include?("Ruact::Controller")
           say_status "skip", "Ruact::Controller already included in ApplicationController", :yellow
           return
@@ -42,9 +43,9 @@ module Ruact
 
       def inject_layout_shell
         layout_file = "app/views/layouts/application.html.erb"
-        return unless File.exist?(destination_root.join(layout_file))
+        return unless File.exist?(Pathname(destination_root).join(layout_file))
 
-        content = File.read(destination_root.join(layout_file))
+        content = File.read(Pathname(destination_root).join(layout_file))
         if content.include?("ruact: root")
           say_status "skip", "Rails RSC root already present in layout", :yellow
           return
@@ -58,7 +59,7 @@ module Ruact
       def create_components_directory
         empty_directory "app/javascript/components"
         create_file "app/javascript/components/.keep" unless
-          File.exist?(destination_root.join("app/javascript/components/.keep"))
+          File.exist?(Pathname(destination_root).join("app/javascript/components/.keep"))
       end
 
       # Story 8.0a — scaffold the directory the codegen writes into and add the
@@ -68,11 +69,11 @@ module Ruact
       def create_server_functions_directory
         empty_directory "app/javascript/.ruact"
         create_file "app/javascript/.ruact/.gitkeep" unless
-          File.exist?(destination_root.join("app/javascript/.ruact/.gitkeep"))
+          File.exist?(Pathname(destination_root).join("app/javascript/.ruact/.gitkeep"))
       end
 
       def append_gitignore_entries
-        gitignore = destination_root.join(".gitignore")
+        gitignore = Pathname(destination_root).join(".gitignore")
         return unless gitignore.exist?
 
         entries = [
@@ -102,7 +103,7 @@ module Ruact
       end
 
       def create_vite_config
-        vite_config_file = destination_root.join("vite.config.js")
+        vite_config_file = Pathname(destination_root).join("vite.config.js")
 
         if vite_config_file.exist?
           say_status "notice", "vite.config.js already exists — add the plugin manually:", :yellow

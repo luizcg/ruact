@@ -201,7 +201,28 @@ module Ruact
       child_nodes = convert_children(node)
       children = child_nodes.length == 1 ? child_nodes.first : child_nodes
 
-      Flight::SuspenseElement.new(fallback: fallback, children: children)
+      # Optional `delay="2.5"` from the ERB → SuspenseElement#delay (the
+      # server-side wait, in seconds, before the deferred chunk streams). When
+      # absent, blank, unparseable, or non-finite, SuspenseElement falls back to
+      # its default.
+      delay_attr = node["data-ruact-delay"]
+      delay = begin
+        if delay_attr && !delay_attr.to_s.strip.empty?
+          # A string overflow like "1e309" parses to Infinity (Float() does not
+          # raise) — guard finiteness so a non-finite delay can't reach the
+          # renderer's sleep(delay) and raise RangeError.
+          parsed = Float(delay_attr)
+          parsed.finite? ? parsed : nil
+        end
+      rescue ArgumentError, TypeError
+        nil
+      end
+
+      if delay
+        Flight::SuspenseElement.new(fallback: fallback, children: children, delay: delay)
+      else
+        Flight::SuspenseElement.new(fallback: fallback, children: children)
+      end
     end
 
     def convert_children(node)

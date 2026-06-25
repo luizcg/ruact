@@ -47,7 +47,11 @@ module Ruact
                  attrs    = ::Regexp.last_match(1)
                  fallback = extract_string_attr(attrs, "fallback") || ""
                  escaped  = fallback.gsub('"', "&quot;")
-                 %(<ruact-suspense data-ruact-fallback="#{escaped}">)
+                 # Optional `delay="2.5"` — the server-side wait (seconds) before
+                 # the deferred chunk streams. Forwarded to SuspenseElement#delay.
+                 delay      = extract_string_attr(attrs, "delay")
+                 delay_attr = delay ? %( data-ruact-delay="#{delay.gsub('"', '&quot;')}") : ""
+                 %(<ruact-suspense data-ruact-fallback="#{escaped}"#{delay_attr}>)
                end
         .gsub(SUSPENSE_CLOSE_RE, "</ruact-suspense>")
 

@@ -12,6 +12,56 @@ module Ruact
       end
     end
 
+    # Bugfix (Sprint Change Proposal 2026-06-16 §4.5): the ERB `delay` attribute
+    # is carried as `data-ruact-delay` and must reach SuspenseElement#delay; an
+    # absent, blank, or unparseable value falls back to the element's default.
+    describe "Suspense element conversion (delay)" do
+      let(:default_delay) do
+        Ruact::Flight::SuspenseElement.new(fallback: nil, children: "x").delay
+      end
+
+      it "parses data-ruact-delay into SuspenseElement#delay as a Float" do
+        html = %(<ruact-suspense data-ruact-fallback="loading" data-ruact-delay="2.5"><p>content</p></ruact-suspense>)
+        result = convert.call(html)
+        expect(result).to be_a(Ruact::Flight::SuspenseElement)
+        expect(result.delay).to eq(2.5)
+      end
+
+      it "falls back to the default delay when the attribute is absent" do
+        html = %(<ruact-suspense data-ruact-fallback="loading"><p>content</p></ruact-suspense>)
+        result = convert.call(html)
+        expect(result).to be_a(Ruact::Flight::SuspenseElement)
+        expect(result.delay).to eq(default_delay)
+      end
+
+      it "falls back to the default delay when the attribute is unparseable" do
+        html = %(<ruact-suspense data-ruact-fallback="loading" data-ruact-delay="soon"><p>content</p></ruact-suspense>)
+        expect(convert.call(html).delay).to eq(default_delay)
+      end
+
+      it "falls back to the default delay when the attribute is blank" do
+        html = %(<ruact-suspense data-ruact-fallback="loading" data-ruact-delay=""><p>content</p></ruact-suspense>)
+        expect(convert.call(html).delay).to eq(default_delay)
+      end
+
+      it "treats delay=\"0\" as an explicit zero delay, not absent" do
+        html = %(<ruact-suspense data-ruact-fallback="loading" data-ruact-delay="0"><p>content</p></ruact-suspense>)
+        expect(convert.call(html).delay).to eq(0.0)
+      end
+
+      it "parses a delay value with surrounding whitespace" do
+        html = %(<ruact-suspense data-ruact-fallback="loading" data-ruact-delay=" 2.5 "><p>content</p></ruact-suspense>)
+        expect(convert.call(html).delay).to eq(2.5)
+      end
+
+      it "falls back to the default delay when the value overflows to a non-finite Float" do
+        # Float("1e309") => Infinity (Float() does not raise on overflow); a
+        # non-finite delay must not reach the renderer's sleep (RangeError).
+        html = %(<ruact-suspense data-ruact-fallback="loading" data-ruact-delay="1e309"><p>content</p></ruact-suspense>)
+        expect(convert.call(html).delay).to eq(default_delay)
+      end
+    end
+
     describe "single DOM element" do
       it "converts a div with class and text child" do
         result = convert.call('<div class="box">hi</div>')
