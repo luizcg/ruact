@@ -343,6 +343,26 @@ RSpec.describe Ruact::Doctor do
         expect(status).to eq(:pass)
       end
     end
+
+    context "with a `decode_flight` inbound entry point (review finding R3)" do
+      before { write_source("decoder.rb", "def decode_flight(body)\n  body\nend\n") }
+
+      it "returns :fail (decode_flight is an inbound deserialization signal)" do
+        status, = doctor.send(:check_serialize_only)
+        expect(status).to eq(:fail)
+      end
+    end
+
+    context "with a deserializer in a differently-located file ALSO named doctor.rb (review finding R1)" do
+      # Only the gem's own lib/ruact/doctor.rb is excluded (by exact path), not
+      # every basename `doctor.rb` — a nested namesake must still be scanned.
+      before { write_source("ruact/flight/doctor.rb", "class FlightDeserializer; end\n") }
+
+      it "returns :fail (basename collision is not a free pass)" do
+        status, = doctor.send(:check_serialize_only)
+        expect(status).to eq(:fail)
+      end
+    end
   end
 
   # --- check_flight_middleware (Story 13.1, AC3 + AC4) ---
@@ -414,6 +434,23 @@ RSpec.describe Ruact::Doctor do
 
     it "renders :warn with the ⚠ glyph (not ✗)" do
       expect(doctor.send(:format_result, :warn, "heads up")).to eq("⚠ heads up")
+    end
+  end
+
+  describe "#run with an unexpected status (review finding R1)", :story_13_1 do
+    before do
+      make_manifest
+      make_controller(with_include: true)
+      make_layout(with_sentinel: true)
+      allow(TCPSocket).to receive(:new).and_return(instance_double(TCPSocket, close: nil))
+    end
+
+    it "fails the run when a check returns a status that is neither :pass nor :warn" do
+      doctor = described_class.new
+      # All other checks pass; a malformed status (rendered ✗) must NOT be
+      # silently treated as a pass — only :pass / :warn are success.
+      allow(doctor).to receive(:check_streaming).and_return([:error, "broken status"])
+      expect(doctor.run).to be false
     end
   end
 

@@ -39,6 +39,7 @@ module Ruact
       /\b#{%w[deserialize flight].join('_')}\b/,
       /\b#{%w[from flight].join('_')}\b/,
       /\b#{%w[parse flight].join('_')}\b/,
+      /\b#{%w[decode flight].join('_')}\b/,
       # React Flight reader entry points invoked from Ruby (NOT createFromFlightPayload,
       # which is the client/browser deserializing the server's own trusted payload)
       /\b#{%w[create From].join}(?:NodeStream|ReadableStream|Fetch)\b/
@@ -47,13 +48,21 @@ module Ruact
     # A line carrying this annotation is a deliberate, reviewed deserializer and
     # is treated as guarded (the check is a guard, not a blanket ban).
     ALLOW_FLIGHT_DESERIALIZATION = ["# ruact:allow", "flight", "deserialization"].join("-")
-    DOCTOR_BASENAME = "doctor.rb"
+    # Exclude THIS file by its exact path (not basename) — its comments contain
+    # the literal `Deserializer` example, so it must not match its own scan; but
+    # a differently-located future file also named `doctor.rb` must still be
+    # scanned (review finding R1 — basename exclusion was too broad).
+    DOCTOR_FILE = File.expand_path(__FILE__)
     SERIALIZE_ONLY_DOC = "docs/internal/decisions/server-functions-api.md (serialize-only invariant, FR97)"
 
     # Response-transforming middleware that can mutate/recompress a streamed
     # `text/x-component` Flight body and break the wire contract (React-on-Rails
     # ops lesson). Matched by class name so the check needs no hard dependency.
     RESPONSE_TRANSFORMING_MIDDLEWARE = %w[Rack::Deflater].freeze
+
+    # Statuses that do NOT fail the run. Anything else (including a malformed /
+    # future status) is treated as a failure (review finding R1).
+    SUCCESS_STATUSES = %i[pass warn].freeze
 
     # @param serialize_only_root [String] directory whose `**/*.rb` is scanned
     #   for the serialize-only tripwire. Defaults to the gem's own `lib/`;
@@ -71,8 +80,10 @@ module Ruact
       puts "[ruact] Health check"
       results = CHECKS.map { |check| send(:"check_#{check}") }
       results.each { |status, message| puts format_result(status, message) }
-      # A :warn must NOT fail the run (Story 13.1 AC3) — only :fail does.
-      passed = results.all? { |status, _| status != :fail }
+      # A :warn must NOT fail the run (Story 13.1 AC3); only :pass / :warn are
+      # success. An unexpected status (rendered `✗`) fails loudly rather than
+      # being silently treated as a pass (review finding R1).
+      passed = results.all? { |status, _| SUCCESS_STATUSES.include?(status) }
       puts "Run rails generate ruact:install to fix configuration issues" unless passed
       passed
     end
@@ -149,7 +160,7 @@ module Ruact
     # excluding this file and the generators' client-side templates.
     def check_serialize_only
       offenses = Dir[File.join(@serialize_only_root, "**", "*.rb")].flat_map do |file|
-        next [] if File.basename(file) == DOCTOR_BASENAME
+        next [] if File.expand_path(file) == DOCTOR_FILE
         next [] if file.match?(%r{/generators/.+/templates/})
 
         File.foreach(file).with_index(1).filter_map do |line, lineno|
