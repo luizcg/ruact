@@ -1777,3 +1777,72 @@ kwargs contract is enforced server-side. Append-only addendum to the
    `server-functions.ts` is 9.8). Request de-duplication for `useQuery` is 9.6
    (the hook fetches once per mount; a `useSyncExternalStore` refactor can layer
    dedup later). The v1 substrate is untouched (demolition is 9.9).
+
+### 2026-06-25 — Story 13.1 — Serialize-only invariant (FR97)
+
+Epic 13 ("Server-Function Contract & Safety") opens by turning a *happy accident
+of architecture* into a **defended invariant**. The 2026-06-15 technical research
+report established that ruact is **serialize-only**: its Ruby side *emits* React
+Flight (`text/x-component`) but has **no inbound Flight deserializer**, so it sits
+structurally **outside** the React2Shell / **CVE-2025-55182** class — a Flight-
+deserialization RCE (CVSS 10, Dec 2025) in which an attacker-supplied Flight
+payload is deserialized into live server objects. Append-only addendum; supersedes
+nothing.
+
+1. **The invariant (the rule).** ruact **may emit** Flight (`text/x-component`)
+   from the Ruby server, but must **never deserialize externally-supplied Flight
+   into live Ruby objects.** No inbound `*Deserializer`, no `parse_flight` /
+   `from_flight` / `deserialize_flight` / `decode_flight` reading a request body,
+   no Ruby call to a React Flight reader (`createFromNodeStream` /
+   `createFromReadableStream` / `createFromFetch`). Reads stay GET-with-primitives (FR88); writes stay
+   form/JSON over the host's own CSRF — neither path parses Flight inbound.
+
+2. **Out of scope — the client `createFromFlightPayload`.** The generated
+   client entry (`lib/generators/ruact/install/templates/application.jsx.tt`)
+   calls `createFromFlightPayload` to deserialize the server's **own trusted**
+   payload in the **browser**. That is normal RSC on the client — not the Ruby
+   server, not attacker-controlled inbound Flight — and is explicitly **outside**
+   this invariant. The tripwire scans Ruby source only and excludes the
+   generators' client-side templates.
+
+3. **Enforcement — a `Ruact::Doctor` tripwire, not a parser.** `check_serialize_only`
+   greps ruact's own `lib/**/*.rb` (default root `Ruact.gem_path/lib`, injectable
+   for specs) for a curated list of structural inbound-deserialization signals and
+   **fails** on any unannotated hit, naming `file:line` + this invariant. The raw
+   `text/x-component` token is deliberately **not** a signal — the gem legitimately
+   *emits* that media type (`controller.rb` / `server.rb`), so matching it would
+   false-fail the (invariant-holding) current tree. Today the check **passes
+   silently**. AST parsing was rejected as over-engineering for a tripwire whose
+   job is to *stay at zero* (consistent with the single-dependency / "make invalid
+   states unconstructible, simply" discipline). The signal literals are assembled
+   from fragments via `Array#join` and `doctor.rb` is excluded from its own scan
+   by exact file path — not basename, so a differently-located future namesake is
+   still scanned (mirrors the Story 5.1 F4 self-reference lesson).
+
+4. **Escape hatch — `# ruact:allow-flight-deserialization <reason>`.** A line
+   carrying that annotation is treated as guarded, so a deliberate, reviewed
+   deserializer is allowed without failing. This is what makes the check a
+   **guard** rather than a blanket ban.
+
+5. **Middleware warn (non-failing).** `check_flight_middleware` introduces a new
+   `:warn` doctor status (rendered `⚠`; a `:warn` does **not** flip the run to
+   failure — the pass computation moved from `status == :pass` to an allowlist,
+   `SUCCESS_STATUSES = %i[pass warn]`, so a `:warn` passes while any unexpected
+   status fails loudly rather than being silently treated as a pass).
+   It warns when a response-transforming middleware (`Rack::Deflater` + a small
+   curated list) is mounted, since recompressing/mutating a streamed
+   `text/x-component` body breaks the Flight wire contract / streaming
+   (React-on-Rails ops lesson). Rack middleware is app-global, not per-route, so
+   the warn cannot be scoped precisely to Flight routes — it points the operator
+   at the remedy (exclude `text/x-component` from compression).
+
+6. **Where it earns its keep.** The primary venue is the gem's own CI (the
+   `:story_13_1` spec runs the tripwire against a fixture tree). In a host app,
+   `rails ruact:doctor` scanning `Ruact.gem_path/lib` is defense-in-depth — a
+   released gem won't contain a deserializer, so it passes; its value there is
+   catching a hand-patched/vendored gem.
+
+7. **Scope guards.** This story ships ONLY the ADR addendum + the two doctor
+   checks + specs. No SignedGlobalID (13.2 / FR96), no error round-trip (13.3 /
+   FR98), no TS emission (13.4 / FR99), no component contract (13.5 / FR100), no
+   playground (13.6). The client-side React deserialization path is untouched.
