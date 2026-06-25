@@ -43,6 +43,16 @@ module Ruact
         html = %(<ruact-suspense data-ruact-fallback="loading" data-ruact-delay=""><p>content</p></ruact-suspense>)
         expect(convert.call(html).delay).to eq(default_delay)
       end
+
+      it "treats delay=\"0\" as an explicit zero delay, not absent" do
+        html = %(<ruact-suspense data-ruact-fallback="loading" data-ruact-delay="0"><p>content</p></ruact-suspense>)
+        expect(convert.call(html).delay).to eq(0.0)
+      end
+
+      it "parses a delay value with surrounding whitespace" do
+        html = %(<ruact-suspense data-ruact-fallback="loading" data-ruact-delay=" 2.5 "><p>content</p></ruact-suspense>)
+        expect(convert.call(html).delay).to eq(2.5)
+      end
     end
 
     describe "single DOM element" do

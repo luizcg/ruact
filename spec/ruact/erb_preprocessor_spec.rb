@@ -109,6 +109,11 @@ module Ruact
         expect(result).to include(%(data-ruact-delay="0.75"))
         expect(result).to include(%(data-ruact-fallback="wait"))
       end
+
+      it "accepts a single-quoted delay attribute" do
+        result = transform.call(%(<Suspense fallback='loading' delay='1.5'><X /></Suspense>))
+        expect(result).to include(%(data-ruact-delay="1.5"))
+      end
     end
   end
 end
