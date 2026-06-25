@@ -276,6 +276,170 @@ RSpec.describe Ruact::Doctor do
     end
   end
 
+  # --- check_serialize_only (Story 13.1, AC2 + AC4) ---
+
+  describe "#check_serialize_only", :story_13_1 do
+    subject(:doctor) { described_class.new(serialize_only_root: scan_root.to_s) }
+
+    # Injectable scan root → point the tripwire at a fixture tree.
+    let(:scan_root) { Pathname.new(Dir.mktmpdir) }
+
+    after { FileUtils.rm_rf(scan_root) }
+
+    def write_source(name, content)
+      path = scan_root.join(name)
+      FileUtils.mkdir_p(path.dirname)
+      File.write(path, content)
+    end
+
+    context "with a clean tree (no inbound deserializer)" do
+      before { write_source("clean.rb", "class Foo\n  def bar = 42\nend\n") }
+
+      it "returns :pass silently" do
+        status, msg = doctor.send(:check_serialize_only)
+        expect(status).to eq(:pass)
+        expect(msg).to include("Serialize-only invariant holds")
+      end
+    end
+
+    context "with an unguarded inbound Flight deserializer" do
+      before do
+        write_source("evil.rb", "class FlightDeserializer\n  def call(body)\n    parse_flight(body)\n  end\nend\n")
+      end
+
+      it "returns :fail" do
+        status, = doctor.send(:check_serialize_only)
+        expect(status).to eq(:fail)
+      end
+
+      it "names the offending file:line and points to the ADR invariant" do
+        _, msg = doctor.send(:check_serialize_only)
+        expect(msg).to include("evil.rb:1") # first offense = the *Deserializer constant
+        expect(msg).to include("CVE-2025-55182")
+        expect(msg).to include("server-functions-api.md")
+      end
+    end
+
+    context "with a deserializer carrying the allow annotation" do
+      before do
+        annotation = ["# ruact:allow", "flight", "deserialization"].join("-")
+        write_source("guarded.rb", "def parse_flight(body) #{annotation} reviewed legacy bridge\n  body\nend\n")
+      end
+
+      it "returns :pass (the escape hatch makes it a guard, not a ban)" do
+        status, = doctor.send(:check_serialize_only)
+        expect(status).to eq(:pass)
+      end
+    end
+
+    context "with a signal that lives in an excluded location" do
+      before do
+        # generators' client-side templates are out of scope (browser RSC)
+        write_source("lib/generators/ruact/install/templates/app.rb", "def parse_flight(b) = b\n")
+      end
+
+      it "returns :pass (templates are excluded from the scan)" do
+        status, = doctor.send(:check_serialize_only)
+        expect(status).to eq(:pass)
+      end
+    end
+  end
+
+  # --- check_flight_middleware (Story 13.1, AC3 + AC4) ---
+
+  describe "#check_flight_middleware", :story_13_1 do
+    subject(:doctor) { described_class.new }
+
+    # Plain value objects (not doubles) modelling the iterable middleware stack
+    # the check reads — each entry exposes a `.name`, mirroring a real
+    # ActionDispatch::MiddlewareStack::Middleware.
+    def middleware_entry(name)
+      Struct.new(:name).new(name)
+    end
+
+    def stub_app(stack)
+      app = Struct.new(:middleware).new(stack)
+      allow(Rails).to receive(:application).and_return(app)
+    end
+
+    context "when a response-transforming middleware (Rack::Deflater) is mounted" do
+      before { stub_app([middleware_entry("Rack::Deflater")]) }
+
+      it "returns :warn (never :fail)" do
+        status, msg = doctor.send(:check_flight_middleware)
+        expect(status).to eq(:warn)
+        expect(msg).to include("Rack::Deflater").and include("text/x-component")
+      end
+    end
+
+    context "when no response-transforming middleware is mounted" do
+      before { stub_app([middleware_entry("Rack::Runtime")]) }
+
+      it "returns :pass" do
+        status, = doctor.send(:check_flight_middleware)
+        expect(status).to eq(:pass)
+      end
+    end
+
+    context "when no Rails application is present" do
+      before { allow(Rails).to receive(:application).and_return(nil) }
+
+      it "returns :pass (guarded edge context)" do
+        status, = doctor.send(:check_flight_middleware)
+        expect(status).to eq(:pass)
+      end
+    end
+
+    context "when the app is not yet booted (middleware is a non-enumerable proxy)" do
+      # Mirrors a pre-`initialize!` Rails::Configuration::MiddlewareStackProxy,
+      # which does NOT respond to :each — must be skipped, not crash on filter_map.
+      before do
+        proxy = Object.new # responds to neither :each nor :filter_map
+        app = Struct.new(:middleware).new(proxy)
+        allow(Rails).to receive(:application).and_return(app)
+      end
+
+      it "returns :pass without raising" do
+        expect { doctor.send(:check_flight_middleware) }.not_to raise_error
+        status, = doctor.send(:check_flight_middleware)
+        expect(status).to eq(:pass)
+      end
+    end
+  end
+
+  # --- :warn status semantics (Story 13.1, AC3) ---
+
+  describe "#format_result with :warn", :story_13_1 do
+    subject(:doctor) { described_class.new }
+
+    it "renders :warn with the ⚠ glyph (not ✗)" do
+      expect(doctor.send(:format_result, :warn, "heads up")).to eq("⚠ heads up")
+    end
+  end
+
+  describe ".run with a :warn present (Story 13.1, AC3)", :story_13_1 do
+    before do
+      make_manifest
+      make_controller(with_include: true)
+      make_layout(with_sentinel: true)
+      allow(TCPSocket).to receive(:new).and_return(instance_double(TCPSocket, close: nil))
+      app = Struct.new(:middleware).new([Struct.new(:name).new("Rack::Deflater")])
+      allow(Rails).to receive(:application).and_return(app)
+    end
+
+    it "still returns true — a :warn does not fail the run" do
+      expect(described_class.run).to be true
+    end
+
+    it "prints the warning glyph" do
+      expect { described_class.run }.to output(/⚠.*Rack::Deflater/).to_stdout
+    end
+
+    it "does not print the fix hint" do
+      expect { described_class.run }.not_to output(/rails generate/).to_stdout
+    end
+  end
+
   # --- run / .run ---
 
   describe ".run / #run (AC#1, #7)" do
