@@ -37,6 +37,20 @@ module Ruact
   # fix the call site without reading the server source.
   class BadRequestError < Error; end
 
+  # Story 13.2 (FR96) — raised by `Ruact.locate_signed` when a SignedGlobalID
+  # token fails verification: a tampered signature, an expired token, or a token
+  # scoped to a different `for:` purpose (`GlobalID::Locator.locate_signed`
+  # returns `nil`). Inherits from `Ruact::Error` so the Story 8.4
+  # `rescue_from StandardError` chain catches it cleanly; `__ruact_status_for`
+  # maps it to HTTP 400 (Bad Request) — a forged/expired reference is an
+  # invalid credential the client supplied, NOT a missing record. This keeps
+  # `ActiveRecord::RecordNotFound` from leaking and never reveals whether the
+  # target record exists (verification fails before any DB lookup). A *valid*
+  # token whose record was since deleted is NOT this error — the underlying
+  # finder (`ActiveRecord::RecordNotFound`) propagates and is the host's normal
+  # not-found concern, exactly as a raw `Model.find` would be.
+  class InvalidSignedGlobalIDError < Error; end
+
   # Story 8.5 — raised by the `Ruact::Server` upload guard when an inbound
   # multipart / urlencoded request's `Content-Length` exceeds
   # `Ruact.config.max_upload_bytes`. The exception inherits from

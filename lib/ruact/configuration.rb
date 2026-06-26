@@ -21,6 +21,8 @@ module Ruact
       max_upload_bytes
       query_route_prefix
       query_parent_controller
+      signed_global_id_default_purpose
+      signed_global_id_default_expires_in
     ].freeze
 
     # @!attribute [r] manifest_path
@@ -93,6 +95,32 @@ module Ruact
     #     scoping, Pundit) runs before any query class is instantiated (FR89).
     #   @example Dispatch queries through an API base controller
     #     Ruact.configure { |c| c.query_parent_controller = "Api::BaseController" }
+    #
+    # @!attribute [r] signed_global_id_default_purpose
+    #   @return [Symbol, String, nil] Story 13.2 (FR96) — the default `for:`
+    #     purpose `Ruact.signed_global_id` / `Ruact.locate_signed` use when the
+    #     call omits `for:`. A purpose scopes a signed reference to one
+    #     use-site so a token minted for editing a post cannot be replayed
+    #     against, say, a delete endpoint. Default `nil` — when neither the
+    #     call nor this config supplies a purpose, the helper raises
+    #     `Ruact::Error` rather than sign an unscoped token (the "developer
+    #     forgot" path is a loud error, never a silent insecure default).
+    #     Prefer a per-call `for:` when use-sites differ; set this only for an
+    #     app-wide default purpose.
+    #   @example Set an app-wide default purpose
+    #     Ruact.configure { |c| c.signed_global_id_default_purpose = :ruact_ref }
+    #
+    # @!attribute [r] signed_global_id_default_expires_in
+    #   @return [ActiveSupport::Duration, nil] Story 13.2 (FR96) — the default
+    #     `expires_in:` `Ruact.signed_global_id` uses when the call omits
+    #     `expires_in:`. Must be an `ActiveSupport::Duration` (e.g. `15.minutes`)
+    #     — globalid calls `#from_now` on it. Default `nil` — when neither the
+    #     call nor this config supplies an expiry, the helper raises
+    #     `Ruact::Error` rather than mint a non-expiring token. To deliberately
+    #     mint a non-expiring token, pass an explicit `expires_in: nil` at the
+    #     call site (a reviewed per-call choice), never via this default.
+    #   @example Set an app-wide default expiry
+    #     Ruact.configure { |c| c.signed_global_id_default_expires_in = 1.hour }
     ATTRIBUTES.each do |attr|
       attr_reader attr
 
@@ -143,6 +171,8 @@ module Ruact
         @max_upload_bytes = 10 * 1024 * 1024
         @query_route_prefix = "/q"
         @query_parent_controller = "ApplicationController"
+        @signed_global_id_default_purpose = nil
+        @signed_global_id_default_expires_in = nil
       end
     end
 

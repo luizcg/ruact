@@ -1846,3 +1846,89 @@ nothing.
    checks + specs. No SignedGlobalID (13.2 / FR96), no error round-trip (13.3 /
    FR98), no TS emission (13.4 / FR99), no component contract (13.5 / FR100), no
    playground (13.6). The client-side React deserialization path is untouched.
+
+### 2026-06-26 — Story 13.2 — SignedGlobalID record references (FR96)
+
+The inbound-safety counterpart to the serialize-only invariant (13.1). The
+serialize-only guard keeps ruact from *deserializing* hostile Flight; this story
+keeps a controller from handing the client a *forgeable* record reference in the
+first place. Decisions:
+
+1. **The canonical record-reference primitive is a SignedGlobalID, opt-in via an
+   explicit helper.** `Ruact.signed_global_id(record, for:, expires_in:)` returns
+   `record.to_sgid(for:, expires_in:).to_s` (a plain `String` → the Flight
+   serializer carries it unchanged, no serializer branch). `Ruact.locate_signed(
+   token, for:)` wraps `GlobalID::Locator.locate_signed`. Chosen over (a)
+   hand-rolled `to_sgid` (no loud-omission guard, no symmetry) and (c)
+   auto-serializing every `ActiveRecord::Base` (magic; conflicts with the
+   `ruact_props` explicit-allowlist grain; can't carry a per-site `for:`). The
+   opt-in is "the developer reaches for the helper," surfaced in docs as the
+   canonical pattern.
+
+2. **Inbound resolution is explicit, never automatic.** The action/query calls
+   `Ruact.locate_signed` itself; the strict param allowlist (`query_dispatch.rb`)
+   is untouched — no auto-detect-and-resolve of token-shaped strings (a param may
+   legitimately be a string that merely looks like a token; auto-resolution would
+   couple the param layer to ActiveRecord and surprise developers).
+
+3. **Loud-omission invariant — never a silent insecure default.** Purpose and
+   expiry resolve call-arg → config default → **raise** `Ruact::Error`. Purpose
+   is always required (an unscoped token is never acceptable, so even an explicit
+   `for: nil` raises). Expiry distinguishes *omission* from a deliberate choice
+   via a private `UNSET` sentinel: pure omission with no configured default
+   raises; an explicit `expires_in: nil` is honored as a reviewed non-expiring
+   token. `expires_in:` must be an `ActiveSupport::Duration` (globalid calls
+   `#from_now`).
+
+4. **Tampered/expired/wrong-purpose → clean 400.** `locate_signed` returns `nil`
+   on any verification failure; the helper raises `Ruact::InvalidSignedGlobalIDError`,
+   mapped to **400** in `__ruact_status_for` (alongside `BadRequestError`). 400
+   over 404 because the token is an invalid client *credential*, not a missing
+   record — and verification fails before any DB lookup, so record existence is
+   never revealed either way. No `ActiveRecord::RecordNotFound` leak; the
+   rejection message never echoes the raw token.
+
+5. **Single-dependency discipline preserved.** `globalid` ships with every Rails
+   app but is not a gemspec dependency (only `nokogiri` is). It is **lazily
+   required** inside the helpers on first call (mirroring the class-name-string
+   matching in `ErrorRendering` that avoids requiring ActiveRecord at load), so
+   the gem stays loadable in pure-Ruby contexts and the gemspec is unchanged.
+
+6. **Scope guards.** This story ships ONLY the two helpers + the error class +
+   400 mapping + two config keys + security docs + specs. No error round-trip
+   (13.3 / FR98), no TS emission (13.4 / FR99), no component contract (13.5 /
+   FR100), no playground (13.6). The Epic 10 scaffold generator does not exist
+   yet — the docs worked-example is the canonical pattern it will later emit.
+
+#### 2026-06-26 — Story 13.2 review patch (dev⇄Codex)
+
+Three findings, all resolved before merge:
+- **(Patch)** `InvalidSignedGlobalIDError`'s YARD comment was inserted between
+  `UploadTooLargeError`'s doc block and its class, detaching the upload docs →
+  moved the new error + comment to sit right after `BadRequestError`.
+- **(Patch)** the production-mode no-leak spec asserted `not_to have_key("backtrace")`,
+  but the dev-only payload keys are `app_frames` / `gem_frames` / `suggestion` →
+  the spec now asserts the response is exactly the four baseline keys.
+- **(Decision, Luiz)** a **valid** token whose record was since **deleted** is
+  out of AC2's three rejection cases (tampered/expired/wrong-purpose, which never
+  reach the finder). **Resolved: do NOT normalize.** The finder's
+  `ActiveRecord::RecordNotFound` propagates as the host's ordinary not-found
+  concern (identical to a raw `Model.find`); the primitive owns only signature/
+  expiry/purpose verification. Documented on `InvalidSignedGlobalIDError` and
+  pinned by a spec.
+- YARD `{Ruact.signed_global_id}` / `{Ruact.locate_signed}` cross-references are
+  unresolvable (the methods are mixed onto `Ruact`'s singleton via `extend`), so
+  they are written as plain code spans, not doc links.
+
+#### 2026-06-26 — Story 13.2 review patch R2 (dev⇄Codex)
+
+One new finding (all three layers, same root): `expires_in: false` — and a
+configured default of `false` — silently minted a **non-expiring** token, because
+globalid treats a falsy `expires_in` as "no expiry". That was a second silent
+path around the "only an explicit `nil` is the reviewed non-expiring choice"
+contract. **Fixed:** `__ruact_resolve_expiry` now type-checks the resolved value
+— only `nil` or an `ActiveSupport::Duration` (anything responding to `#from_now`,
+what globalid actually calls) is allowed; `false`, a bare Integer, or any other
+type raises `Ruact::Error` loudly (closing both the call-arg and the configured-
+default path). Bonus: a bare Integer now gets a clear message instead of
+globalid's cryptic `NoMethodError: from_now`.
