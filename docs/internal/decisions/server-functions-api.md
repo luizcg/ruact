@@ -1932,3 +1932,81 @@ what globalid actually calls) is allowed; `false`, a bare Integer, or any other
 type raises `Ruact::Error` loudly (closing both the call-arg and the configured-
 default path). Bonus: a bare Integer now gets a clear message instead of
 globalid's cryptic `NoMethodError: from_now`.
+
+### 2026-06-26 — Story 13.3 — Inertia-style validation `errors` round-trip (FR98)
+
+**Context.** Stories 8.4 / 9.1 handle the **exception** path: a `save!` /
+`create!` that raises `ActiveRecord::RecordInvalid` bubbles past the host's
+`rescue_from` into the structured **error payload** (`_ruact_server_action_error:
+true`, mapped to **422**, with a dev-only flat `full_messages` **array** under
+`validation_errors`) — for the dev overlay. FR98 is the complementary
+**non-exception happy-failure** path: the idiomatic `if record.save … else …`
+where `save` returns `false` and the action does NOT raise. That path needs a
+field-level `errors` **prop** (not an error payload) so a form re-renders with
+messages and a normal 200 / redirect — exactly how a Rails dev expects
+`record.invalid?` to behave. **13.3 EXTENDS, does not replace, the 8.4/9.1
+chain**; `error_payload.rb`'s dev-only `validation_errors` array is left
+untouched (different shape, different purpose).
+
+**Decision — design (B), explicit opt-in helper.** The contract escalation in
+the story (auto-inject a reserved `errors` prop into EVERY response — variant
+(A) — vs. an explicit opt-in helper — variant (B)) was resolved by Luiz in
+favour of **(B)**. Rationale: (A) would reserve the prop name `errors` globally
+AND change Story 9.2's Bucket-2 `204 No Content` empty contract (a genuinely
+empty response would become `{"errors": {}}`); that is magic, in tension with
+the explicit-allowlist grain that 13.1/13.2 just hardened. (B) preserves the
+grain and the 9.2 contract.
+
+**(a) Canonical shape — a pure normalizer.**
+`Ruact::ServerFunctions::ValidationErrors.normalize(source)` is a pure function
+(no Rails / `Ruact.config` / request reads — same caller/builder split as
+`ErrorPayload` / `BucketTwoPayload`) producing `Hash{String=>Array<String>}`:
+attribute names as strings (a `base`-level error keys under `"base"`), values
+arrays of human-readable **full messages** (`ActiveModel::Error#full_message`,
+e.g. `"Title can't be blank"`). It accepts an ActiveModel-ish record (responds
+to `#errors`), a raw `ActiveModel::Errors`, or a pre-shaped Hash, and is
+idempotent on already-canonical input; `nil` / a valid record → `{}`. Full
+messages (not partial `errors.messages`) are the default — self-describing, and
+faithful to the AC. Note this diverges from inertia-rails' single-string-per-
+attribute: FR98 mandates `string[]` because one attribute can carry multiple
+errors.
+
+**(b) Opt-in collector helper.** `ruact_errors` is a single dual-purpose
+controller helper on the shared `Ruact::ValidationErrorsCollector` concern
+(included by both `Ruact::Server` and `Ruact::Controller`). `ruact_errors(@post)`
+normalizes + merges into a per-request collector (the private ivar
+`@__ruact_errors`, NOT a `view_assigns` ivar) and returns the normalized hash;
+the no-arg `ruact_errors` reads the always-present collector (`{}` default), for
+binding to a form component (`<PostForm errors={ruact_errors} />`, exposed to
+the view via `helper_method`). Because the shape derives from `record.errors`
+(empty on a valid record), one `ruact_errors(@post)` call after the save yields
+`{}` on success and the populated map on failure — the "always present, same
+code path" invariant, **per-action and explicit**, with no global prop.
+
+**(c) Bucket-2 (imperative `await`).** When `__ruact_function_call?` and the
+collector was **touched** this request, `Ruact::Server#default_render` injects
+the collector under the reserved JSON key `"errors"` alongside the serialized
+ivars (even on an otherwise-empty assigns set, so an opted-in success surfaces
+`{"errors": {}}` and the client reads `result.errors` uniformly). The two
+collector internals and a stray dev ivar literally named `@errors` are dropped
+from the serialized assigns (`RESERVED_ASSIGN_KEYS` — Rails' `view_assigns` only
+filters a fixed set of `@_` ivars, not every `@__` one); the collector is the
+source of truth for the key. An **untouched** collector changes nothing — the
+9.2 `204 No Content` empty-Bucket-2 contract is preserved. No client-runtime
+change: the `errors` key rides `parseResponse` verbatim.
+
+**(d) Bucket-1 redirect-back (native form / navigation).** The Inertia "redirect
+back with errors" pattern: on a Flight `redirect_to`
+(`Ruact::Controller#redirect_to`) where the collector was touched, the canonical
+errors are stashed in `flash[:ruact_errors]` (single-use, session-backed — the
+exact Inertia semantics). The re-rendered page (`ruact_render`) reads the flash
+back into the collector before the view evaluates, so `ruact_errors` returns the
+surviving errors as a prop on the re-render. Guarded on `respond_to?(:flash)`:
+a session-less API-only host degrades to the Bucket-2 body path rather than
+crashing. Bucket-2 does NOT redirect-to-convey-failure — errors ride the body.
+
+**Append-only invariant preserved.** The Story 8.0 accessor lock is untouched
+(`import { createPost } from "@/.ruact/server-functions"` unchanged); FR98 adds
+a Ruby-side collector + a reserved response key, no codegen / runtime change.
+The raised-`RecordInvalid` → 422 path (8.4) is unchanged and still covered by
+`server_rescue_request_spec.rb`.

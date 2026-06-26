@@ -26,6 +26,7 @@ module Ruact
     autoload :RouteSource,        "ruact/server_functions/route_source"
     autoload :QuerySource,        "ruact/server_functions/query_source"
     autoload :ErrorRendering,     "ruact/server_functions/error_rendering"
+    autoload :ValidationErrors,   "ruact/server_functions/validation_errors"
     autoload :QueryContext, "ruact/server_functions/query_context"
     autoload :QueryDispatch, "ruact/server_functions/query_dispatch"
 

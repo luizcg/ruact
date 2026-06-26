@@ -19,6 +19,7 @@ require "spec_helper"
 require "rack/test"
 require "tmpdir"
 require "fileutils"
+require "active_model"
 
 # Ruact::Controller is normally loaded by the Railtie's `ruact.load_controller`
 # initializer at app boot. This spec instantiates a Rails::Application but does
@@ -80,8 +81,53 @@ module ControllerRequestSpecSupport
 
         routes.append do
           get "/demo/show", to: "controller_request_spec_support/demo#show"
+          # Story 13.3 (FR98) — Bucket-1 redirect-back round-trip routes.
+          get  "/errors-demo/new",          to: "controller_request_spec_support/errors_demo#new"
+          post "/errors-demo/create",       to: "controller_request_spec_support/errors_demo#create"
+          post "/errors-demo/create_valid", to: "controller_request_spec_support/errors_demo#create_valid"
         end
       end
+    end
+  end
+
+  # Story 13.3 (FR98) — an ActiveModel record with a presence validation for the
+  # redirect-back round-trip demo controller below.
+  class ErrorsDemoPost
+    include ActiveModel::Model
+    include ActiveModel::Attributes
+
+    attribute :title, :string
+
+    validates :title, presence: true
+
+    def self.name = "ErrorsDemoPost"
+  end
+
+  # Story 13.3 (FR98) — the Bucket-1 (native form / navigation) Inertia-style
+  # redirect-back demo: `create` registers errors via `ruact_errors` then
+  # `redirect_to`s the form; the errors survive the Flight redirect in `flash`
+  # and arrive as an `errors` prop on the re-rendered `new` page.
+  class ErrorsDemoController < ActionController::Base
+    include Ruact::Controller
+
+    append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
+
+    def new
+      ruact_render
+    end
+
+    def create
+      post = ErrorsDemoPost.new(title: nil)
+      post.valid? # false → populates errors
+      ruact_errors(post)
+      redirect_to "/errors-demo/new"
+    end
+
+    def create_valid
+      post = ErrorsDemoPost.new(title: "Hi")
+      post.valid? # true → no errors
+      ruact_errors(post)
+      redirect_to "/errors-demo/new"
     end
   end
 
@@ -198,6 +244,51 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(controller.instance_variable_defined?(:@ruact_render_context)).to be(false)
         controller.send(:ruact_render)
         expect(controller.instance_variable_defined?(:@ruact_render_context)).to be(false)
+      end
+    end
+
+    # Story 13.3 (FR98) — the Bucket-1 (native form / navigation) half of the
+    # Inertia-style validation `errors` round-trip (AC4): errors survive a
+    # redirect-back in flash and arrive as an `errors` prop on the re-render.
+    describe "Story 13.3: redirect-back errors prop (FR98)", :story_13_3 do
+      let(:flight_headers) { { "HTTP_ACCEPT" => "text/x-component" } }
+
+      it "exposes errors={} on a plain page render with no prior redirect (always present)" do
+        get "/errors-demo/new", {}, flight_headers
+        expect(last_response.status).to eq(200)
+        expect(last_response.body).to include("DemoButton")
+        # The component receives a present-but-empty errors prop, never a message.
+        expect(last_response.body).not_to include("can't be blank")
+      end
+
+      it "survives a redirect-back and re-renders with the errors prop populated" do
+        # Writing request (Bucket 1, Flight): registers errors, then redirects.
+        post "/errors-demo/create", {}, flight_headers
+        expect(last_response.headers["Content-Type"]).to include("text/x-component")
+        expect(last_response.body).to include("redirectUrl")
+
+        # The router follows the redirect with a fresh Flight GET; rack-test
+        # carries the session cookie, so flash[:ruact_errors] is read back.
+        get "/errors-demo/new", {}, flight_headers
+        expect(last_response.status).to eq(200)
+        expect(last_response.body).to include("Title can't be blank")
+      end
+
+      it "registers errors={} for a successful save and does NOT leak a message across the redirect" do
+        post "/errors-demo/create_valid", {}, flight_headers
+        get "/errors-demo/new", {}, flight_headers
+        expect(last_response.status).to eq(200)
+        expect(last_response.body).not_to include("can't be blank")
+      end
+
+      it "is single-use: a second re-render after the flash is swept shows no errors" do
+        post "/errors-demo/create", {}, flight_headers
+        get "/errors-demo/new", {}, flight_headers
+        expect(last_response.body).to include("Title can't be blank")
+
+        # flash is swept after the first read; the next render is clean.
+        get "/errors-demo/new", {}, flight_headers
+        expect(last_response.body).not_to include("Title can't be blank")
       end
     end
   end

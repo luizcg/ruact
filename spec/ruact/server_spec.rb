@@ -55,10 +55,14 @@ RSpec.describe Ruact::Server, :story_9_1 do
       expect(before_filters.first).to eq(:__ruact_enforce_upload_limit!)
     end
 
-    it "adds NO public instance methods to the host (predicate + handlers are private)" do
+    it "adds only the Story 13.3 `ruact_errors` opt-in helper as a public method (predicate + handlers stay private)" do
+      # Story 9.1's installation surface was "nothing public"; Story 13.3 (FR98)
+      # adds exactly ONE deliberate public method — the `ruact_errors(record)`
+      # opt-in validation-error collector / reader (AC2). The dual-bucket
+      # predicate, error handlers, and flash helpers all remain private.
       added = ServerConcernUnitSupport::ConcernController.public_instance_methods -
               ServerConcernUnitSupport::PlainController.public_instance_methods
-      expect(added).to eq([])
+      expect(added).to eq([:ruact_errors])
     end
 
     it "keeps INHERITED host rescue_from handlers more recent than its own (review patch)",

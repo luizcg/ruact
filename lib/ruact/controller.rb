@@ -3,6 +3,7 @@
 require "json"
 require "socket"
 require "uri"
+require_relative "validation_errors_collector"
 
 module Ruact
   # Include in ApplicationController to enable RSC rendering.
@@ -14,8 +15,11 @@ module Ruact
   # After that, any action whose view is a .html.erb file will automatically:
   # - Respond to text/x-component requests with a raw Flight payload
   # - Respond to text/html requests with an HTML shell + inline Flight payload
+  # rubocop:disable Metrics/ModuleLength
   module Controller
     extend ActiveSupport::Concern
+
+    include Ruact::ValidationErrorsCollector
 
     private
 
@@ -47,6 +51,11 @@ module Ruact
     #             the current action's default template.
     # +locals+:   hash of local variables to pass to the template.
     def ruact_render(template: nil, locals: {})
+      # Story 13.3 (FR98, AC4) — seed the collector from a redirect-back flash
+      # before the view evaluates, so `errors={ruact_errors}` surfaces surviving
+      # errors (no-op on a plain render — `ruact_errors` then returns `{}`).
+      __ruact_read_errors_from_flash
+
       pipeline  = RenderPipeline.new(ruact_manifest, controller_path: controller_path, logger: logger)
       streaming = ruact_request? && self.class.ancestors.include?(ActionController::Live)
 
@@ -146,6 +155,11 @@ module Ruact
       rescue ::URI::InvalidURIError
         return super
       end
+
+      # Story 13.3 (FR98, AC4) — the Inertia "redirect back with errors" path:
+      # stash any `ruact_errors`-registered errors in flash so they survive this
+      # Flight redirect and re-render as an `errors` prop (no-op when untouched).
+      __ruact_stash_errors_in_flash
 
       render plain: "0:#{JSON.generate({ 'redirectUrl' => redirect_url, 'redirectType' => 'push' })}\n",
              content_type: "text/x-component"
@@ -254,4 +268,5 @@ module Ruact
       JSON.parse(File.read(manifest_path))[src_path]
     end
   end
+  # rubocop:enable Metrics/ModuleLength
 end
