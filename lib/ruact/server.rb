@@ -14,6 +14,7 @@ require_relative "../ruact"
 require_relative "server_functions/error_rendering"
 require_relative "server_functions/bucket_two_payload"
 require_relative "server_functions/name_bridge"
+require_relative "validation_errors_collector"
 
 module Ruact
   # Story 9.1 (route-driven redesign, Phase A) — the v2 server-functions
@@ -68,6 +69,7 @@ module Ruact
     extend ActiveSupport::Concern
 
     include Ruact::ServerFunctions::ErrorRendering
+    include Ruact::ValidationErrorsCollector
 
     included do
       # Story 8.5 salvage — prepended so the size check wins the race against
@@ -193,7 +195,28 @@ module Ruact
     def default_render(*)
       return super unless __ruact_function_call?
 
-      assigns = view_assigns
+      # Story 13.3 (FR98) — the collector's framework-internal ivars (and a stray
+      # dev `@errors`) are dropped from the serialized assigns; Rails' own
+      # `view_assigns` only filters a fixed set of `@_` ivars, not every `@__`
+      # one (see {Ruact::ValidationErrorsCollector::RESERVED_ASSIGN_KEYS}).
+      assigns = view_assigns.except(*ValidationErrorsCollector::RESERVED_ASSIGN_KEYS)
+
+      # Story 13.3 (FR98, AC3) — when the host opted into the validation-error
+      # round-trip (`ruact_errors(@record)` was called this request), inject the
+      # collected errors under the reserved JSON key `"errors"` alongside the
+      # serialized ivars, even on an otherwise-empty assigns set: an opted-in
+      # success must still surface `{"errors": {}}` so the client's `await`
+      # result carries `result.errors` on a single code path.
+      if __ruact_errors_touched?
+        payload = ServerFunctions::BucketTwoPayload.build(
+          assigns, strict: Ruact.config.strict_serialization
+        )
+        payload["errors"] = __ruact_errors
+        return render(json: payload)
+      end
+
+      # An UNTOUCHED collector changes nothing — the 9.2 `204 No Content`
+      # empty-Bucket-2 contract is preserved.
       return head(:no_content) if assigns.empty?
 
       render json: ServerFunctions::BucketTwoPayload.build(

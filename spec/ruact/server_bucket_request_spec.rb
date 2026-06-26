@@ -23,10 +23,25 @@ require "rack/test"
 
 require "ruact/controller"
 require "ruact/server"
+require "active_model"
 
 require_relative "controller_request_spec" unless defined?(ControllerRequestSpecSupport)
 
 module ServerBucketSpecSupport
+  # Story 13.3 (FR98) — an ActiveModel record with a presence validation, so a
+  # host action can exercise the non-exception `if record.valid? … else …`
+  # happy-failure path that `ruact_errors` round-trips.
+  class ValidatedPost
+    include ActiveModel::Model
+    include ActiveModel::Attributes
+
+    attribute :title, :string
+
+    validates :title, presence: true
+
+    def self.name = "ValidatedPost"
+  end
+
   # Serializable model — only :id/:title exposed; :secret must never leak.
   class BucketPost
     include Ruact::Serializable
@@ -96,6 +111,33 @@ module ServerBucketSpecSupport
     def unserializable
       @rec = UnserializableRecord.new
     end
+
+    # Story 13.3 (FR98) — opted-in FAILED validation: `ruact_errors(post)` after
+    # an invalid save attempt registers the canonical errors; Bucket-2 injects
+    # them under the reserved `errors` key alongside the serialized ivars.
+    def validated_create_invalid
+      post = ServerBucketSpecSupport::ValidatedPost.new(title: nil)
+      @created = post.valid? # false → populates post.errors
+      ruact_errors(post)
+    end
+
+    # Story 13.3 (FR98) — opted-in SUCCESS: the SAME call path yields
+    # `errors: {}` (success symmetry), so the client reads `result.errors`
+    # uniformly on both branches.
+    def validated_create_valid
+      post = ServerBucketSpecSupport::ValidatedPost.new(title: "Hi")
+      @created = post.valid? # true → post.errors empty
+      ruact_errors(post)
+    end
+
+    # Story 13.3 (FR98) — a stray dev ivar literally named `@errors` must NOT
+    # clobber the reserved round-trip key: the collector is the source of truth.
+    def stray_errors_ivar
+      @errors = "a dev string that must not win"
+      post = ServerBucketSpecSupport::ValidatedPost.new(title: nil)
+      post.valid?
+      ruact_errors(post)
+    end
   end
 
   # Review round 2 — an auth-style before_action that redirects on a Bucket-2
@@ -159,6 +201,9 @@ if defined?(ControllerRequestSpecSupport) &&
     post "/bucket/vary_wildcard",   to: "server_bucket_spec_support/bucket_server#vary_wildcard"
     post "/bucket/before_redirect", to: "server_bucket_spec_support/bucket_before_redirect#never_runs"
     post "/bucket/unserializable",  to: "server_bucket_spec_support/bucket_server#unserializable"
+    post "/bucket/validated_create_invalid", to: "server_bucket_spec_support/bucket_server#validated_create_invalid"
+    post "/bucket/validated_create_valid",   to: "server_bucket_spec_support/bucket_server#validated_create_valid"
+    post "/bucket/stray_errors_ivar", to: "server_bucket_spec_support/bucket_server#stray_errors_ivar"
     post "/bucket/dual_redirecting", to: "server_bucket_spec_support/bucket_dual#redirecting"
     post "/bucket/protected", to: "server_bucket_spec_support/bucket_forgery#create_protected"
     get  "/bucket/csrf_token", to: "server_bucket_spec_support/bucket_forgery#csrf_token"
@@ -348,5 +393,53 @@ RSpec.describe "Story 9.2: Ruact::Server dual-bucket response negotiation", :sto
         expect(JSON.parse(last_response.body)).to eq("ok" => true)
       end
     end
+  end
+
+  # Story 13.3 (FR98) — the Bucket-2 (imperative `await`) half of the
+  # Inertia-style validation `errors` round-trip (AC3).
+  describe "Story 13.3: Bucket-2 errors round-trip (FR98)", :story_13_3 do
+    it "FAILED validation injects the canonical errors under the reserved `errors` key" do
+      post "/bucket/validated_create_invalid", "{}", json_headers
+      expect(last_response.status).to eq(200)
+      body = JSON.parse(last_response.body)
+      expect(body).to eq("created" => false, "errors" => { "title" => ["Title can't be blank"] })
+    end
+
+    it "SUCCESS yields `errors: {}` through the same call path (success symmetry)" do
+      post "/bucket/validated_create_valid", "{}", json_headers
+      expect(last_response.status).to eq(200)
+      body = JSON.parse(last_response.body)
+      expect(body).to eq("created" => true, "errors" => {})
+    end
+
+    it "is set with Vary: Accept like every other non-GET shape" do
+      post "/bucket/validated_create_valid", "{}", json_headers
+      expect(last_response.headers["Vary"]).to match(/\bAccept\b/)
+    end
+
+    it "the collector wins over a stray dev ivar literally named @errors" do
+      post "/bucket/stray_errors_ivar", "{}", json_headers
+      expect(last_response.status).to eq(200)
+      body = JSON.parse(last_response.body)
+      expect(body.fetch("errors")).to eq("title" => ["Title can't be blank"])
+    end
+
+    it "preserves the 9.2 untouched-collector contract: an empty opted-out action still 204s" do
+      # `empty_action` never calls `ruact_errors` → no `errors` key, 204 No Content.
+      post "/bucket/empty", "{}", json_headers
+      expect(last_response.status).to eq(204)
+      expect(last_response.body).to eq("")
+    end
+
+    it "preserves the 9.2 untouched-collector contract: a populated action carries NO errors key" do
+      # `with_ivars` sets ivars but never opts in → body has no `errors` key.
+      post "/bucket/with_ivars", "{}", json_headers
+      expect(JSON.parse(last_response.body)).not_to have_key("errors")
+    end
+
+    # AC5(e) coexistence: the RAISED `ActiveRecord::RecordInvalid` path still
+    # renders the structured 422 error payload — proven (unchanged) by
+    # server_rescue_request_spec.rb's `record_invalid` example. 13.3 is the
+    # NON-raised 200 path above; the two contracts stay distinct.
   end
 end
