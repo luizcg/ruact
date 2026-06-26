@@ -173,7 +173,14 @@ jobs:
           node-version: "20"
       - name: Install JS deps
         run: npm ci
-      - name: Run vitest (codegen + Ruby↔JS parity)
+      - name: Install runtime package deps (react for the bundled runtime test)
+        # The vite-plugin vitest config globs in the sibling runtime package's
+        # `index.test.mjs`, which imports the runtime's `index.js` → `react`.
+        # That package keeps `react` in its own deps (lockfile gitignored), so
+        # install them here. Without this the bundled run fails to resolve react.
+        working-directory: vendor/javascript/ruact-server-functions-runtime
+        run: npm install --no-audit --no-fund
+      - name: Run vitest (codegen + Ruby↔JS parity + runtime)
         run: npm test
       - name: Type-check emitted accessors (Story 13.4 / FR99)
         run: npm run typecheck
