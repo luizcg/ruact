@@ -71,6 +71,11 @@ const V2_HTTP_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 // GET semantics for queries). Mirrors Ruby `Codegen::V2::QUERY_HTTP_METHODS`.
 const V2_QUERY_HTTP_METHODS = new Set(["GET"]);
 
+// Story 13.4 — the VALUE type of every typed query param: the FR88 query-string
+// wire union (keys + optionality are exact; per-param scalar precision is not
+// reflection-honest and is deferred). Mirrors Ruby `Codegen::QUERY_PARAM_VALUE_TYPE`.
+const QUERY_PARAM_VALUE_TYPE = "string | number | boolean | null";
+
 /**
  * Absolute path to the placeholder runtime bundled inside the gem. Used as the
  * target of the `ruact/server-functions-runtime` Vite alias so host apps
@@ -278,6 +283,43 @@ function validateSnapshotV2(snapshot) {
           "snapshot JSON is corrupted.",
       );
     }
+    // Story 13.4 — the structured query `params` metadata is a trust boundary
+    // (it becomes TS object keys). Mirrors Ruby `validate_params!`.
+    if (fn.kind === "query") validateQueryParams(fn);
+  }
+}
+
+function validateQueryParams(fn) {
+  const params = fn.params;
+  if (params === undefined || params === null) return; // falls back to accepts_params
+
+  if (!Array.isArray(params)) {
+    throw new Error(
+      `ruact server-function codegen: v2 query entry "${fn.js_identifier}" has invalid ` +
+        `params ${JSON.stringify(params)} (must be an array of { name, required } objects).`,
+    );
+  }
+  for (const param of params) {
+    if (!param || typeof param !== "object" || Array.isArray(param)) {
+      throw new Error(
+        `ruact server-function codegen: v2 query entry "${fn.js_identifier}" has a params ` +
+          `element that is not an object: ${JSON.stringify(param)}; snapshot JSON is corrupted.`,
+      );
+    }
+    if (typeof param.name !== "string" || param.name.length === 0 || containsLineTerminator(param.name)) {
+      throw new Error(
+        `ruact server-function codegen: v2 query entry "${fn.js_identifier}" has a params ` +
+          `name ${JSON.stringify(param.name)} that is not a non-empty single-line string; ` +
+          "snapshot JSON is corrupted.",
+      );
+    }
+    if (typeof param.required !== "boolean") {
+      throw new Error(
+        `ruact server-function codegen: v2 query entry "${fn.js_identifier}" params name ` +
+          `${JSON.stringify(param.name)} has a non-boolean \`required\` ${JSON.stringify(param.required)}; ` +
+          "snapshot JSON is corrupted.",
+      );
+    }
   }
 }
 
@@ -346,15 +388,47 @@ function renderExportV2(fn) {
 // signature accepts params only when the query method declares kwargs (FR88).
 // Mirrors `Ruact::ServerFunctions::Codegen::V2.render_query_export`.
 function renderQueryExportV2(fn) {
-  const signature = fn.accepts_params
-    ? "(params: Record<string, unknown>) => Promise<unknown>"
-    : "() => Promise<unknown>";
+  const signature = querySignatureV2(fn);
   const pathLit = JSON.stringify(String(fn.path));
   const descriptor = `{ path: ${pathLit}, kind: "query" }`;
   return (
     `export const ${fn.js_identifier}: ${signature} =\n` +
     `  _makeQuery(${descriptor});\n`
   );
+}
+
+// Story 13.4 — picks the query accessor's `params` signature. With structured
+// per-kwarg metadata (`fn.params`), build a typed object literal (required +
+// optional exact, value type the FR88 wire union); empty params + no rest → the
+// bare `()` signature; a `**keyrest` keeps the open `Record<string, unknown>`
+// (intersected with any named keys). Falls back to the pre-13.4 `accepts_params`
+// boolean when no `params` metadata is present. MUST mirror Ruby `query_signature`.
+function querySignatureV2(fn) {
+  const params = fn.params;
+  if (!Array.isArray(params)) {
+    return fn.accepts_params
+      ? "(params: Record<string, unknown>) => Promise<unknown>"
+      : "() => Promise<unknown>";
+  }
+  const rest = Boolean(fn.params_rest);
+  if (params.length === 0 && !rest) return "() => Promise<unknown>";
+  return buildParamsSignatureV2(params, rest);
+}
+
+function buildParamsSignatureV2(params, rest) {
+  const props = params.map(
+    (p) => `${formatParamKey(String(p.name))}${p.required ? "" : "?"}: ${QUERY_PARAM_VALUE_TYPE}`,
+  );
+  if (props.length === 0) return "(params: Record<string, unknown>) => Promise<unknown>"; // keyrest-only
+  let object = `{ ${props.join("; ")} }`;
+  if (rest) object += " & Record<string, unknown>";
+  return `(params: ${object}) => Promise<unknown>`;
+}
+
+// Quote any param key that is not a valid bare TS identifier (so a corrupted
+// snapshot cannot break out of the object literal). Mirrors Ruby `format_param_key`.
+function formatParamKey(name) {
+  return VALID_JS_IDENTIFIER.test(name) ? name : JSON.stringify(name);
 }
 
 /**

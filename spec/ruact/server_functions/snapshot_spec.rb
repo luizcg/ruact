@@ -64,6 +64,32 @@ module Ruact
           expect(described_class.generate_v2!(entries: entries, path: path, now: frozen_time)).to be(true)
           expect(JSON.parse(File.read(path)).fetch("version")).to eq(2)
         end
+
+        # Story 13.4 — the new typed-query metadata must survive the JSON
+        # round-trip unchanged AND keep the file byte-stable (no churn on a
+        # second pass with identical entries).
+        context "with typed-query params metadata (Story 13.4)", :story_13_4 do
+          let(:query_entries) do
+            [
+              { "js_identifier" => "searchUsers", "kind" => "query", "http_method" => "GET",
+                "path" => "/q/searchUsers", "segments" => [], "accepts_params" => true,
+                "params" => [{ "name" => "term", "required" => true },
+                             { "name" => "limit", "required" => false }],
+                "params_rest" => false, "controller" => "CatalogQuery", "action" => "search_users" }
+            ]
+          end
+
+          it "round-trips the params metadata unchanged" do
+            described_class.generate_v2!(entries: query_entries, path: path, now: frozen_time)
+            parsed = JSON.parse(File.read(path))
+            expect(parsed.fetch("functions")).to eq(query_entries)
+          end
+
+          it "is byte-stable: a second pass with identical entries writes nothing" do
+            described_class.generate_v2!(entries: query_entries, path: path, now: frozen_time)
+            expect(described_class.generate_v2!(entries: query_entries, path: path, now: Time.now.utc)).to be(false)
+          end
+        end
       end
     end
   end

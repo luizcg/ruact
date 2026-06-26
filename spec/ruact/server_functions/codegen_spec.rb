@@ -262,6 +262,130 @@ module Ruact
           expect(out).to end_with("export { revalidate } from \"ruact/server-functions-runtime\";\n")
         end
       end
+
+      describe ".render — typed query params (Story 13.4)", :story_13_4 do
+        def typed_query(js_id, path, params:, params_rest: false)
+          {
+            "js_identifier" => js_id, "kind" => "query", "http_method" => "GET",
+            "path" => path, "segments" => [],
+            "accepts_params" => !params.empty? || params_rest,
+            "params" => params, "params_rest" => params_rest,
+            "controller" => "CatalogQuery", "action" => js_id
+          }
+        end
+
+        let(:union) { "string | number | boolean | null" }
+
+        it "emits a typed params object (required + optional, declaration order)" do
+          out = described_class.render(version: 2, generated_at: "t", functions: [
+                                         typed_query("searchUsers", "/q/searchUsers", params: [
+                                                       { "name" => "term", "required" => true },
+                                                       { "name" => "limit", "required" => false }
+                                                     ])
+                                       ])
+          expect(out).to include(
+            "export const searchUsers: (params: { term: #{union}; limit?: #{union} }) => Promise<unknown> ="
+          )
+        end
+
+        it "emits the bare () signature for a query with empty params + no rest" do
+          out = described_class.render(version: 2, generated_at: "t", functions: [
+                                         typed_query("categories", "/q/categories", params: [])
+                                       ])
+          expect(out).to include("export const categories: () => Promise<unknown> =")
+        end
+
+        it "intersects named keys with Record<string, unknown> for a **keyrest query" do
+          out = described_class.render(version: 2, generated_at: "t", functions: [
+                                         typed_query("withRest", "/q/withRest",
+                                                     params: [{ "name" => "scope", "required" => true }],
+                                                     params_rest: true)
+                                       ])
+          expect(out).to include(
+            "export const withRest: (params: { scope: #{union} } & Record<string, unknown>) => Promise<unknown> ="
+          )
+        end
+
+        it "keeps the open Record<string, unknown> for a **keyrest-only query" do
+          out = described_class.render(version: 2, generated_at: "t", functions: [
+                                         typed_query("restOnly", "/q/restOnly", params: [], params_rest: true)
+                                       ])
+          expect(out).to include(
+            "export const restOnly: (params: Record<string, unknown>) => Promise<unknown> ="
+          )
+        end
+
+        it "quotes a param key that is not a valid bare JS identifier" do
+          out = described_class.render(version: 2, generated_at: "t", functions: [
+                                         typed_query("oddKey", "/q/oddKey",
+                                                     params: [{ "name" => "weird-key", "required" => false }])
+                                       ])
+          expect(out).to include("(params: { \"weird-key\"?: #{union} }) => Promise<unknown>")
+        end
+
+        it "falls back to the accepts_params boolean when no params metadata is present" do
+          out = described_class.render(version: 2, generated_at: "t", functions: [
+                                         { "js_identifier" => "legacyQuery", "kind" => "query",
+                                           "http_method" => "GET", "path" => "/q/legacyQuery",
+                                           "segments" => [], "accepts_params" => true }
+                                       ])
+          expect(out).to include(
+            "export const legacyQuery: (params: Record<string, unknown>) => Promise<unknown> ="
+          )
+        end
+
+        it "rejects params that are not an Array (trust boundary)" do
+          evil = typed_query("x", "/q/x", params: []).merge("params" => "oops")
+          expect { described_class.render(version: 2, generated_at: "t", functions: [evil]) }
+            .to raise_error(Ruact::ConfigurationError, /invalid.*params/)
+        end
+
+        it "rejects a params element that is not an object" do
+          evil = typed_query("x", "/q/x", params: ["nope"])
+          expect { described_class.render(version: 2, generated_at: "t", functions: [evil]) }
+            .to raise_error(Ruact::ConfigurationError, /params element that is not an object/)
+        end
+
+        it "rejects a params name containing a line break (TS injection guard)" do
+          evil = typed_query("x", "/q/x", params: [{ "name" => "a\n// injected", "required" => true }])
+          expect { described_class.render(version: 2, generated_at: "t", functions: [evil]) }
+            .to raise_error(Ruact::ConfigurationError, /non-empty single-line String/)
+        end
+
+        it "rejects a params name that is empty" do
+          evil = typed_query("x", "/q/x", params: [{ "name" => "", "required" => true }])
+          expect { described_class.render(version: 2, generated_at: "t", functions: [evil]) }
+            .to raise_error(Ruact::ConfigurationError, /non-empty single-line String/)
+        end
+
+        it "rejects a non-Boolean required" do
+          evil = typed_query("x", "/q/x", params: [{ "name" => "q", "required" => "yes" }])
+          expect { described_class.render(version: 2, generated_at: "t", functions: [evil]) }
+            .to raise_error(Ruact::ConfigurationError, /non-Boolean .*required/)
+        end
+
+        it "accepts a legitimate required: false (not mis-read as absent)" do
+          expect do
+            described_class.render(version: 2, generated_at: "t", functions: [
+                                     typed_query("q1", "/q/q1", params: [{ "name" => "limit", "required" => false }])
+                                   ])
+          end.not_to raise_error
+        end
+
+        it "is byte-stable: regenerating a typed-query snapshot writes nothing the second pass" do
+          Dir.mktmpdir do |dir|
+            path = File.join(dir, "server-functions.ts")
+            snapshot = { version: 2, generated_at: "t", functions: [
+              typed_query("searchUsers", "/q/searchUsers", params: [
+                            { "name" => "term", "required" => true },
+                            { "name" => "limit", "required" => false }
+                          ])
+            ] }
+            expect(described_class.generate_ts!(snapshot: snapshot, output_path: path)).to be(true)
+            expect(described_class.generate_ts!(snapshot: snapshot, output_path: path)).to be(false)
+          end
+        end
+      end
     end
   end
 end

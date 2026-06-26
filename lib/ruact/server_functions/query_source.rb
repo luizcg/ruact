@@ -57,6 +57,10 @@ module Ruact
         #   `js_identifier`; shape: `js_identifier`, `kind` (always `"query"`),
         #   `http_method` (always `"GET"`), `path`, `segments` (always `[]`),
         #   `accepts_params` (Boolean — does the method declare kwargs?),
+        #   `params` (Array<Hash> — Story 13.4: one `{ "name" => String,
+        #   "required" => Boolean }` per declared `keyreq`/`key` keyword, in
+        #   declaration order; empty when none), `params_rest` (Boolean —
+        #   Story 13.4: does the method declare a `**keyrest`?),
         #   `controller` (the query class name — for collision origins),
         #   `action` (the Ruby method name).
         # @raise [Ruact::ConfigurationError] on a query×query naming collision.
@@ -84,27 +88,50 @@ module Ruact
         private
 
         def build_entry(route, action, query_class)
+          params, params_rest = param_metadata(query_class, action)
           {
             "js_identifier" => NameBridge.to_js_identifier(action),
             "kind" => "query",
             "http_method" => "GET",
             "path" => clean_path(route),
             "segments" => [],
-            "accepts_params" => accepts_params?(query_class, action),
+            # Story 13.4 — keep `accepts_params` (derived) for back-compat: any
+            # named kwarg OR a `**keyrest` means the accessor takes params.
+            "accepts_params" => !params.empty? || params_rest,
+            "params" => params,
+            "params_rest" => params_rest,
             "controller" => query_class.name,
             "action" => action
           }
         end
 
-        # Does the query method declare any keyword arguments (FR88 params)?
-        # Drives the emitted TS signature: `(params) => Promise<unknown>` when
-        # true, `() => Promise<unknown>` when false (AC1).
-        def accepts_params?(query_class, action)
-          query_class.instance_method(action).parameters.any? do |(type, _name)|
-            KEYWORD_PARAM_TYPES.include?(type)
+        # Story 13.4 — per-kwarg metadata driving the typed TS `params` object
+        # (AC1). Reflects `Method#parameters` (names + required/optional only —
+        # Ruby exposes no types/defaults): `:keyreq` → required prop, `:key` →
+        # optional prop (both in declaration order, the stable order
+        # `parameters` returns), `:keyrest` (`**opts`) → an open-record marker
+        # so a legitimate dynamic key is never narrowed away (fail open).
+        # Positional/block params are not FR88 query params and are ignored.
+        #
+        # @param query_class [Class]
+        # @param action [String]
+        # @return [Array(Array<Hash>, Boolean)] the per-kwarg descriptors and
+        #   whether a `**keyrest` is present.
+        def param_metadata(query_class, action)
+          params = []
+          rest = false
+          query_class.instance_method(action).parameters.each do |(type, name)|
+            next unless KEYWORD_PARAM_TYPES.include?(type)
+
+            if type == :keyrest
+              rest = true
+            else
+              params << { "name" => name.to_s, "required" => type == :keyreq }
+            end
           end
+          [params, rest]
         rescue NameError
-          false
+          [[], false]
         end
 
         # query×query collision — two mounted query classes whose methods map

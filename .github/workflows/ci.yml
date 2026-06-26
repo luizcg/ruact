@@ -151,6 +151,33 @@ jobs:
       - name: Validate YARD docs
         run: bundle exec yard --fail-on-warning
 
+  js:
+    # Required status check — the bundled Vite plugin's JS suite. Runs the
+    # vitest codegen tests (incl. the Ruby↔JS byte-parity cases, which shell out
+    # to `ruby` — hence Ruby is set up alongside Node) and, Story 13.4, the
+    # `tsc --noEmit` type-level test that proves the emitted typed-query accessor
+    # signatures are enforced at compile time (FR99 / AC6).
+    name: JS (vite-plugin codegen + typecheck)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vendor/javascript/vite-plugin-ruact
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install JS deps
+        run: npm ci
+      - name: Run vitest (codegen + Ruby↔JS parity)
+        run: npm test
+      - name: Type-check emitted accessors (Story 13.4 / FR99)
+        run: npm run typecheck
+
   benchmark:
     # Required status check — fails if memory allocations exceed 120% of baseline.json.
     name: Memory Benchmark
@@ -187,7 +214,7 @@ jobs:
     #   Turn OFF:  gh variable delete  RUACT_AUTO_RELEASE      -R luizcg/ruact
     # (or GitHub UI: Settings -> Secrets and variables -> Actions -> Variables)
     name: Release to RubyGems
-    needs: [name-propagation, rspec, rubocop, yard, benchmark]
+    needs: [name-propagation, rspec, rubocop, yard, js, benchmark]
     if: >-
       github.event_name == 'push'
       && github.ref == 'refs/heads/main'

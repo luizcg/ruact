@@ -187,7 +187,12 @@ module Ruact
         expect(ts).to include('import { _makeQuery } from "ruact/server-functions-runtime";')
         expect(ts).to include('_makeQuery({ path: "/q/categories", kind: "query" });')
         expect(ts).to include("export const categories: () => Promise<unknown> =")
-        expect(ts).to include("export const search: (params: Record<string, unknown>) => Promise<unknown> =")
+        # Story 13.4 — the real pipeline now narrows `params` to the declared
+        # kwargs end-to-end (`def search(term:)` → a required `term` of the FR88
+        # wire union), not the opaque `Record<string, unknown>`.
+        expect(ts).to include(
+          "export const search: (params: { term: string | number | boolean | null }) => Promise<unknown> ="
+        )
         expect(ts).to include('export { useQuery } from "ruact/server-functions-runtime";')
       end
 
