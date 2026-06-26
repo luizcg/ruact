@@ -115,5 +115,94 @@ module Ruact
         expect(result).to include(%(data-ruact-delay="1.5"))
       end
     end
+
+    # Story 13.5 (FR100) — preprocess-time component-contract validation, wired
+    # through an injectable registry seam (a stub responding to +contract_for+).
+    describe "component contract validation", :story_13_5 do
+      # A minimal stub registry: maps component name → contract Hash (or nil).
+      def registry_for(contracts)
+        Class.new do
+          def initialize(contracts) = (@contracts = contracts)
+          def contract_for(name, **) = @contracts[name]
+        end.new(contracts)
+      end
+
+      let(:contract) do
+        { "props" => { "postId" => "required", "initialCount" => "optional" } }
+      end
+      let(:registry) { registry_for("LikeButton" => contract) }
+
+      def run(source, identifier: "app/views/posts/show.html.erb")
+        described_class.transform(source, identifier: identifier, registry: registry)
+      end
+
+      it "raises on a missing required prop, naming component + file:line + fix (AC#1, AC#3)" do
+        expect { run("<LikeButton initialCount={5} />") }
+          .to raise_error(ComponentContractError) do |e|
+            expect(e.message).to include("LikeButton")
+            expect(e.message).to include("app/views/posts/show.html.erb:1")
+            expect(e.message).to include("postId")
+            expect(e.message).to include("add the required prop")
+          end
+      end
+
+      it "raises on an unknown prop with a did-you-mean suggestion (AC#3)" do
+        expect { run("<LikeButton postId={1} postID={2} />") }
+          .to raise_error(ComponentContractError, /did you mean "postId"\?/)
+      end
+
+      it "computes the correct line for a call site lower in the template" do
+        source = "line1\nline2\n<LikeButton initialCount={5} />"
+        expect { run(source) }.to raise_error(ComponentContractError, /show\.html\.erb:3/)
+      end
+
+      it "passes a valid call and emits the normal placeholder (AC#1)" do
+        result = run("<LikeButton postId={@post.id} initialCount={5} />")
+        expect(result)
+          .to eq(%(<%= __ruact_component__("LikeButton", { "postId" => @post.id, "initialCount" => 5 }) %>))
+      end
+
+      it "does NOT re-wrap the contract error with the generic line/snippet tail" do
+        expect { run("<LikeButton initialCount={5} />") }
+          .to raise_error(ComponentContractError) { |e| expect(e.message).not_to match(/at line \d+:/) }
+      end
+
+      # AC#2 — opt-in / byte-identity: a component with no contract entry is
+      # validated NOT AT ALL and emits the exact same placeholder as pre-13.5.
+      describe "opt-in fail-open (AC#2)" do
+        it "emits byte-identical output for a contract-less component" do
+          source = "<NavBar foo={1} bar={2} />"
+          with_contract    = run(source) # registry has NO "NavBar" entry → fail open
+          without_registry = described_class.transform(source, registry: nil)
+          expected = %(<%= __ruact_component__("NavBar", { "foo" => 1, "bar" => 2 }) %>)
+          expect(with_contract).to eq(expected)
+          expect(without_registry).to eq(expected)
+        end
+
+        it "never consults the registry for a no-tag source (fast path)" do
+          spy_registry = registry_for({})
+          allow(spy_registry).to receive(:contract_for).and_call_original
+          result = described_class.transform("<div><p>plain</p></div>", registry: spy_registry)
+          expect(result).to eq("<div><p>plain</p></div>")
+          expect(spy_registry).not_to have_received(:contract_for)
+        end
+      end
+
+      describe "slots (AC#5)" do
+        let(:contract) do
+          { "props" => { "title" => "required" }, "slots" => { "header" => "required" } }
+        end
+        let(:registry) { registry_for("Card" => contract) }
+
+        it "raises when a required slot attribute is omitted at the call site" do
+          expect { run("<Card title={@t} />") }
+            .to raise_error(ComponentContractError, /missing required slot.*header/m)
+        end
+
+        it "passes when the declared slot is supplied as an attribute" do
+          expect { run("<Card title={@t} header={@h} />") }.not_to raise_error
+        end
+      end
+    end
   end
 end

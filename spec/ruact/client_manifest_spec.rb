@@ -123,6 +123,42 @@ module Ruact
       end
     end
 
+    describe "#contract_for (Story 13.5)", :story_13_5 do
+      let(:contract) { { "props" => { "postId" => "required" } } }
+
+      it "returns the optional contract Hash when present" do
+        manifest = described_class.from_hash(
+          "LikeButton" => manifest_data["LikeButton"].merge("contract" => contract)
+        )
+        expect(manifest.contract_for("LikeButton")).to eq(contract)
+      end
+
+      it "returns nil when the component declares no contract (back-compat)" do
+        manifest = described_class.from_hash(manifest_data)
+        expect(manifest.contract_for("LikeButton")).to be_nil
+      end
+
+      it "returns nil for an unknown component (never raises — fail open)" do
+        manifest = described_class.from_hash(manifest_data)
+        expect(manifest.contract_for("Nope")).to be_nil
+      end
+
+      it "honors the co-located/shared resolve_key precedence" do
+        data = dual_manifest_data.dup
+        data["posts/_like_button"] = data["posts/_like_button"].merge("contract" => contract)
+        manifest = described_class.from_hash(data)
+        expect(manifest.contract_for("LikeButton", controller_path: "posts")).to eq(contract)
+        expect(manifest.contract_for("LikeButton")).to be_nil
+      end
+
+      it "reads cleanly from a frozen manifest" do
+        manifest = described_class.from_hash(
+          "LikeButton" => manifest_data["LikeButton"].merge("contract" => contract)
+        ).freeze
+        expect(manifest.contract_for("LikeButton")).to eq(contract)
+      end
+    end
+
     describe "#reference_for closest-match suggestion (Story 7.4)" do
       let(:shared_only_manifest) { described_class.from_hash(manifest_data) }
       let(:dual_manifest)        { described_class.from_hash(dual_manifest_data) }
