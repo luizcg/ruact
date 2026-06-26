@@ -364,6 +364,12 @@ module Ruact
             .to raise_error(Ruact::ConfigurationError, /non-Boolean .*required/)
         end
 
+        it "rejects a non-Boolean params_rest (would silently over-widen the type)" do
+          evil = typed_query("x", "/q/x", params: []).merge("params_rest" => "true")
+          expect { described_class.render(version: 2, generated_at: "t", functions: [evil]) }
+            .to raise_error(Ruact::ConfigurationError, /non-Boolean params_rest/)
+        end
+
         it "accepts a legitimate required: false (not mis-read as absent)" do
           expect do
             described_class.render(version: 2, generated_at: "t", functions: [

@@ -47,13 +47,18 @@ module Ruact
             end
 
             # Validates the structured `params` metadata. Reject a malformed or
-            # corrupted snapshot loudly rather than emit broken — or injected —
-            # TS. Absent `params` is valid (the {signature} fallback handles it).
+            # corrupted snapshot loudly rather than emit broken — or silently
+            # over-widened — TS. Absent `params`/`params_rest` is valid (the
+            # {signature} fallback handles it).
             #
             # @param js_id [String]
             # @param params [Array<Hash>, nil]
+            # @param params_rest [Object, nil] expected Boolean or nil; a
+            #   non-Boolean truthy value would otherwise silently flip a query to
+            #   the open `& Record<string, unknown>` shape (Story 13.4 review R1).
             # @raise [Ruact::ConfigurationError]
-            def validate!(js_id, params)
+            def validate!(js_id, params, params_rest = nil)
+              validate_rest!(js_id, params_rest)
               return if params.nil?
 
               unless params.is_a?(Array)
@@ -65,6 +70,14 @@ module Ruact
             end
 
             private
+
+            def validate_rest!(js_id, params_rest)
+              return if params_rest.nil? || params_rest == true || params_rest == false
+
+              raise Ruact::ConfigurationError,
+                    "ruact server-function codegen: v2 query entry #{js_id.inspect} has a non-Boolean " \
+                    "params_rest #{params_rest.inspect}; snapshot JSON is corrupted."
+            end
 
             def fallback(accepts_params)
               accepts_params ? QUERY_PARAMS_SIGNATURE : QUERY_SIGNATURE

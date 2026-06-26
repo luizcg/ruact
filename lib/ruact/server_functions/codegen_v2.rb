@@ -131,8 +131,9 @@ module Ruact
             validate_segments!(js_id, path, fetch(entry, "segments"))
             # Story 13.4 — the structured query `params` metadata is a trust
             # boundary (it becomes TS object keys); {QueryParams} rejects a
-            # malformed/corrupted snapshot rather than emit injected TS.
-            QueryParams.validate!(js_id, fetch(entry, "params")) if kind == "query"
+            # malformed/corrupted snapshot rather than emit injected — or
+            # silently over-widened — TS.
+            QueryParams.validate!(js_id, fetch(entry, "params"), fetch(entry, "params_rest")) if kind == "query"
             seen[js_id] = true
           end
 

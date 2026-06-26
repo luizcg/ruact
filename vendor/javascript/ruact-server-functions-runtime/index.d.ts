@@ -92,9 +92,19 @@ export function _makeQuery(descriptor: {
  * order-independent) share ONE in-flight request. Dedup is in-flight only:
  * once a request settles the shared entry is dropped, so a fresh mount
  * refetches (no TTL cache, no stale-while-revalidate).
+ *
+ * Story 13.4 — the `reference` parameter accepts ANY codegen-emitted accessor
+ * shape: the pre-13.4 declaration typed it `(params?: Record<string, unknown>)
+ * => Promise<unknown>`, which a now-TYPED query accessor (e.g. `(params: { term:
+ * string | number | boolean | null }) => Promise<unknown>`) is NOT assignable to
+ * under `strict` (contravariant param mismatch). Widening to `(...args: never[])
+ * => Promise<unknown>` accepts every typed/untyped/no-kwargs accessor without a
+ * cast and without a regression. `T` (the return type) stays the explicitly-
+ * specifiable return-typing generic — `useQuery<User[]>(searchUsers, { term })`;
+ * the call-site `params` checking lives on the accessor's own signature.
  */
 export function useQuery<T = unknown>(
-  reference: (params?: Record<string, unknown>) => Promise<unknown>,
+  reference: (...args: never[]) => Promise<unknown>,
   params?: Record<string, unknown>,
 ): { data: T | undefined; loading: boolean; error: unknown };
 

@@ -290,6 +290,19 @@ function validateSnapshotV2(snapshot) {
 }
 
 function validateQueryParams(fn) {
+  // Story 13.4 review R1 — a non-Boolean truthy `params_rest` would otherwise
+  // silently flip a query to the open `& Record<string, unknown>` shape.
+  if (
+    fn.params_rest !== undefined &&
+    fn.params_rest !== null &&
+    typeof fn.params_rest !== "boolean"
+  ) {
+    throw new Error(
+      `ruact server-function codegen: v2 query entry "${fn.js_identifier}" has a non-boolean ` +
+        `params_rest ${JSON.stringify(fn.params_rest)}; snapshot JSON is corrupted.`,
+    );
+  }
+
   const params = fn.params;
   if (params === undefined || params === null) return; // falls back to accepts_params
 

@@ -821,6 +821,26 @@ describe("Story 13.4 — typed query params render + parity", () => {
     ).toThrow(/non-empty single-line string/);
   });
 
+  it("rejects a non-boolean params_rest (would silently over-widen the type)", () => {
+    expect(() =>
+      render({
+        version: 2,
+        generated_at: "x",
+        functions: [
+          {
+            js_identifier: "x",
+            kind: "query",
+            http_method: "GET",
+            path: "/q/x",
+            segments: [],
+            params: [],
+            params_rest: "true",
+          },
+        ],
+      }),
+    ).toThrow(/non-boolean params_rest/);
+  });
+
   it("Ruby's render and JS's render produce byte-identical typed-query output", () => {
     const jsOutput = render(typedQueryFixture);
     const gemLibPath = path.resolve(
