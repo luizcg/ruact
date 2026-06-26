@@ -19,6 +19,24 @@ module Ruact
   #       "name":   "default"
   #     }
   #   }
+  #
+  # Story 13.5 (FR100) — an entry MAY carry an optional, purely additive
+  # +contract+ field when the component opts in by exporting +__ruactContract+
+  # from its +.tsx+ (the Vite plugin extracts it names-only). Shape:
+  #
+  #   "LikeButton": {
+  #     "id": ..., "name": ..., "chunks": [...],
+  #     "contract": {
+  #       "props":       { "postId" => "required", "initialCount" => "optional" },
+  #       "slots":       { "header" => "optional" },          # optional
+  #       "passthrough": false                                 # optional
+  #     }
+  #   }
+  #
+  # A component without the export has NO +contract+ key (back-compatible: every
+  # existing manifest + reader is unaffected). {#contract_for} reads it for the
+  # Story 13.5 preprocess-time call-site validator; +nil+ means "no contract →
+  # no validation" (fail open).
   class ClientManifest
     # Used by Flight::Serializer to produce I rows.
     # Returns the metadata array the client expects: [id, name, chunks]
@@ -60,6 +78,24 @@ module Ruact
 
         Flight::ClientReference.new(module_id: entry["id"], export_name: entry["name"])
       end
+    end
+
+    # Story 13.5 (FR100) — return the optional component +contract+ Hash for
+    # +name+, or +nil+ when the component declared none (or is absent from the
+    # manifest). Honors the same co-located/shared +resolve_key+ precedence as
+    # {#reference_for}, so a co-located component's contract is found when the
+    # call site's +controller_path+ is known. A pure read (no memoization, no
+    # mutation) — safe on the frozen manifest, never raises for an unknown name
+    # (the validator fails open). Consumed by {Ruact::ComponentContract} from
+    # the ERB preprocessor.
+    #
+    # @param name [String] PascalCase component name (e.g. "LikeButton")
+    # @param controller_path [String, nil] e.g. "posts" — biases toward a
+    #   co-located key ("posts/_like_button") when present.
+    # @return [Hash, nil] the contract Hash, or nil when none is declared.
+    def contract_for(name, controller_path: nil)
+      entry = entries_by_name[resolve_key(name, controller_path)]
+      entry && entry["contract"]
     end
 
     # Load from a file path (JSON).
@@ -131,7 +167,7 @@ module Ruact
 
       pool.each do |key|
         comparable = comparable_name_for(key).downcase
-        distance = self.class.send(:damerau_levenshtein_distance, target, comparable)
+        distance = StringDistance.damerau_levenshtein(target, comparable)
         next if distance > 2
 
         in_scope = controller_path && key.start_with?("#{controller_path}/")
@@ -154,41 +190,6 @@ module Ruact
       basename = key.split("/").last.delete_prefix("_")
       basename.split("_").map(&:capitalize).join
     end
-
-    # Damerau-Levenshtein distance — like classic Levenshtein but treats
-    # an adjacent transposition (e.g. "ke"↔"ek") as a single edit. Component
-    # names are short (≤ 30 chars in practice) so the full O(m·n) DP table
-    # is fine; the readability win over the two-row Levenshtein trick is
-    # worth the extra ~30 cells of allocation in the failure path.
-    # rubocop:disable Metrics/AbcSize
-    def self.damerau_levenshtein_distance(left, right)
-      return right.length if left.empty?
-      return left.length if right.empty?
-
-      m = left.length
-      n = right.length
-      d = Array.new(m + 1) { Array.new(n + 1, 0) }
-      (0..m).each { |i| d[i][0] = i }
-      (0..n).each { |j| d[0][j] = j }
-
-      (1..m).each do |i|
-        (1..n).each do |j|
-          cost = left[i - 1] == right[j - 1] ? 0 : 1
-          d[i][j] = [
-            d[i - 1][j] + 1,        # deletion
-            d[i][j - 1] + 1,        # insertion
-            d[i - 1][j - 1] + cost  # substitution
-          ].min
-          if i > 1 && j > 1 && left[i - 1] == right[j - 2] && left[i - 2] == right[j - 1]
-            d[i][j] = [d[i][j], d[i - 2][j - 2] + cost].min
-          end
-        end
-      end
-
-      d[m][n]
-    end
-    # rubocop:enable Metrics/AbcSize
-    private_class_method :damerau_levenshtein_distance
 
     # Returns the manifest key to use for +name+ given an optional +controller_path+.
     # Co-located key format: "<controller_path>/_<underscored_name>" (e.g. "posts/_like_button").

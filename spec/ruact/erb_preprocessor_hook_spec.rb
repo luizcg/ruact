@@ -18,7 +18,10 @@ module Ruact
     end
 
     let(:handler) { handler_class.new }
-    let(:fake_template) { Object.new }
+    # Story 13.5 — the hook now forwards +template.identifier+ into the
+    # preprocessor (for contract-violation file:line), so the stand-in template
+    # must answer +identifier+.
+    let(:fake_template) { Struct.new(:identifier).new("app/views/posts/show.html.erb") }
 
     describe "#call" do
       it "applies ErbPreprocessor.transform to source before calling super" do

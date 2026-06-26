@@ -12,6 +12,16 @@ module Ruact
   # Raised when the ERB preprocessor encounters a malformed component tag.
   class PreprocessorError < Error; end
 
+  # Story 13.5 (FR100) — raised by {Ruact::ComponentContract} at ERB
+  # preprocess-time when a `<Component .../>` call site violates the component's
+  # opt-in contract: a missing required prop/slot or an unknown prop name.
+  # Subclasses {PreprocessorError} so it flows through the same dev error
+  # overlay (NFR30 lineage) and the hook treats it uniformly — but the distinct
+  # class lets the preprocessor re-raise it AS-IS (its message already carries
+  # file:line + the offending prop + a "did you mean?" suggestion) instead of
+  # re-wrapping it with the generic "at line N: snippet" tail.
+  class ComponentContractError < PreprocessorError; end
+
   # Raised when application code attempts to mutate Ruact::Configuration outside
   # of a Ruact.configure block. The configuration is frozen after initialization
   # to prevent runtime drift; see Story 7.3 for the rationale and the decision

@@ -17,6 +17,24 @@ import { installServerFunctionsHooks } from "./server-functions-codegen.mjs";
  *     "chunks": ["/assets/LikeButton-abc123.js"]
  *   }
  * }
+ *
+ * Story 13.5 (FR100) — compile-time component contract. A component opts into a
+ * call-site contract by exporting `__ruactContract` from its own module
+ * (HEEx-style `attr`/`slot`, declared next to the component):
+ *
+ *   export const __ruactContract = {
+ *     props: { title: "required", subtitle: "optional" },
+ *     slots: { header: "optional" },   // optional; { name: required|optional } or ["name", ...]
+ *     passthrough: false,              // optional; true allows undeclared props
+ *   };
+ *
+ * The scanner extracts this NAMES-ONLY (no TS-AST, no value types) into an
+ * optional `contract` field on the manifest entry. A component without the
+ * export emits no `contract` field (byte-additive, back-compatible). A
+ * malformed/partial declaration is warned + skipped (the Ruby side then sees
+ * "no contract" and validates nothing — fail open). The Ruby preprocess-time
+ * validator (`Ruact::ComponentContract`) reads this and checks `<Component .../>`
+ * ERB call sites for missing-required / unknown-prop / slot-misuse before render.
  */
 export default function ruact(options = {}) {
   const {
@@ -59,6 +77,9 @@ export default function ruact(options = {}) {
               name,
               chunks: [url],
             };
+            // Story 13.5 — preserve the opt-in contract across the dev→build
+            // rewrite (the hashed-URL pass must not drop it).
+            if (entry.contract) updated[name].contract = entry.contract;
           }
         }
       }
@@ -87,7 +108,7 @@ export default function ruact(options = {}) {
   }, options);
 }
 
-function buildManifest(componentsDir) {
+export function buildManifest(componentsDir) {
   const manifest = {};
 
   if (!fs.existsSync(componentsDir)) return manifest;
@@ -102,6 +123,22 @@ function buildManifest(componentsDir) {
 
     const exports = extractExportNames(content);
     const relUrl = "/" + path.relative(componentsDir, file);
+    let contract = extractContract(content, file);
+
+    // Story 13.5 — a single `__ruactContract` cannot say WHICH component it
+    // describes, so it only applies when the file has exactly one component
+    // export (the documented one-component-per-file convention). A multi-export
+    // file would otherwise validate every export against the same contract —
+    // warn + skip rather than guess.
+    if (contract && exports.length > 1) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[vite-plugin-ruact] ignoring __ruactContract in ${file}: a contract ` +
+          `applies to a single component, but this file exports ${exports.length} ` +
+          `(${exports.join(", ")}). Split them into one component per file.`
+      );
+      contract = null;
+    }
 
     for (const name of exports) {
       manifest[name] = {
@@ -110,6 +147,8 @@ function buildManifest(componentsDir) {
         chunks: [relUrl],
         _sourceFile: file, // used during build to match hashed chunks
       };
+      // Story 13.5 — opt-in, byte-additive: only present when declared.
+      if (contract) manifest[name].contract = contract;
     }
   }
 
@@ -143,6 +182,154 @@ function extractExportNames(content) {
   }
 
   return Array.from(names);
+}
+
+// Story 13.5 (FR100) — extract the opt-in `__ruactContract` declaration.
+//
+// NAMES-ONLY by design (no TS-AST, no value types): the Ruby preprocess-time
+// validator only needs prop/slot names + required/optional. We locate the
+// exported object literal, balance its braces, then pull names out of the
+// `props` / `slots` sub-blocks with targeted regexes (robust to formatting,
+// and immune to eval). Returns:
+//   - null  when the component declares no contract (byte-additive opt-out)
+//   - null  when the declaration is malformed/empty (warn + skip → Ruby fails open)
+//   - { props?, slots?, passthrough? } otherwise (only non-empty members present)
+export function extractContract(content, file) {
+  const marker = /export\s+(?:default\s+)?(?:const|let|var)\s+__ruactContract\s*=\s*/m;
+  const m = marker.exec(content);
+  if (!m) return null;
+
+  const braceStart = content.indexOf("{", m.index + m[0].length);
+  if (braceStart === -1) return warnSkip(file);
+
+  const objText = extractBalanced(content, braceStart, "{", "}");
+  if (objText === null) return warnSkip(file);
+
+  const contract = {};
+
+  const props = extractRequiredness(extractBlock(objText, "props", "{", "}"));
+  if (props && Object.keys(props).length) contract.props = props;
+
+  const slots = extractRequiredness(extractBlock(objText, "slots", "{", "}"));
+  if (slots && Object.keys(slots).length) {
+    contract.slots = slots;
+  } else {
+    // Array form: slots: ["header", "footer"] → all optional.
+    const arr = extractBlock(objText, "slots", "[", "]");
+    if (arr !== null) {
+      const names = {};
+      const nameRe = /["'`]([^"'`]+)["'`]/g;
+      let s;
+      while ((s = nameRe.exec(arr)) !== null) names[s[1]] = "optional";
+      if (Object.keys(names).length) contract.slots = names;
+    }
+  }
+
+  if (/\bpassthrough\s*:\s*true\b/.test(objText)) contract.passthrough = true;
+
+  // A contract with no props, no slots, and no passthrough carries no
+  // information — treat as malformed/empty and fail open.
+  if (!contract.props && !contract.slots && !contract.passthrough) {
+    return warnSkip(file);
+  }
+
+  return contract;
+}
+
+// Parse a `{ name: "required", other: "optional" }` block into a
+// { name: "required" | "optional" } map. Accepts quoted or bare values, and an
+// object form `name: { required: true }`. Returns {} for an empty block.
+function extractRequiredness(block) {
+  if (block === null) return null;
+  const map = {};
+  // name: "required" | 'optional' | required  (string or bare identifier)
+  const strRe = /([A-Za-z_$][\w$]*)\s*:\s*["'`]?(required|optional)["'`]?/g;
+  let m;
+  while ((m = strRe.exec(block)) !== null) map[m[1]] = m[2];
+  // name: { required: true }  → required; { required: false } → optional
+  const objRe = /([A-Za-z_$][\w$]*)\s*:\s*\{[^}]*?\brequired\s*:\s*(true|false)[^}]*?\}/g;
+  while ((m = objRe.exec(block)) !== null) {
+    map[m[1]] = m[2] === "true" ? "required" : "optional";
+  }
+  return map;
+}
+
+// Extract the balanced inner text of `key: <open> ... <close>` from `objText`.
+// Returns the inner text (without the delimiters) or null when the key is
+// absent or the delimiters are unbalanced.
+function extractBlock(objText, key, open, close) {
+  const keyRe = new RegExp(`\\b${key}\\s*:\\s*\\${open}`, "m");
+  const km = keyRe.exec(objText);
+  if (!km) return null;
+  const start = km.index + km[0].length - 1; // position of `open`
+  const inner = extractBalanced(objText, start, open, close);
+  return inner;
+}
+
+// Given a string and the index of an opening delimiter, return the inner text
+// up to (excluding) the matching close delimiter, or null when unbalanced.
+// String literals ('...', "...", `...`) and comments (// and / * ... * /) are
+// skipped so a brace inside a comment or string never throws off the balance.
+function extractBalanced(str, openIndex, open, close) {
+  let depth = 0;
+  let i = openIndex;
+  while (i < str.length) {
+    const ch = str[i];
+    const next = str[i + 1];
+
+    if (ch === "/" && next === "/") {
+      const nl = str.indexOf("\n", i);
+      if (nl === -1) return null;
+      i = nl + 1;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      const end = str.indexOf("*/", i + 2);
+      if (end === -1) return null;
+      i = end + 2;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      i = skipString(str, i);
+      if (i === -1) return null;
+      continue;
+    }
+
+    if (ch === open) {
+      depth++;
+    } else if (ch === close) {
+      depth--;
+      if (depth === 0) return str.slice(openIndex + 1, i);
+    }
+    i++;
+  }
+  return null;
+}
+
+// Skip a JS string/template literal starting at the opening quote at +i+.
+// Returns the index just past the closing quote, or -1 if unterminated.
+function skipString(str, i) {
+  const quote = str[i];
+  i++;
+  while (i < str.length) {
+    const ch = str[i];
+    if (ch === "\\") {
+      i += 2;
+      continue;
+    }
+    if (ch === quote) return i + 1;
+    i++;
+  }
+  return -1;
+}
+
+function warnSkip(file) {
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[vite-plugin-ruact] ignoring malformed __ruactContract in ${file} ` +
+      `(could not extract prop/slot names — the component will not be contract-validated)`
+  );
+  return null;
 }
 
 function writeManifest(outputPath, manifest) {

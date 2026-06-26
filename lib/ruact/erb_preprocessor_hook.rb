@@ -14,7 +14,10 @@ module Ruact
     # Called by ActionView for every ERB template. +source+ is the raw ERB
     # text; the return value is Ruby code that ActionView will eval.
     def call(template, source)
-      super(template, ErbPreprocessor.transform(source))
+      # Story 13.5 — forward +template.identifier+ (the template file path) so a
+      # component-contract violation can name the call site's file:line. The
+      # contract registry defaults to the process-loaded +Ruact.manifest+.
+      super(template, ErbPreprocessor.transform(source, identifier: template.identifier))
     end
   end
 end

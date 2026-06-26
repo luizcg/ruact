@@ -2079,3 +2079,103 @@ a clean call type-checks — wired into a new `js` CI job. The runtime `_makeQue
 declaration needed **no change**: the emitted typed-`params` `export const`
 assigns to `_makeQuery`'s declared return without a cast (proven by a second
 type-test fixture).
+
+### 2026-06-26 — Story 13.5 — Compile-time component contract, HEEx-style `attr`/`slot` (FR100)
+
+FR100 closes the **component-boundary contract gap** — the consumer-side mirror
+of `ruact_props`. `ruact_props` validates the **producer** at class-load (a
+serializable model only exposes real methods, `serializable.rb`); until now the
+**consumer** — a `<Component prop={...} />` call site in an ERB view — was
+unchecked, so a missing required prop, a typo'd prop name (`postID` vs `postId`),
+or a slot misuse produced a **silent `undefined` in the browser** (the worst
+failure: discovered at runtime in production). 13.5 makes the call site a checked
+contract that fails **at preprocess time**, naming the component, file:line, the
+offending prop, and a "did you mean?" suggestion — before the page renders.
+
+**Contract source = opt-in `.tsx` export → manifest `contract` field (design A,
+locked by Luiz).** A component opts in by exporting `__ruactContract` from its own
+module (HEEx spirit — the declaration lives next to the component, in the
+component's own language):
+
+```ts
+export const __ruactContract = {
+  props: { title: "required", subtitle: "optional" },
+  slots: { header: "optional" },   // optional; { name: "required"|"optional" } or ["name", ...]
+  passthrough: false,              // optional; true allows undeclared props
+};
+```
+
+The Vite plugin's existing component scanner (`buildManifest`) — which already
+opens every component file for `"use client"` + export names — extracts this
+**names-only** (a brace-balanced object scan + targeted regexes; **NOT** a TS-AST
+pass, **NOT** `eval`) into an optional `contract` field on the manifest entry.
+A component without the export emits **no** `contract` field (byte-additive;
+every existing manifest + reader is unaffected). A malformed/partial declaration
+is **warned + skipped** in the plugin, so the Ruby side sees "no contract" and
+fails open. The brace-balancer that bounds the object literal is string- and
+comment-aware (a `{` inside a comment or string never throws off the balance).
+A single `__ruactContract` describes the file's **one** component — a file that
+exports more than one PascalCase component has the contract **warned + skipped**
+(it cannot be attributed), reaffirming the one-component-per-file convention;
+per-export contract syntax is deferred. Rejected alternatives: **(B)** a Ruby-side DSL and **(C)** a JSON
+sidecar both invent a parallel registry that drifts from the `.tsx` (the source
+of truth); **(D)** a full TS-AST `Props` parse is heavy, version-fragile, and
+over-delivers (preprocess-time validation needs names + required + slots, not
+value types — and component prop value typing is a separate, later concern; the
+server-boundary value-typing win already landed in 13.4 / FR99).
+
+**Check location = Ruby preprocess-time (forced, not a choice).** ERB
+`<Component .../>` tags are transformed by the **Ruby** ERB preprocessor
+(`erb_preprocessor.rb`), which already detects PascalCase tags, parses prop
+**names**, and computes each call site's line. A TypeScript/codegen-time check
+**cannot see ERB call sites at all** — they live in `.html.erb`, not `.tsx`. So
+the validator (`Ruact::ComponentContract`) is necessarily Ruby-side, hooked into
+the existing `COMPONENT_TAG_RE` transform loop. The only missing input was the
+template **file path**, now threaded through `ErbPreprocessorHook#call` as
+`template.identifier` (and `ErbPreprocessor.transform(source, identifier:,
+registry:)` — the contract registry is an **injectable seam** defaulting to the
+process-loaded, frozen `Ruact.manifest`, stubbable in specs per the Story 7.1
+explicit-context grain; no `Thread.current`, no per-call disk read).
+
+**Granularity = NAME-level only (required / unknown / slot).** Prop **values** are
+arbitrary render-time Ruby expressions the preprocessor never evaluates
+(`postId={@post.id}` → it emits `"postId" => @post.id`), so a preprocess-time
+check can validate **names + presence + slots** — *not* value types. This is the
+same reflection-honesty discipline 13.4 used: deliver exactly what the static
+phase can truthfully see. The three checks map precisely to the epic's three
+failure cases: **missing required** prop/slot, **unknown** prop name (closed by
+default; `passthrough: true` reopens it), and **slot misuse**.
+
+**Slots = minimal / name-level, deeper semantics deferred.** Children/slot passing
+is thin today (only `<Suspense>` is paired in the preprocessor; generic
+`<Component>…</Component>` children are not yet first-class). A slot is therefore
+expressed at the ERB call site as a **named prop attribute** (render-prop style:
+`<Card header={...} />`); the validator treats declared slot names as valid
+attributes and enforces **required** slots by attribute presence. A contract that
+declares no slots makes slot checking a **no-op**. A typed slot runtime / slot
+rendering / children-based slot capture is explicitly **deferred**.
+
+**Opt-in / fail-open / byte-identical (the load-bearing regression).** A
+contract-less component gets **zero** validation and **byte-identical** emitted
+output (`<%= __ruact_component__("Name", { … }) %>`), and the no-component-tag
+fast path reads no registry — both regression-pinned. Validation runs **only**
+inside the `COMPONENT_TAG_RE` block, never on the fast path. When the manifest is
+absent (fresh app, pre-build) or has no contract for a component, validation is
+skipped. This follows the gem's whole grain — explicit allowlisting, never magic
+(`ruact_props`, the SGID helper, the strict query allowlist are all opt-in).
+
+**Error surface.** The validator raises `Ruact::ComponentContractError`, a
+**subclass of `Ruact::PreprocessorError`** (so it flows through the same dev error
+overlay, NFR30 lineage) — the distinct subclass lets the preprocessor re-raise it
+**as-is** (its message already carries component + file:line + offending prop +
+suggestion) instead of re-wrapping it with the generic "at line N: snippet" tail
+the preprocessor appends to malformed-tag errors. The "did you mean?" suggestion
+reuses the **Damerau-Levenshtein** closest-match (Story 7.4), factored out of
+`ClientManifest` into a shared `Ruact::StringDistance` module so the prop-typo
+hint and the unknown-component hint share one algorithm.
+
+**Scope boundary (this story does NOT do).** Prop value-type checking; a full
+TS-AST `Props` parse; a Ruby DSL / JSON sidecar; a new slot runtime; moving
+validation to render time. The **Epic 10 scaffold** consuming contracts and the
+**playground build-fails CI proof** are **Story 13.6** (`epics-phase-2.md`).
+ADR addendum (2026-06-26).
