@@ -687,13 +687,18 @@ RSpec.describe "Story 13.2: SignedGlobalID record references (FR96)", :story_13_
       .to eq("Ruact::InvalidSignedGlobalIDError")
   end
 
-  it "does not leak a backtrace in production payload mode" do
+  it "does not leak dev-only error fields in production payload mode" do
     record = QueryRequestSpecSupport::RefPost.new("5")
     Ruact.configure { |c| c.dev_error_payload_enabled = false }
     get "/q/resolveRef", { "token" => "#{sign(record)}tamper" }
     expect(last_response.status).to eq(400)
     body = JSON.parse(last_response.body)
-    expect(body).not_to have_key("backtrace")
+    # production payload is exactly the four baseline keys — no split backtrace,
+    # suggestion, or validation/upload blocks (the real dev-only field names).
+    expect(body.keys).to contain_exactly(
+      "_ruact_server_action_error", "action_name", "error_class", "message"
+    )
+    expect(body.keys).not_to include("app_frames", "gem_frames", "suggestion")
   ensure
     Ruact.instance_variable_set(:@config, nil)
     Ruact.instance_variable_set(:@configured_at_least_once, false)

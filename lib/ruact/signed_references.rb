@@ -8,10 +8,10 @@ module Ruact
   # A controller that puts `@post.id` (or an attribute hash) into props hands
   # the client a *forgeable, unscoped, non-expiring* reference: swap `id: 7`
   # for `id: 8` and, if the action trusts `params[:id]` raw, it reaches a record
-  # it should not. {Ruact.signed_global_id} mints a `SignedGlobalID` instead —
+  # it should not. `Ruact.signed_global_id` mints a `SignedGlobalID` instead —
   # HMAC-signed by the app secret (tamper-proof), bound to a `for:` purpose
   # (scoped to one use-site), and `expires_in:`-bounded — and
-  # {Ruact.locate_signed} resolves it back, raising
+  # `Ruact.locate_signed` resolves it back, raising
   # {Ruact::InvalidSignedGlobalIDError} (→ a clean 4xx) on a tampered, expired,
   # or wrong-purpose token. This is the structural antidote to forged-reference
   # attacks, the inbound-safety counterpart to the serialize-only invariant

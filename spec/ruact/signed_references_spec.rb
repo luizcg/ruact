@@ -117,6 +117,17 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect { Ruact.signed_global_id("plain-string", for: :post_edit, expires_in: 1.hour) }
           .to raise_error(Ruact::Error, /GlobalID-locatable/)
       end
+
+      it "does NOT convert a valid token to a deleted record into InvalidSignedGlobalIDError " \
+         "(contract: a gone record is the host's normal finder concern, not a forged token)" do
+        token = Ruact.signed_global_id(record, for: :post_edit, expires_in: 1.hour)
+        SignedRefSpecPost.store.delete(record.id) # the row is gone, the token is still valid
+
+        # the underlying finder raises (KeyError here; ActiveRecord::RecordNotFound in a real app),
+        # NOT Ruact::InvalidSignedGlobalIDError — the primitive only owns signature/expiry/purpose.
+        expect { Ruact.locate_signed(token, for: :post_edit) }
+          .to raise_error(KeyError)
+      end
     end
 
     describe "configured defaults" do

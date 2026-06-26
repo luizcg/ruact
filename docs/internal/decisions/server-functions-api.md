@@ -1899,3 +1899,23 @@ first place. Decisions:
    (13.3 / FR98), no TS emission (13.4 / FR99), no component contract (13.5 /
    FR100), no playground (13.6). The Epic 10 scaffold generator does not exist
    yet — the docs worked-example is the canonical pattern it will later emit.
+
+#### 2026-06-26 — Story 13.2 review patch (dev⇄Codex)
+
+Three findings, all resolved before merge:
+- **(Patch)** `InvalidSignedGlobalIDError`'s YARD comment was inserted between
+  `UploadTooLargeError`'s doc block and its class, detaching the upload docs →
+  moved the new error + comment to sit right after `BadRequestError`.
+- **(Patch)** the production-mode no-leak spec asserted `not_to have_key("backtrace")`,
+  but the dev-only payload keys are `app_frames` / `gem_frames` / `suggestion` →
+  the spec now asserts the response is exactly the four baseline keys.
+- **(Decision, Luiz)** a **valid** token whose record was since **deleted** is
+  out of AC2's three rejection cases (tampered/expired/wrong-purpose, which never
+  reach the finder). **Resolved: do NOT normalize.** The finder's
+  `ActiveRecord::RecordNotFound` propagates as the host's ordinary not-found
+  concern (identical to a raw `Model.find`); the primitive owns only signature/
+  expiry/purpose verification. Documented on `InvalidSignedGlobalIDError` and
+  pinned by a spec.
+- YARD `{Ruact.signed_global_id}` / `{Ruact.locate_signed}` cross-references are
+  unresolvable (the methods are mixed onto `Ruact`'s singleton via `extend`), so
+  they are written as plain code spans, not doc links.

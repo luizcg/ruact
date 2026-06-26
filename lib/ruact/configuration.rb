@@ -98,7 +98,7 @@ module Ruact
     #
     # @!attribute [r] signed_global_id_default_purpose
     #   @return [Symbol, String, nil] Story 13.2 (FR96) — the default `for:`
-    #     purpose {Ruact.signed_global_id} / {Ruact.locate_signed} use when the
+    #     purpose `Ruact.signed_global_id` / `Ruact.locate_signed` use when the
     #     call omits `for:`. A purpose scopes a signed reference to one
     #     use-site so a token minted for editing a post cannot be replayed
     #     against, say, a delete endpoint. Default `nil` — when neither the
@@ -112,7 +112,7 @@ module Ruact
     #
     # @!attribute [r] signed_global_id_default_expires_in
     #   @return [ActiveSupport::Duration, nil] Story 13.2 (FR96) — the default
-    #     `expires_in:` {Ruact.signed_global_id} uses when the call omits
+    #     `expires_in:` `Ruact.signed_global_id` uses when the call omits
     #     `expires_in:`. Must be an `ActiveSupport::Duration` (e.g. `15.minutes`)
     #     — globalid calls `#from_now` on it. Default `nil` — when neither the
     #     call nor this config supplies an expiry, the helper raises
