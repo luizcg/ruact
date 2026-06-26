@@ -92,9 +92,29 @@ export function _makeQuery(descriptor: {
  * order-independent) share ONE in-flight request. Dedup is in-flight only:
  * once a request settles the shared entry is dropped, so a fresh mount
  * refetches (no TTL cache, no stale-while-revalidate).
+ *
+ * Story 13.4 — the `reference` parameter accepts ANY codegen-emitted accessor
+ * shape: the pre-13.4 declaration typed it `(params?: Record<string, unknown>)
+ * => Promise<unknown>`, which a now-TYPED query accessor (e.g. `(params: { term:
+ * string | number | boolean | null }) => Promise<unknown>`) is NOT assignable to
+ * under `strict` (contravariant param mismatch). Widening to `(...args: never[])
+ * => Promise<unknown>` accepts every typed/untyped/no-kwargs accessor without a
+ * cast and without a regression. `T` (the return type) stays the explicitly-
+ * specifiable return-typing generic — `useQuery<User[]>(searchUsers, { term })`.
+ *
+ * SCOPE BOUNDARY (intentional): the second `params` argument stays
+ * `Record<string, unknown>` — `useQuery` does NOT re-check the params SHAPE
+ * against the accessor. Per-param compile-time checking (missing-required,
+ * unknown-key, wrong-typed) is delivered at the ACCESSOR's own call site
+ * (`searchUsers({ term })`), which is where FR99 narrows the type. Inferring the
+ * params type here would require a second generic `P` that is impossible to make
+ * both inferred-from-the-accessor AND compatible with the explicit
+ * `useQuery<User[]>(…)` return-typing form (TS short-circuits inference of a
+ * defaulted trailing type parameter, and rejects a partial type-argument list
+ * for a non-defaulted one). This matches the pre-13.4 `params` contract exactly.
  */
 export function useQuery<T = unknown>(
-  reference: (params?: Record<string, unknown>) => Promise<unknown>,
+  reference: (...args: never[]) => Promise<unknown>,
   params?: Record<string, unknown>,
 ): { data: T | undefined; loading: boolean; error: unknown };
 

@@ -2010,3 +2010,72 @@ crashing. Bucket-2 does NOT redirect-to-convey-failure — errors ride the body.
 a Ruby-side collector + a reserved response key, no codegen / runtime change.
 The raised-`RecordInvalid` → 422 path (8.4) is unchanged and still covered by
 `server_rescue_request_spec.rb`.
+
+### 2026-06-26 — Story 13.4 — TS type emission for query `params` (FR99)
+
+FR99 closes the **parameter/accessor `any` gap**: before this story a query that
+declares keyword arguments emitted `(params: Record<string, unknown>) =>
+Promise<unknown>` — the client got no named keys, no autocomplete, no
+missing-required error, no unknown-key error. The codegen now narrows that
+`params` object to the query method's **actual declared keyword arguments**.
+Append-only addendum; no locked accessor shape changes (the import surface —
+`import { searchUsers, useQuery } from "@/.ruact/server-functions"` — is
+untouched; only the inline TS type annotation on the emitted `export const`
+gets narrower).
+
+**The reflection-honesty decision (the one real contract call) — RESOLVED (A).**
+Ruby is dynamically typed; `Method#parameters` returns **names + required/optional
+only** (`[[:keyreq, :term], [:key, :limit]]`) — never types, never default
+values. So the epic's illustrative `{ q: string; limit?: number }` (where
+`number` would come from `limit: 10`) is **not honestly reachable by pure
+reflection**. Decision (locked by Luiz): each param's **value type is the FR88
+wire-serializable union `string | number | boolean | null`** — the exact
+query-string contract the kwargs sanitizer (`query_dispatch.rb`) already enforces
+— while **keys and optionality are EXACT** (`:keyreq` → required prop, `:key` →
+optional prop). This kills the `Record<string, unknown>`/`any` gap truthfully:
+named keys (autocomplete), exact required-ness (**missing-required is a compile
+error**), and excess-property checking (**unknown-key is a compile error**).
+Rejected alternatives: (B) parsing default-value literals to infer scalar types —
+fragile, Ruby-version-dependent, a byte-stability hazard, and gives `term:` (no
+default) no type anyway; (C) an explicit param-type DSL (`param :limit, :integer`)
+for true scalar precision — a new feature surface, deferred to a future story.
+Per-param scalar narrowing is therefore explicitly **out of scope** here.
+
+**Action scope boundary — actions stay byte-identical.** Actions are Rails
+controller methods that read `params` dynamically; there is **no reflectable
+declared-input source** (the action entry hash carries no kwargs), and the action
+signature is already a sensible `FormData | Record<string, unknown>` intersection
+(not bare `any`). Inventing an action-input declaration DSL is a new feature
+surface, out of scope. Action accessors — and therefore every action-only and
+empty `server-functions.ts` module — are emitted **byte-for-byte unchanged**
+(regression-pinned in the parity suite). Return types stay `Promise<unknown>`
+(per-function return precision is Phase 3; `useQuery<T>` remains the return-typing
+lever).
+
+**`**keyrest` fails open.** A query declaring `**opts` keeps an open
+`Record<string, unknown>` (intersected with any named keys:
+`{ scope: <union> } & Record<string, unknown>`) so a legitimate dynamic key is
+never narrowed away. A `**keyrest`-only query is just `Record<string, unknown>` —
+byte-identical to its pre-13.4 `accepts_params: true` output.
+
+**Pipeline + dual-codegen byte parity reaffirmed.** Per-kwarg metadata is derived
+in `QuerySource.build_entry` (`params`: an ordered `[{ "name", "required" }]`
+array + a `params_rest` Boolean, alongside the retained `accepts_params` Boolean,
+now derived as "named keys present OR keyrest"), carried verbatim through the
+`Snapshot` JSON (string keys, declaration order → byte-stable), and consumed
+**byte-identically** by BOTH the Ruby `Codegen::V2.render_query_export` and the JS
+`renderQueryExportV2`. The cross-implementation parity test
+(`server-functions-codegen.test.mjs`) is extended with a typed-query fixture
+(required + optional + keyrest + keyrest-only) asserting `jsOutput ===
+rubyOutput`. The new `params` metadata is a **trust boundary** (it becomes TS
+object keys): both renderers reject a malformed/corrupted snapshot (non-Array
+`params`, a non-object element, an empty/multi-line param name, a non-Boolean
+`required`) rather than emit broken — or injected — TS, and any param name that
+is not a valid bare JS identifier is JSON-quoted. The AC6 proof is a `tsc
+--noEmit` type-level test fixture in `vendor/javascript/vite-plugin-ruact/`
+(`type-tests/`, `typescript` added as a build-only devDependency) asserting that
+missing-required / unknown-key / wrong-typed / wrong-arity all fail to compile and
+a clean call type-checks — wired into a new `js` CI job. The runtime `_makeQuery`
+declaration needed **no change**: the emitted typed-`params` `export const`
+assigns to `_makeQuery`'s declared return without a cast (proven by a second
+type-test fixture).

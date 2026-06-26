@@ -19,6 +19,16 @@ module Ruact
       def search_users(term:); end
     end
 
+    # Story 13.4 — kwarg shapes exercising the per-param metadata derivation:
+    # a `**keyrest` (anonymous + named), and a positional that must be ignored.
+    class ParamShapesQ
+      def with_rest(scope:, **opts); end
+
+      def rest_only(**opts); end
+
+      def positional_ignored(id, query:); end
+    end
+
     # Story 9.5 — query introspection: the drawn route table (filtered to the
     # generated query dispatch controllers) → v2 query entries. Pure: route set
     # and the query-class resolver are injected, so the derivation is testable
@@ -80,6 +90,47 @@ module Ruact
           by_id = entries.to_h { |e| [e["js_identifier"], e] }
           expect(by_id["categories"]["accepts_params"]).to be(false)
           expect(by_id["searchUsers"]["accepts_params"]).to be(true)
+        end
+
+        it "derives per-kwarg params metadata (name + required/optional, declaration order)", :story_13_4 do
+          rs = route_set([query_route("#{prefix}catalog_q", "search_users", "/q/searchUsers")])
+          entry = described_class.collect(rs, query_class_for: resolver("#{prefix}catalog_q" => CatalogQ)).first
+          expect(entry["params"]).to eq([
+                                          { "name" => "term", "required" => true },
+                                          { "name" => "limit", "required" => false }
+                                        ])
+          expect(entry["params_rest"]).to be(false)
+        end
+
+        it "emits empty params + accepts_params false for a no-kwargs query", :story_13_4 do
+          rs = route_set([query_route("#{prefix}catalog_q", "categories", "/q/categories")])
+          entry = described_class.collect(rs, query_class_for: resolver("#{prefix}catalog_q" => CatalogQ)).first
+          expect(entry["params"]).to eq([])
+          expect(entry["params_rest"]).to be(false)
+          expect(entry["accepts_params"]).to be(false)
+        end
+
+        it "flags params_rest for a `**keyrest` and still carries the named keys", :story_13_4 do
+          rs = route_set([query_route("#{prefix}params_q", "with_rest", "/q/withRest")])
+          entry = described_class.collect(rs, query_class_for: resolver("#{prefix}params_q" => ParamShapesQ)).first
+          expect(entry["params"]).to eq([{ "name" => "scope", "required" => true }])
+          expect(entry["params_rest"]).to be(true)
+          expect(entry["accepts_params"]).to be(true)
+        end
+
+        it "treats a `**keyrest`-only query as accepts_params (rest, no named keys)", :story_13_4 do
+          rs = route_set([query_route("#{prefix}params_q", "rest_only", "/q/restOnly")])
+          entry = described_class.collect(rs, query_class_for: resolver("#{prefix}params_q" => ParamShapesQ)).first
+          expect(entry["params"]).to eq([])
+          expect(entry["params_rest"]).to be(true)
+          expect(entry["accepts_params"]).to be(true)
+        end
+
+        it "ignores positional params (only kwargs are FR88 query params)", :story_13_4 do
+          rs = route_set([query_route("#{prefix}params_q", "positional_ignored", "/q/positionalIgnored")])
+          entry = described_class.collect(rs, query_class_for: resolver("#{prefix}params_q" => ParamShapesQ)).first
+          expect(entry["params"]).to eq([{ "name" => "query", "required" => true }])
+          expect(entry["params_rest"]).to be(false)
         end
 
         it "ignores non-query routes (controller not under the dispatch namespace)" do

@@ -92,7 +92,14 @@ module Ruact
           def render_query_export(entry)
             js_id = fetch(entry, "js_identifier")
             path = fetch(entry, "path")
-            signature = fetch(entry, "accepts_params") ? QUERY_PARAMS_SIGNATURE : QUERY_SIGNATURE
+            # Story 13.4 — the typed `params` signature (or the back-compat
+            # fallback) is built by {QueryParams}, kept separate so this
+            # singleton class stays within its size budget.
+            signature = QueryParams.signature(
+              params: fetch(entry, "params"),
+              params_rest: fetch(entry, "params_rest"),
+              accepts_params: fetch(entry, "accepts_params")
+            )
 
             descriptor = "{ path: #{JSON.dump(path)}, kind: \"query\" }"
             "export const #{js_id}: #{signature} =\n  _makeQuery(#{descriptor});\n"
@@ -122,6 +129,11 @@ module Ruact
             path = fetch(entry, "path")
             validate_path!(js_id, path)
             validate_segments!(js_id, path, fetch(entry, "segments"))
+            # Story 13.4 — the structured query `params` metadata is a trust
+            # boundary (it becomes TS object keys); {QueryParams} rejects a
+            # malformed/corrupted snapshot rather than emit injected — or
+            # silently over-widened — TS.
+            QueryParams.validate!(js_id, fetch(entry, "params"), fetch(entry, "params_rest")) if kind == "query"
             seen[js_id] = true
           end
 
@@ -209,3 +221,9 @@ module Ruact
     end
   end
 end
+
+# Story 13.4 — the typed query `params` signature builder + its trust-boundary
+# validation, kept in their own module so {V2}'s singleton class stays within
+# its size budget (same split rationale as V2 itself vs {Codegen}). Required
+# after V2 + the signature constants are defined; consumed by V2 above.
+require_relative "codegen_v2_query_params"

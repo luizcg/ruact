@@ -62,7 +62,24 @@ module Ruact
       # params) gets the param-accepting signature; one with no kwargs keeps
       # the bare {QUERY_SIGNATURE}. Queries are read-only (never reachable via
       # `<form action>`), so neither widens to the action intersection.
+      #
+      # Story 13.4 — {QUERY_PARAMS_SIGNATURE}'s open `Record<string, unknown>`
+      # is now the FALLBACK only: emitted for a pre-13.4 snapshot entry that
+      # carries the `accepts_params` boolean but no structured `params`, and for
+      # a `**keyrest`-only query (open by design). A query whose entry carries
+      # the structured `params` metadata gets a typed object literal built from
+      # the declared keys instead (see {V2.render_query_export}).
       QUERY_PARAMS_SIGNATURE = "(params: Record<string, unknown>) => Promise<unknown>"
+
+      # Story 13.4 — the VALUE type of every typed query param. `Method#parameters`
+      # exposes only names + required/optional (never types or default values),
+      # so per-param scalar precision is not reflection-honest; this is the exact
+      # FR88 query-string wire contract instead (the kwargs sanitizer in
+      # `query_dispatch.rb` accepts only these). Keys and optionality ARE exact,
+      # which is what kills the `Record<string, unknown>`/`any` gap (named keys,
+      # missing-required and unknown-key become compile errors). Per-param scalar
+      # narrowing is deferred to a future explicit param-type DSL.
+      QUERY_PARAM_VALUE_TYPE = "string | number | boolean | null"
 
       # Story 8.2 — fixed re-export appended AFTER the per-function block.
       # Emitted in BOTH branches (empty + populated) so

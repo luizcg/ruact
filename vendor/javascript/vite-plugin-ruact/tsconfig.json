@@ -1,0 +1,18 @@
+{
+  "//": "Story 13.4 — type-check ONLY the emitted-accessor type-test fixtures (AC6). `noEmit` + `strict`; resolves the runtime import to the bundled .d.ts so the emitted `_makeQuery` call shape is exercised. Run via `npm run typecheck`.",
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "exactOptionalPropertyTypes": false,
+    "types": [],
+    "baseUrl": ".",
+    "paths": {
+      "ruact/server-functions-runtime": ["../ruact-server-functions-runtime/index.d.ts"]
+    }
+  },
+  "include": ["type-tests/**/*.ts"]
+}
