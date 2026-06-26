@@ -58,6 +58,17 @@ module Ruact
   #     received_bytes: request.content_length,
   #     limit_bytes:    Ruact.config.max_upload_bytes
   #   )
+  # Story 13.2 (FR96) — raised by {Ruact.locate_signed} when a SignedGlobalID
+  # token fails verification: a tampered signature, an expired token, or a token
+  # scoped to a different `for:` purpose (`GlobalID::Locator.locate_signed`
+  # returns `nil`). Inherits from `Ruact::Error` so the Story 8.4
+  # `rescue_from StandardError` chain catches it cleanly; `__ruact_status_for`
+  # maps it to HTTP 400 (Bad Request) — a forged/expired reference is an
+  # invalid credential the client supplied, NOT a missing record. This keeps
+  # `ActiveRecord::RecordNotFound` from leaking and never reveals whether the
+  # target record exists (verification fails before any DB lookup).
+  class InvalidSignedGlobalIDError < Error; end
+
   class UploadTooLargeError < Error
     attr_reader :received_bytes, :limit_bytes
 

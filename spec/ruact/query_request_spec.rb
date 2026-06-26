@@ -22,6 +22,10 @@ require "action_view/railtie"
 
 require "spec_helper"
 require "rack/test"
+require "global_id"
+require "active_support/core_ext/integer/time"
+require "active_support/core_ext/numeric/time"
+require "active_support/message_verifier"
 
 require "ruact/controller"
 require "ruact/server"
@@ -183,6 +187,41 @@ module QueryRequestSpecSupport # rubocop:disable Style/OneClassPerFile
       { "opt" => opt }
     end
   end
+
+  # Story 13.2 (FR96) — a GlobalID-locatable record used to exercise the signed
+  # reference round-trip through the real host request cycle.
+  class RefPost
+    include GlobalID::Identification
+
+    attr_reader :id
+
+    def initialize(id)
+      @id = id.to_s
+      self.class.store[@id] = self
+    end
+
+    def self.store
+      @store ||= {}
+    end
+
+    def self.find(id)
+      store.fetch(id.to_s)
+    end
+  end
+
+  # Story 13.2 (FR96) — a public query (skips auth) that resolves a signed
+  # reference handed back from the client. A tampered/expired/wrong-purpose
+  # token raises Ruact::InvalidSignedGlobalIDError, which the Story 8.4
+  # structured-error chain renders as a clean 400 (no ActiveRecord::RecordNotFound
+  # leak, no raw-id trust).
+  class SignedRefQuery < ApplicationQuery
+    ruact_skip_before_action :require_login
+
+    def resolve_ref(token:)
+      record = Ruact.locate_signed(token, for: :spec_ref)
+      { "id" => record.id }
+    end
+  end
 end
 
 if defined?(ControllerRequestSpecSupport) &&
@@ -191,7 +230,8 @@ if defined?(ControllerRequestSpecSupport) &&
   ControllerRequestSpecSupport.app_class.routes.append do
     ruact_queries QueryRequestSpecSupport::CatalogQuery,
                   QueryRequestSpecSupport::PublicCatalogQuery,
-                  QueryRequestSpecSupport::SearchQuery
+                  QueryRequestSpecSupport::SearchQuery,
+                  QueryRequestSpecSupport::SignedRefQuery
   end
 end
 
@@ -594,5 +634,68 @@ RSpec.describe "Story 9.5: FR88 query kwargs sanitization", :story_9_5 do
       get "/q/nullable?opt=", {}, login_headers
       expect(JSON.parse(last_response.body)).to eq("opt" => "")
     end
+  end
+end
+
+# Story 13.2 (FR96) — SignedGlobalID references resolved through the REAL host
+# request cycle: a valid token round-trips; a tampered token surfaces as a clean
+# 400 via the Story 8.4 structured-error chain (no ActiveRecord::RecordNotFound
+# leak, no raw-id trust).
+RSpec.describe "Story 13.2: SignedGlobalID record references (FR96)", :story_13_2 do
+  include Rack::Test::Methods
+
+  let(:app_class) { ControllerRequestSpecSupport.app_class }
+  let(:app)       { app_class.instance }
+
+  before do
+    Rails.logger = Logger.new(IO::NULL)
+    ControllerRequestSpecSupport.boot!
+    # globalid signing context for the booted app (the 7.9 app sets
+    # secret_key_base but does not load the globalid railtie).
+    GlobalID.app = "ruact-test"
+    SignedGlobalID.verifier = ActiveSupport::MessageVerifier.new("a" * 64)
+  end
+
+  def sign(record, purpose: :spec_ref, expires_in: 1.hour)
+    Ruact.signed_global_id(record, for: purpose, expires_in: expires_in)
+  end
+
+  it "round-trips a valid token through the host chain (no auth needed — public query)" do
+    record = QueryRequestSpecSupport::RefPost.new("42")
+    get "/q/resolveRef", { "token" => sign(record) }
+    expect(last_response.status).to(eq(200), "body=#{last_response.body[0, 300]}")
+    expect(JSON.parse(last_response.body)).to eq("id" => "42")
+  end
+
+  it "rejects a tampered token as a clean 400 structured error (no RecordNotFound leak)" do
+    record = QueryRequestSpecSupport::RefPost.new("99")
+    get "/q/resolveRef", { "token" => "#{sign(record)}tamper" }
+
+    expect(last_response.status).to eq(400)
+    body = JSON.parse(last_response.body)
+    expect(body.fetch("_ruact_server_action_error")).to be(true)
+    expect(body.fetch("action_name")).to eq("resolve_ref")
+    expect(body.fetch("error_class")).to eq("Ruact::InvalidSignedGlobalIDError")
+    expect(last_response.body).not_to include("RecordNotFound")
+  end
+
+  it "rejects a wrong-purpose token as a clean 400" do
+    record = QueryRequestSpecSupport::RefPost.new("7")
+    get "/q/resolveRef", { "token" => sign(record, purpose: :other_purpose) }
+    expect(last_response.status).to eq(400)
+    expect(JSON.parse(last_response.body).fetch("error_class"))
+      .to eq("Ruact::InvalidSignedGlobalIDError")
+  end
+
+  it "does not leak a backtrace in production payload mode" do
+    record = QueryRequestSpecSupport::RefPost.new("5")
+    Ruact.configure { |c| c.dev_error_payload_enabled = false }
+    get "/q/resolveRef", { "token" => "#{sign(record)}tamper" }
+    expect(last_response.status).to eq(400)
+    body = JSON.parse(last_response.body)
+    expect(body).not_to have_key("backtrace")
+  ensure
+    Ruact.instance_variable_set(:@config, nil)
+    Ruact.instance_variable_set(:@configured_at_least_once, false)
   end
 end
