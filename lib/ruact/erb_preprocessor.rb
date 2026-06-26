@@ -47,7 +47,10 @@ module Ruact
     end
 
     def transform(source, identifier: nil, registry: :default)
-      registry = Ruact.manifest if registry == :default
+      # NOTE: +registry+ stays the +:default+ sentinel here. It is resolved to
+      # +Ruact.manifest+ LAZILY, only inside the component-tag block below — a
+      # source with no PascalCase tags must touch the registry not at all
+      # (AC2/AC6 fast-path invariant).
       # Step 1: transform <Suspense> paired tags into <ruact-suspense> HTML elements.
       # This runs before the general component regex so Suspense isn't treated as a component.
       result = source
@@ -71,6 +74,7 @@ module Ruact
         line           = result[0...match_start].count("\n") + 1
 
         begin
+          registry = Ruact.manifest if registry == :default # lazy — only when a tag exists
           pairs = parse_prop_pairs(attrs_string)
           validate_contract(registry, component_name, pairs.map(&:first),
                             at: { file: identifier, line: line, snippet: match.strip })

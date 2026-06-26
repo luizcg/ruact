@@ -109,6 +109,42 @@ describe("buildManifest — contract extraction (Story 13.5)", () => {
     expect(c).toEqual({ props: { a: "required", b: "optional" } });
   });
 
+  it("ignores braces inside comments and strings when balancing", () => {
+    const c = extractContract(
+      [
+        "export const __ruactContract = {",
+        "  // a stray brace in a comment { should not break balance",
+        '  props: { label: "required" }, // trailing }',
+        '  slots: ["a-}-slot"],',
+        "};",
+        "export const X = () => null;",
+      ].join("\n"),
+      "Commented.tsx"
+    );
+    expect(c).toEqual({
+      props: { label: "required" },
+      slots: { "a-}-slot": "optional" },
+    });
+  });
+
+  it("skips the contract for a multi-component file (warn) — cannot attribute it", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    writeComponent(
+      "Pair.tsx",
+      [
+        '"use client";',
+        'export const __ruactContract = { props: { x: "required" } };',
+        "export function Primary() { return null; }",
+        "export function Secondary() { return null; }",
+      ].join("\n")
+    );
+    const manifest = buildManifest(dir);
+    expect("contract" in manifest.Primary).toBe(false);
+    expect("contract" in manifest.Secondary).toBe(false);
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
   it("warns and skips a malformed declaration (unbalanced braces) → null", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const c = extractContract(

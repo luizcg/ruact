@@ -186,6 +186,14 @@ module Ruact
           expect(result).to eq("<div><p>plain</p></div>")
           expect(spy_registry).not_to have_received(:contract_for)
         end
+
+        # Codex review (Patch 2) — the DEFAULT registry (`Ruact.manifest`) must
+        # not even be read when the source has no component tags.
+        it "never reads Ruact.manifest for a no-tag source (default registry)" do
+          allow(Ruact).to receive(:manifest)
+          described_class.transform("<div><p>plain</p></div>")
+          expect(Ruact).not_to have_received(:manifest)
+        end
       end
 
       describe "slots (AC#5)" do

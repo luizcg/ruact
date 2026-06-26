@@ -2112,7 +2112,12 @@ pass, **NOT** `eval`) into an optional `contract` field on the manifest entry.
 A component without the export emits **no** `contract` field (byte-additive;
 every existing manifest + reader is unaffected). A malformed/partial declaration
 is **warned + skipped** in the plugin, so the Ruby side sees "no contract" and
-fails open. Rejected alternatives: **(B)** a Ruby-side DSL and **(C)** a JSON
+fails open. The brace-balancer that bounds the object literal is string- and
+comment-aware (a `{` inside a comment or string never throws off the balance).
+A single `__ruactContract` describes the file's **one** component — a file that
+exports more than one PascalCase component has the contract **warned + skipped**
+(it cannot be attributed), reaffirming the one-component-per-file convention;
+per-export contract syntax is deferred. Rejected alternatives: **(B)** a Ruby-side DSL and **(C)** a JSON
 sidecar both invent a parallel registry that drifts from the `.tsx` (the source
 of truth); **(D)** a full TS-AST `Props` parse is heavy, version-fragile, and
 over-delivers (preprocess-time validation needs names + required + slots, not

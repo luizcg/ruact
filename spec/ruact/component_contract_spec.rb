@@ -60,6 +60,24 @@ module Ruact
         open = contract.merge("passthrough" => true)
         expect { validate(%w[postId whatever], open) }.not_to raise_error
       end
+
+      # Codex review (Patch 1) — a typo OF a required prop (the required name is
+      # therefore "missing") must surface the did-you-mean, not the less-helpful
+      # "missing required" message. FR100's canonical postID/postId case.
+      it "prefers the did-you-mean when the only prop is a typo of a missing required prop" do
+        expect { validate(%w[postID], contract) }.to raise_error(ComponentContractError) do |e|
+          expect(e.message).to include("unknown prop")
+          expect(e.message).to include('did you mean "postId"?')
+          expect(e.message).not_to include("missing required")
+        end
+      end
+
+      it "still reports the missing required prop when the unknown prop is NOT a near typo" do
+        expect { validate(%w[zzzzzzzz], contract) }.to raise_error(ComponentContractError) do |e|
+          expect(e.message).to include("missing required prop")
+          expect(e.message).to include("postId")
+        end
+      end
     end
 
     describe "slots (AC#5)" do

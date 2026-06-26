@@ -123,7 +123,22 @@ export function buildManifest(componentsDir) {
 
     const exports = extractExportNames(content);
     const relUrl = "/" + path.relative(componentsDir, file);
-    const contract = extractContract(content, file);
+    let contract = extractContract(content, file);
+
+    // Story 13.5 — a single `__ruactContract` cannot say WHICH component it
+    // describes, so it only applies when the file has exactly one component
+    // export (the documented one-component-per-file convention). A multi-export
+    // file would otherwise validate every export against the same contract —
+    // warn + skip rather than guess.
+    if (contract && exports.length > 1) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[vite-plugin-ruact] ignoring __ruactContract in ${file}: a contract ` +
+          `applies to a single component, but this file exports ${exports.length} ` +
+          `(${exports.join(", ")}). Split them into one component per file.`
+      );
+      contract = null;
+    }
 
     for (const name of exports) {
       manifest[name] = {
@@ -253,17 +268,59 @@ function extractBlock(objText, key, open, close) {
 
 // Given a string and the index of an opening delimiter, return the inner text
 // up to (excluding) the matching close delimiter, or null when unbalanced.
+// String literals ('...', "...", `...`) and comments (// and / * ... * /) are
+// skipped so a brace inside a comment or string never throws off the balance.
 function extractBalanced(str, openIndex, open, close) {
   let depth = 0;
-  for (let i = openIndex; i < str.length; i++) {
+  let i = openIndex;
+  while (i < str.length) {
     const ch = str[i];
-    if (ch === open) depth++;
-    else if (ch === close) {
+    const next = str[i + 1];
+
+    if (ch === "/" && next === "/") {
+      const nl = str.indexOf("\n", i);
+      if (nl === -1) return null;
+      i = nl + 1;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      const end = str.indexOf("*/", i + 2);
+      if (end === -1) return null;
+      i = end + 2;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      i = skipString(str, i);
+      if (i === -1) return null;
+      continue;
+    }
+
+    if (ch === open) {
+      depth++;
+    } else if (ch === close) {
       depth--;
       if (depth === 0) return str.slice(openIndex + 1, i);
     }
+    i++;
   }
   return null;
+}
+
+// Skip a JS string/template literal starting at the opening quote at +i+.
+// Returns the index just past the closing quote, or -1 if unterminated.
+function skipString(str, i) {
+  const quote = str[i];
+  i++;
+  while (i < str.length) {
+    const ch = str[i];
+    if (ch === "\\") {
+      i += 2;
+      continue;
+    }
+    if (ch === quote) return i + 1;
+    i++;
+  }
+  return -1;
 }
 
 function warnSkip(file) {

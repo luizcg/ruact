@@ -45,10 +45,17 @@ module Ruact
       slots = normalize(contract["slots"])
       given = Array(prop_names).map(&:to_s)
       where = { component: component_name, file: at[:file], line: at[:line], snippet: at[:snippet] }
+      unknown = contract["passthrough"] == true ? [] : (given - (props.keys + slots.keys))
 
+      # Priority order so the highest-signal message wins. A near-miss typo is
+      # reported FIRST even when it leaves a required prop "missing" — e.g.
+      # `<LikeButton postID={1} />` (postID typo of the required postId) should
+      # say "unknown prop \"postID\" — did you mean \"postId\"?", not the less
+      # helpful "missing required prop \"postId\"" (FR100's canonical typo case).
+      check_typo(unknown, props.keys + slots.keys, where: where)
       check_missing_required(props, given, kind: "prop", where: where)
       check_missing_required(slots, given, kind: "slot", where: where)
-      check_unknown(props, slots, given, passthrough: contract["passthrough"] == true, where: where)
+      check_unknown(unknown.first, where: where) if unknown.any?
     end
 
     # Normalize a contract sub-section into a { "name" => "required"|"optional" }
@@ -63,6 +70,18 @@ module Ruact
       end
     end
 
+    # An unknown prop whose closest declared match is within edit distance is a
+    # likely typo — report it (with the suggestion) ahead of any missing-required
+    # message. Returns/raises on the first such prop; a no-op when none qualify.
+    def self.check_typo(unknown, declared, where:)
+      unknown.each do |name|
+        suggestion = StringDistance.closest_match(name, declared)
+        next unless suggestion
+
+        raise_error("got unknown prop #{name.inspect} — did you mean #{suggestion.inspect}?", where)
+      end
+    end
+
     def self.check_missing_required(spec, given, kind:, where:)
       required = spec.select { |_, requiredness| requiredness == "required" }.keys
       missing = required - given
@@ -72,17 +91,8 @@ module Ruact
       raise_error("is missing required #{kind} #{name.inspect} — add the required #{kind} #{name.inspect}", where)
     end
 
-    def self.check_unknown(props, slots, given, passthrough:, where:)
-      return if passthrough
-
-      declared = props.keys + slots.keys
-      unknown = given - declared
-      return if unknown.empty?
-
-      name = unknown.first
-      suggestion = StringDistance.closest_match(name, declared)
-      hint = suggestion ? " — did you mean #{suggestion.inspect}?" : ""
-      raise_error("got unknown prop #{name.inspect}#{hint}", where)
+    def self.check_unknown(name, where:)
+      raise_error("got unknown prop #{name.inspect}", where)
     end
 
     # Build + raise the {Ruact::ComponentContractError} with the full message:
@@ -100,6 +110,6 @@ module Ruact
       raise ComponentContractError, message
     end
 
-    private_class_method :normalize, :check_missing_required, :check_unknown, :raise_error
+    private_class_method :normalize, :check_typo, :check_missing_required, :check_unknown, :raise_error
   end
 end
