@@ -113,6 +113,22 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(Ruact.locate_signed(token, for: :post_edit).id).to eq("7")
       end
 
+      it "rejects expires_in: false (globalid would silently treat it as non-expiring)" do
+        expect { Ruact.signed_global_id(record, for: :post_edit, expires_in: false) }
+          .to raise_error(Ruact::Error, /expiry must be/)
+      end
+
+      it "rejects a bare Integer expires_in (globalid would crash on #from_now)" do
+        expect { Ruact.signed_global_id(record, for: :post_edit, expires_in: 3600) }
+          .to raise_error(Ruact::Error, /expiry must be/)
+      end
+
+      it "rejects a configured default of false (the second silent non-expiring path)" do
+        Ruact.configure { |c| c.signed_global_id_default_expires_in = false }
+        expect { Ruact.signed_global_id(record, for: :post_edit) }
+          .to raise_error(Ruact::Error, /expiry must be/)
+      end
+
       it "raises a clear error for a non-GlobalID-locatable value" do
         expect { Ruact.signed_global_id("plain-string", for: :post_edit, expires_in: 1.hour) }
           .to raise_error(Ruact::Error, /GlobalID-locatable/)

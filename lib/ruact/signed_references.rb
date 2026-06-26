@@ -129,18 +129,32 @@ module Ruact
     # Expiry distinguishes omission from a deliberate `nil`. An explicit value
     # (including `nil` → non-expiring) is honored; pure omission falls to the
     # configured default and, if that too is unset, raises — never a silent
-    # non-expiring token.
+    # non-expiring token. The resolved value is then type-checked: only `nil`
+    # (the one reviewed non-expiring escape hatch) or an `ActiveSupport::Duration`
+    # (anything responding to `#from_now`, which is what globalid calls) is
+    # allowed — so a stray `false` (which globalid would silently treat as
+    # non-expiring) or a bare Integer (which globalid would crash on) is rejected
+    # loudly, closing the second silent non-expiring path.
     def __ruact_resolve_expiry(arg)
-      return arg unless arg.equal?(UNSET)
+      omitted = arg.equal?(UNSET)
+      expiry  = omitted ? Ruact.config.signed_global_id_default_expires_in : arg
 
-      configured = Ruact.config.signed_global_id_default_expires_in
-      return configured unless configured.nil?
+      if omitted && expiry.nil?
+        raise Ruact::Error,
+              "Ruact.signed_global_id requires an expiry: pass `expires_in:` (an " \
+              "ActiveSupport::Duration like `15.minutes`, or an explicit `nil` to deliberately mint a " \
+              "non-expiring token) or set `Ruact.config.signed_global_id_default_expires_in`. " \
+              "Refusing to silently mint a non-expiring reference."
+      end
 
-      raise Ruact::Error,
-            "Ruact.signed_global_id requires an expiry: pass `expires_in:` (an " \
-            "ActiveSupport::Duration like `15.minutes`, or an explicit `nil` to deliberately mint a " \
-            "non-expiring token) or set `Ruact.config.signed_global_id_default_expires_in`. " \
-            "Refusing to silently mint a non-expiring reference."
+      unless expiry.nil? || expiry.respond_to?(:from_now)
+        raise Ruact::Error,
+              "Ruact signed-reference expiry must be an ActiveSupport::Duration (e.g. `15.minutes`) " \
+              "or an explicit `nil` (a deliberate non-expiring token); got #{expiry.inspect}. " \
+              "A bare Integer or `false` is rejected to avoid an accidental non-expiring token."
+      end
+
+      expiry
     end
   end
 

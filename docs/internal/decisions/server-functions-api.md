@@ -1919,3 +1919,16 @@ Three findings, all resolved before merge:
 - YARD `{Ruact.signed_global_id}` / `{Ruact.locate_signed}` cross-references are
   unresolvable (the methods are mixed onto `Ruact`'s singleton via `extend`), so
   they are written as plain code spans, not doc links.
+
+#### 2026-06-26 — Story 13.2 review patch R2 (dev⇄Codex)
+
+One new finding (all three layers, same root): `expires_in: false` — and a
+configured default of `false` — silently minted a **non-expiring** token, because
+globalid treats a falsy `expires_in` as "no expiry". That was a second silent
+path around the "only an explicit `nil` is the reviewed non-expiring choice"
+contract. **Fixed:** `__ruact_resolve_expiry` now type-checks the resolved value
+— only `nil` or an `ActiveSupport::Duration` (anything responding to `#from_now`,
+what globalid actually calls) is allowed; `false`, a bare Integer, or any other
+type raises `Ruact::Error` loudly (closing both the call-arg and the configured-
+default path). Bonus: a bare Integer now gets a clear message instead of
+globalid's cryptic `NoMethodError: from_now`.
