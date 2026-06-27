@@ -297,13 +297,14 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
 
     it "matches case-insensitively over string/text columns only (AC5)", :aggregate_failures do
       # string (title) + text (body) are searchable; boolean/integer are not
-      expect(query).to include("LOWER(title) LIKE :needle OR LOWER(body) LIKE :needle")
+      expect(query).to include("LOWER(title) LIKE :needle ESCAPE '!' OR LOWER(body) LIKE :needle ESCAPE '!'")
       expect(query).not_to include("LOWER(published)")
       expect(query).not_to include("LOWER(views)")
     end
 
-    it "escapes LIKE wildcards in user input via sanitize_sql_like and binds the value", :aggregate_failures do
-      expect(query).to include("Post.sanitize_sql_like(term.downcase)")
+    it "escapes LIKE wildcards in user input via sanitize_sql_like with an explicit ESCAPE", :aggregate_failures do
+      expect(query).to include(%(Post.sanitize_sql_like(term.downcase, "!")))
+      expect(query).to include("ESCAPE '!'")
       expect(query).to include("needle: needle")
     end
 

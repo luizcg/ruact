@@ -25,11 +25,13 @@ class <%= query_class_name %> < ApplicationQuery
       if term.empty?
         <%= class_name %>.all
       else
-        # `sanitize_sql_like` escapes user-supplied `%`/`_` so they match
-        # literally; the value is bound (`:needle`), never interpolated into SQL.
-        needle = "%#{<%= class_name %>.sanitize_sql_like(term.downcase)}%"
+        # `sanitize_sql_like` escapes user-supplied `%`/`_` (with `!`) so they
+        # match literally; the value is bound (`:needle`), never interpolated.
+        # `ESCAPE '!'` is explicit so the escape is honored on SQLite too (it has
+        # no default LIKE escape char, unlike Postgres/MySQL).
+        needle = "%#{<%= class_name %>.sanitize_sql_like(term.downcase, "!")}%"
         <%= class_name %>.where(
-          "<%= searchable_attributes.map { |attr| "LOWER(#{attr.column_name}) LIKE :needle" }.join(' OR ') %>",
+          "<%= searchable_attributes.map { |attr| "LOWER(#{attr.column_name}) LIKE :needle ESCAPE '!'" }.join(' OR ') %>",
           needle: needle
         )
       end
