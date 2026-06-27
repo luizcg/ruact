@@ -4,13 +4,12 @@ import { createFromFlightPayload } from './flight-client.js';
 import { setupRouter, teardownRouter } from './ruact-router.js';
 
 // MODULE_REGISTRY maps react-client-manifest "id" values to component exports.
-// Add each "use client" component here as you create it.
-// Keys must match the "id" field in public/react-client-manifest.json.
-//
-// Example:
-//   import { MyButton } from './components/MyButton.jsx';
-//   const MODULE_REGISTRY = { '/MyButton.jsx': { MyButton } };
-const MODULE_REGISTRY = {};
+// It is auto-derived by vite-plugin-ruact from the SAME scan that emits
+// public/react-client-manifest.json — every "use client" component under
+// app/javascript/components/ is registered automatically, so adding or removing
+// one needs ZERO edits here. (To opt a component out, place it outside
+// app/javascript/components/ or drop its "use client" directive.)
+import MODULE_REGISTRY from 'virtual:ruact/registry';
 
 // ---------------------------------------------------------------------------
 // Boot
