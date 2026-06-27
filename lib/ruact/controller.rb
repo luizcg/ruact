@@ -29,15 +29,33 @@ module Ruact
       Ruact.manifest
     end
 
-    # Only activate RSC rendering for HTML-like requests (AC FR26).
-    # JSON, XML, and other formats bypass RSC entirely so respond_to blocks
-    # and explicit render calls work without interference.
+    # Only activate RSC rendering when the matching .html.erb template exists AND
+    # the client will accept an HTML response (AC FR26; Story 10.0).
+    # `request.format.html?` is false for a `*/*` wildcard (curl/bots/
+    # health-checks), so checking it alone routed those requests through `super`,
+    # which compiled+rendered the `.html.erb` outside a `ruact_render` flow and
+    # 500'd with "__ruact_component__ called outside a ruact_render flow".
+    # Checking HTML acceptability instead serves `*/*` the same HTML shell a
+    # browser gets. Concrete non-HTML formats (application/json, application/xml)
+    # carry no html/wildcard accept → still bypass to `super` so respond_to
+    # blocks and explicit render calls work without interference.
     def default_render
-      if ruact_template_exists? && (request.format.html? || ruact_request?)
+      if ruact_template_exists? && (ruact_request? || ruact_html_acceptable?)
         ruact_render
       else
         super
       end
+    end
+
+    # True when the client will accept an HTML response: an absent Accept (Rails
+    # defaults to HTML) or any acceptable type that is HTML or the `*/*` wildcard.
+    # `Mime::ALL.html?` is false, so the explicit `== Mime::ALL` check is required
+    # to recognize the wildcard (`*/*`) alongside concrete `text/html`. A nil
+    # entry (from an empty/unparseable Accept token) is treated as "accept
+    # anything" so a blank Accept degrades to HTML rather than raising.
+    def ruact_html_acceptable?
+      accepts = request.accepts
+      accepts.blank? || accepts.any? { |type| type.nil? || type == Mime::ALL || type.html? }
     end
 
     # Render the RSC view for the current action using ActionView's full pipeline.

@@ -19,6 +19,7 @@ require "spec_helper"
 require "rack/test"
 require "tmpdir"
 require "fileutils"
+require "pathname"
 require "active_model"
 
 # Ruact::Controller is normally loaded by the Railtie's `ruact.load_controller`
@@ -35,6 +36,27 @@ module ControllerRequestSpecSupport
 
     def app_class
       @app_class ||= build_app_class
+    end
+
+    # Story 10.0 — a writable on-disk app root so an implicit-`default_render`
+    # controller's conventional template (`Rails.root/app/views/<ctrl>/<action>`)
+    # exists. Unlike the `append_view_path` demo controllers (which call
+    # `ruact_render` directly), the implicit path is what `ruact_template_exists?`
+    # probes — the bug under test lives in `default_render`, never reached when a
+    # template is only on an appended path. Memoized so `config.root` and every
+    # `write_view` call share one directory.
+    def app_root
+      @app_root ||= Pathname.new(Dir.mktmpdir("ruact-story-10-0-root"))
+    end
+
+    # Story 10.0 — write a conventional template under the app root so Rails'
+    # default view path picks it up and `ruact_template_exists?` returns true.
+    # Called at file-load time (before `initialize!`) so the `app/views` dir
+    # exists when Rails computes `paths["app/views"].existent`.
+    def write_view(controller_path, action, erb)
+      view_dir = File.join(app_root, "app", "views", controller_path)
+      FileUtils.mkdir_p(view_dir)
+      File.write(File.join(view_dir, "#{action}.html.erb"), erb)
     end
 
     def boot!
@@ -69,7 +91,11 @@ module ControllerRequestSpecSupport
     private
 
     def build_app_class
+      app_root_path = app_root
       Class.new(Rails::Application) do
+        # Story 10.0 — a real on-disk root so the implicit-render controller's
+        # conventional `app/views` template is discoverable by `default_render`.
+        config.root                              = app_root_path
         config.eager_load                        = false
         config.consider_all_requests_local       = true
         config.action_controller.perform_caching = false
@@ -81,6 +107,10 @@ module ControllerRequestSpecSupport
 
         routes.append do
           get "/demo/show", to: "controller_request_spec_support/demo#show"
+          # Story 10.0 — implicit-`default_render` page action (empty body), backed
+          # by a conventional `Rails.root/app/views` template, for the non-HTML
+          # Accept graceful-degradation matrix.
+          get "/implicit-demo/show", to: "controller_request_spec_support/implicit_demo#show"
           # Story 13.3 (FR98) — Bucket-1 redirect-back round-trip routes.
           get  "/errors-demo/new",          to: "controller_request_spec_support/errors_demo#new"
           post "/errors-demo/create",       to: "controller_request_spec_support/errors_demo#create"
@@ -144,7 +174,30 @@ module ControllerRequestSpecSupport
       ruact_render
     end
   end
+
+  # Story 10.0 — an implicit-`default_render` page controller: an EMPTY GET
+  # action (no `render`/`respond_to`), backed by a CONVENTIONAL template at
+  # `Rails.root/app/views/.../show.html.erb` (written via `write_view` below).
+  # This is the exact scaffold shape (ivar-only GET) whose `*/*` request 500'd
+  # pre-10.0. No `append_view_path` — the template must live on the default path
+  # that `ruact_template_exists?` probes for the bug to be reachable.
+  class ImplicitDemoController < ActionController::Base
+    include Ruact::Controller
+
+    def show; end
+  end
 end
+
+# Story 10.0 — write the implicit-render template at file-load time (before the
+# app's `initialize!` in `boot!`) so the `app/views` dir exists when Rails
+# computes its view paths.
+ControllerRequestSpecSupport.write_view(
+  "controller_request_spec_support/implicit_demo", "show", <<~ERB
+    <div>
+      <DemoButton label={"hello"} />
+    </div>
+  ERB
+)
 
 # Reset Rails.application so this spec can boot its own minimal app even if a
 # prior spec ran a different Rails::Application subclass (the constant is
@@ -169,6 +222,13 @@ module Ruact # rubocop:disable Style/OneClassPerFile
       # real logger that survives the example lifecycle.
       Rails.logger = Logger.new(IO::NULL)
       ControllerRequestSpecSupport.boot!
+      # Story 10.0 — pin Rails.root to the booted app root. The Rails.root stub
+      # (spec/support/rails_stub.rb) is a writable singleton ivar; doctor_spec
+      # sets `Rails.root = <its tmpdir>` and never clears it, so in full-suite
+      # ordering a leftover root would make `ruact_template_exists?` (which
+      # probes `Rails.root/app/views`) miss the implicit-render template → super
+      # → the very 500 this story closes. Re-pinning per example is order-proof.
+      Rails.root = ControllerRequestSpecSupport.app_root
       # Re-prime Ruact.config after spec_helper's per-example reset wiped it.
       Ruact.configure do |c|
         c.manifest_path = ControllerRequestSpecSupport.manifest_path
@@ -289,6 +349,79 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         # flash is swept after the first read; the next render is clean.
         get "/errors-demo/new", {}, flight_headers
         expect(last_response.body).not_to include("Title can't be blank")
+      end
+    end
+
+    # Story 10.0 — implicit `default_render` must degrade gracefully on non-HTML
+    # Accept. Exercised against an ivar-only GET page action (empty body) whose
+    # conventional template exists, so the request traverses `default_render`'s
+    # activation predicate (NOT a hand-written `ruact_render` like demo#show).
+    describe "Story 10.0: default_render graceful degradation on non-HTML Accept", :story_10_0 do
+      it "GET with Accept: */* renders the HTML shell (was a 500 pre-10.0) (AC1)" do
+        # RED pre-fix: `*/*` → format.html? false, ruact_request? false → super →
+        # Rails renders the .html.erb outside a ruact_render flow → raises
+        # "__ruact_component__ called outside a ruact_render flow".
+        get "/implicit-demo/show", {}, { "HTTP_ACCEPT" => "*/*" }
+        expect(last_response.status).to(eq(200),
+                                        "expected 200, got #{last_response.status} body=#{last_response.body[0, 400]}")
+        expect(last_response.headers["Content-Type"]).to include("text/html")
+        expect(last_response.body).to include("DemoButton")
+        expect(last_response.body).not_to include("__ruact_component__ called outside a ruact_render flow")
+      end
+
+      it "GET with an empty Accept header (defaults to HTML) renders the HTML shell (AC1)" do
+        # An empty Accept token parses to `[nil]` (not blank, not a concrete
+        # type) — it must degrade to the HTML shell, never raise NoMethodError.
+        get "/implicit-demo/show", {}, { "HTTP_ACCEPT" => "" }
+        expect(last_response.status).to eq(200)
+        expect(last_response.headers["Content-Type"]).to include("text/html")
+        expect(last_response.body).to include("DemoButton")
+      end
+
+      it "GET with Accept: text/html renders the same HTML shell as */* (AC2)" do
+        # AC2: the explicit text/html path is unchanged and the */* path now
+        # yields the SAME shell. Normalize the per-request CSRF token (the only
+        # request-varying bytes) before comparing.
+        strip_csrf = ->(body) { body.gsub(/content="[^"]+"/, 'content="CSRF"') }
+
+        get "/implicit-demo/show", {}, { "HTTP_ACCEPT" => "text/html" }
+        html_response = last_response.body
+        expect(last_response.status).to eq(200)
+        expect(last_response.headers["Content-Type"]).to include("text/html")
+        expect(html_response).to include("DemoButton")
+
+        get "/implicit-demo/show", {}, { "HTTP_ACCEPT" => "*/*" }
+        expect(strip_csrf.call(last_response.body)).to eq(strip_csrf.call(html_response))
+      end
+
+      it "GET with Accept: text/x-component returns a raw Flight payload (AC3)" do
+        get "/implicit-demo/show", {}, { "HTTP_ACCEPT" => "text/x-component" }
+        expect(last_response.status).to eq(200)
+        expect(last_response.headers["Content-Type"]).to include("text/x-component")
+        expect(last_response.body).to match(%r{\h+:I\[.*/DemoButton\.jsx})
+      end
+
+      it "GET with the Ruact-Request: 1 header returns a Flight payload (AC3)" do
+        get "/implicit-demo/show", {}, { "HTTP_RUACT_REQUEST" => "1" }
+        expect(last_response.status).to eq(200)
+        expect(last_response.headers["Content-Type"]).to include("text/x-component")
+      end
+
+      it "GET with concrete Accept: application/json bypasses RSC to super (AC4)" do
+        # The concrete non-HTML format carries no html/wildcard accept, so
+        # `default_render` must fall through to `super` (Rails default rendering).
+        # With no JSON template and no respond_to, Rails raises an UnknownFormat /
+        # MissingTemplate — NOT the ruact outside-flow 500. We only assert it is
+        # NOT the ruact bug; Rails' exact choice of error is its own concern.
+        error = nil
+        begin
+          get "/implicit-demo/show", {}, { "HTTP_ACCEPT" => "application/json" }
+        rescue StandardError => e
+          error = e
+        end
+        expect(error).not_to be_nil
+        expect(error.message).not_to include("__ruact_component__ called outside a ruact_render flow")
+        expect(error).to be_a(ActionController::ActionControllerError).or(be_a(ActionView::MissingTemplate))
       end
     end
   end
