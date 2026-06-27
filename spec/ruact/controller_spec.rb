@@ -30,10 +30,12 @@ module Ruact
       end
     end
 
-    # Minimal test double — `headers` + `format` needed for the methods under test.
-    # `format` must be a public struct member (not Kernel#format) so that
-    # verify_partial_doubles can stub it in #default_render tests.
-    let(:fake_request) { Struct.new(:headers, :format).new({}, nil) }
+    # Minimal test double — `headers`, `format`, and `accepts` needed for the
+    # methods under test. `format` must be a public struct member (not
+    # Kernel#format) so that verify_partial_doubles can stub it. Story 10.0:
+    # `#default_render` now keys off `request.accepts` (HTML acceptability), so
+    # `accepts` is a settable member too.
+    let(:fake_request) { Struct.new(:headers, :format, :accepts).new({}, nil, []) }
     let(:controller)   { test_class.new(fake_request) }
 
     describe "#ruact_manifest" do
@@ -71,30 +73,41 @@ module Ruact
     end
 
     describe "#default_render" do
-      let(:html_format) { Class.new { def html? = true }.new }
-      let(:json_format) { Class.new { def html? = false }.new }
-
+      # Story 10.0 — the activation predicate keys off HTML *acceptability*
+      # (`request.accepts`), not `request.format.html?`. `request.format.html?`
+      # is false for a `*/*` wildcard, which 500'd those requests pre-10.0.
       before do
         allow(controller).to receive(:ruact_template_exists?).and_return(true)
         allow(controller).to receive(:ruact_render)
       end
 
-      it "calls ruact_render when format is HTML and template exists (AC#1)" do
-        allow(fake_request).to receive(:format).and_return(html_format)
+      it "calls ruact_render when the client accepts text/html and template exists (AC#1)" do
+        fake_request.accepts = [Mime[:html]]
         controller.send(:default_render)
         expect(controller).to have_received(:ruact_render)
       end
 
-      it "calls ruact_render for RSC requests (text/x-component) even without html? (AC#1)" do
-        allow(fake_request).to receive(:format).and_return(json_format)
+      it "calls ruact_render for a */* wildcard Accept — Mime::ALL (Story 10.0 AC#1)" do
+        fake_request.accepts = [Mime::ALL]
+        controller.send(:default_render)
+        expect(controller).to have_received(:ruact_render)
+      end
+
+      it "calls ruact_render when Accept is blank (defaults to HTML) (Story 10.0 AC#1)" do
+        fake_request.accepts = []
+        controller.send(:default_render)
+        expect(controller).to have_received(:ruact_render)
+      end
+
+      it "calls ruact_render for RSC requests (text/x-component) even when HTML is unacceptable (AC#1)" do
+        fake_request.accepts = [Mime[:json]]
         fake_request.headers["Ruact-Request"] = "1"
         controller.send(:default_render)
         expect(controller).to have_received(:ruact_render)
       end
 
-      it "does NOT call ruact_render when format is not HTML and not RSC (AC#5, AC#6 — FR26)" do
-        allow(fake_request).to receive(:format).and_return(json_format)
-        allow(controller).to receive(:ruact_render)
+      it "does NOT call ruact_render for a concrete non-HTML Accept that is not RSC (AC#4 — FR26)" do
+        fake_request.accepts = [Mime[:json]]
         begin
           controller.send(:default_render)
         rescue StandardError
@@ -105,7 +118,7 @@ module Ruact
 
       it "does NOT call ruact_render when no template exists" do
         allow(controller).to receive(:ruact_template_exists?).and_return(false)
-        allow(fake_request).to receive(:format).and_return(html_format)
+        fake_request.accepts = [Mime[:html]]
         begin
           controller.send(:default_render)
         rescue StandardError

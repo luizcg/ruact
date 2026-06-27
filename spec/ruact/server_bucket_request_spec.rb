@@ -186,7 +186,30 @@ module ServerBucketSpecSupport
       render json: { token: form_authenticity_token }
     end
   end
+
+  # Story 10.0 (AC5) — the scaffold's resource-controller shape: includes BOTH
+  # Ruact::Controller and Ruact::Server (ApplicationController contributes
+  # Controller; the resource controller adds Server). An ivar-only GET page
+  # action (implicit `default_render`) backed by a conventional template must
+  # flow Server#default_render → super (GET is never a function call) → the
+  # now-fixed Controller#default_render → HTML shell, NOT a 500.
+  class ServerImplicitController < ActionController::Base
+    include Ruact::Controller
+    include Ruact::Server
+
+    def show; end
+  end
 end
+
+# Story 10.0 (AC5) — conventional template under the shared app root so the
+# Server-including controller's implicit GET reaches Controller#default_render.
+ControllerRequestSpecSupport.write_view(
+  "server_bucket_spec_support/server_implicit", "show", <<~ERB
+    <div>
+      <DemoButton label={"hi"} />
+    </div>
+  ERB
+)
 
 if defined?(ControllerRequestSpecSupport) &&
    !ControllerRequestSpecSupport.instance_variable_get(:@__ruact_server_bucket_routes_appended)
@@ -207,6 +230,8 @@ if defined?(ControllerRequestSpecSupport) &&
     post "/bucket/dual_redirecting", to: "server_bucket_spec_support/bucket_dual#redirecting"
     post "/bucket/protected", to: "server_bucket_spec_support/bucket_forgery#create_protected"
     get  "/bucket/csrf_token", to: "server_bucket_spec_support/bucket_forgery#csrf_token"
+    # Story 10.0 (AC5) — Server-including controller's implicit GET page action.
+    get  "/server-implicit/show", to: "server_bucket_spec_support/server_implicit#show"
   end
 end
 
@@ -222,6 +247,10 @@ RSpec.describe "Story 9.2: Ruact::Server dual-bucket response negotiation", :sto
   before do
     Rails.logger = Logger.new(IO::NULL)
     ControllerRequestSpecSupport.boot!
+    # Story 10.0 (AC5) — pin Rails.root so the Server-path implicit-render
+    # template (`Rails.root/app/views`) is found regardless of full-suite
+    # ordering leftovers (see controller_request_spec.rb for the rationale).
+    Rails.root = ControllerRequestSpecSupport.app_root
   end
 
   def reset_config
@@ -441,5 +470,25 @@ RSpec.describe "Story 9.2: Ruact::Server dual-bucket response negotiation", :sto
     # renders the structured 422 error payload — proven (unchanged) by
     # server_rescue_request_spec.rb's `record_invalid` example. 13.3 is the
     # NON-raised 200 path above; the two contracts stay distinct.
+  end
+
+  # Story 10.0 (AC5) — the Server-path inherits the default_render graceful
+  # degradation fix. A GET is never a function call, so Server#default_render
+  # delegates to super → the fixed Controller#default_render.
+  describe "Story 10.0: Server path inherits non-HTML Accept graceful degradation (AC5)", :story_10_0 do
+    it "GET with Accept: */* returns the HTML shell, not a 500" do
+      get "/server-implicit/show", {}, { "HTTP_ACCEPT" => "*/*" }
+      expect(last_response.status).to(eq(200),
+                                      "expected 200, got #{last_response.status} body=#{last_response.body[0, 400]}")
+      expect(last_response.headers["Content-Type"]).to include("text/html")
+      expect(last_response.body).to include("DemoButton")
+      expect(last_response.body).not_to include("__ruact_component__ called outside a ruact_render flow")
+    end
+
+    it "GET with Accept: text/x-component returns a Flight payload (function-call path untouched)" do
+      get "/server-implicit/show", {}, { "HTTP_ACCEPT" => "text/x-component" }
+      expect(last_response.status).to eq(200)
+      expect(last_response.headers["Content-Type"]).to include("text/x-component")
+    end
   end
 end
