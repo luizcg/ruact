@@ -1,0 +1,110 @@
+# frozen_string_literal: true
+
+# <%= controller_class_name %>Controller — a complete CRUD on the v2 route-driven contract.
+#
+# `include Ruact::Server` (sibling of the Ruact::Controller already on
+# ApplicationController via `ruact:install`) gives this controller two
+# behaviours at once:
+#
+#   - GET actions (index/show/new/edit) need NO explicit `ruact_render` —
+#     Ruact::Controller#default_render activates the RSC pipeline implicitly
+#     whenever a matching .html.erb exists. The actions just set ivars.
+#
+#   - NON-GET actions (create/update/destroy) are the v2 SERVER FUNCTIONS:
+#     exposed because the route is non-GET on a Ruact::Server controller. The
+#     route-driven codegen emits their JS accessors (create<%= class_name %> /
+#     update<%= class_name %> / destroy<%= class_name %>). On success they
+#     drive navigation server-side via `redirect_to` (the override emits
+#     `{ "$redirect": "<path>" }`, which the runtime follows); on a validation
+#     failure they surface an always-present, attribute-keyed `errors` map via
+#     `ruact_errors` (FR98). The navigation decision lives HERE, not in React.
+#
+# NOTE: `include Ruact::Server` must come AFTER `protect_from_forgery` (inherited
+# from ApplicationController) so the CSRF check precedes these actions.
+class <%= controller_class_name %>Controller < ApplicationController
+  include Ruact::Server
+
+  # --- GET pages (rendered as RSC) -----------------------------------------
+
+  def index
+    @<%= plural_name %> = <%= class_name %>.all
+  end
+
+  def show
+    @<%= singular_name %> = <%= class_name %>.find(params[:id])
+    # FR96 opt-in (tamper-proof reference): resolve from a signed, purpose-scoped
+    # token instead of a raw, forgeable :id. Mint the token in create/update below.
+    # @<%= singular_name %> = Ruact.locate_signed(params[:<%= singular_name %>_ref], for: :<%= singular_name %>_ref)
+  end
+
+  def new
+  end
+
+  def edit
+    @<%= singular_name %> = <%= class_name %>.find(params[:id])
+  end
+
+  # --- Writes (v2 actions → Bucket 2 JSON / $redirect) ---------------------
+
+  def create
+    <%= singular_name %> = <%= class_name %>.new(<%= singular_name %>_params)
+    if <%= singular_name %>.save
+      # FR96 opt-in: hand the client a signed, scoped, expiring handle to the
+      # saved record instead of a raw id (rides the Bucket-2 JSON as a String).
+      # @<%= singular_name %>_ref = Ruact.signed_global_id(<%= singular_name %>, for: :<%= singular_name %>_ref, expires_in: 1.hour)
+      redirect_to <%= singular_name %>
+    else
+      # FR98 — the always-present, attribute-keyed `errors` map. The form
+      # surfaces it inline (no redirect — the client stays on the form).
+      ruact_errors(<%= singular_name %>)
+      @ok = false
+    end
+  end
+
+  def update
+    <%= singular_name %> = <%= class_name %>.find(params[:id])
+    if <%= singular_name %>.update(<%= singular_name %>_params)
+      # @<%= singular_name %>_ref = Ruact.signed_global_id(<%= singular_name %>, for: :<%= singular_name %>_ref, expires_in: 1.hour)
+      redirect_to <%= singular_name %>
+    else
+      ruact_errors(<%= singular_name %>)
+      @ok = false
+    end
+  end
+
+  def destroy
+    <%= singular_name %> = <%= class_name %>.find(params[:id])
+    <%= singular_name %>.destroy
+    redirect_to <%= plural_name %>_url
+  end
+
+  # --- FR96 opt-in: a reference addressed ONLY by a signed token -------------
+  # Uncomment this action AND a matching `collection { post :publish }` route to
+  # expose an endpoint that takes NO raw :id — the record is recovered purely
+  # from the tamper-proof, purpose-scoped, expiring token minted in create/update
+  # above. A forged/expired/wrong-purpose token raises
+  # Ruact::InvalidSignedGlobalIDError → a clean structured 400 (no raw-id trust).
+  #
+  # def publish
+  #   <%= singular_name %> = Ruact.locate_signed(params[:<%= singular_name %>_ref], for: :<%= singular_name %>_ref)
+  #   <%= singular_name %>.update(published: true)
+  #   @ok = true
+  #   @id = <%= singular_name %>.id
+  # end
+
+  private
+
+  # Strong-params-style reader: each attribute is read explicitly.<% if scaffold_attributes.any?(&:boolean?) %> A boolean
+  # field is coerced to a real boolean (it may arrive as "true"/"on" over the wire).<% end %>
+  def <%= singular_name %>_params
+    {
+<% scaffold_attributes.each do |attr| -%>
+<% if attr.boolean? -%>
+      <%= attr.column_name %>: ActiveModel::Type::Boolean.new.cast(params[:<%= attr.column_name %>]),
+<% else -%>
+      <%= attr.column_name %>: params[:<%= attr.column_name %>],
+<% end -%>
+<% end -%>
+    }
+  end
+end

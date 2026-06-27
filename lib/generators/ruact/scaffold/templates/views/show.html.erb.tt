@@ -1,0 +1,16 @@
+<%%# <%= class_name %> show — a PLAIN Rails view (no React component). It still goes
+    through the RSC pipeline — the HTML becomes host React elements in the Flight
+    tree — so "just Rails" and React components sit in one React application. %>
+<article style="font-family:system-ui,sans-serif;max-width:640px;margin:2rem auto;padding:0 1rem">
+  <p style="margin-bottom:4px"><a href="/<%= plural_name %>">← All <%= plural_name %></a></p>
+
+  <h1 style="margin-bottom:16px"><%= human_name %> #<%%= @<%= singular_name %>.id %></h1>
+
+<% scaffold_attributes.each do |attr| -%>
+  <p style="margin:4px 0"><strong><%= attr.column_name.humanize %>:</strong> <%%= @<%= singular_name %>.<%= attr.column_name %> %></p>
+<% end -%>
+
+  <p style="margin-top:24px">
+    <a href="/<%= plural_name %>/<%%= @<%= singular_name %>.id %>/edit">Edit</a>
+  </p>
+</article>

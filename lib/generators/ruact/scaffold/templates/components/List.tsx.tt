@@ -1,0 +1,66 @@
+"use client";
+
+<% unless typescript? -%>
+// Generated with --javascript: this .jsx file forfeits the FR99 typed server
+// boundary and the FR100 call-site contract (both TS-only). Re-run without
+// --javascript for the typed .tsx variant.
+<% end -%>
+// <%= class_name %> list — the collection arrives as a SERVER-RENDERED prop
+// (`posts`); there is no client query for the initial render. Per-row delete is
+// delegated to <%= class_name %>DeleteDialog (DELETE /<%= plural_name %>/:id via the destroy<%= class_name %> action).
+import { <%= class_name %>DeleteDialog } from "./<%= class_name %>DeleteDialog";
+<% if typescript? -%>
+
+type <%= class_name %>Row = { <%= ts_row_fields %> };
+
+// FR100 — opt-in call-site contract: `posts` is required. The index view passes
+// `<<%= class_name %>List posts={rows} />` (satisfied); a call site that omits it
+// fails at preprocess time, not as a silent `undefined` in the browser.
+export const __ruactContract = {
+  props: { posts: "required" },
+};
+<% end -%>
+
+export function <%= class_name %>List({ posts = [] }<% if typescript? %>: { posts?: <%= class_name %>Row[] }<% end %>) {
+  return (
+    <section style={{ fontFamily: "system-ui, sans-serif", maxWidth: 760, margin: "2rem auto", padding: "0 1rem" }}>
+      <h1 style={{ marginBottom: 8 }}><%= human_name.pluralize %></h1>
+      <p style={{ marginTop: 0 }}>
+        <a href="/<%= plural_name %>/new" style={{ fontWeight: 600 }}>+ New <%= human_name %></a>
+      </p>
+
+      {posts.length === 0 ? (
+        <p style={{ color: "#666" }}>No <%= plural_name %> yet — create one.</p>
+      ) : (
+        <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 8 }}>
+          <thead>
+            <tr style={{ textAlign: "left", borderBottom: "2px solid #ddd" }}>
+              <th style={{ padding: "6px 8px" }}>ID</th>
+<% scaffold_attributes.each do |attr| -%>
+              <th style={{ padding: "6px 8px" }}><%= attr.column_name.humanize %></th>
+<% end -%>
+              <th style={{ padding: "6px 8px" }}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {posts.map((row) => (
+              <tr key={row.id} style={{ borderBottom: "1px solid #eee" }}>
+                <td style={{ padding: "6px 8px" }}>
+                  <a href={`/<%= plural_name %>/${row.id}`}>{row.id}</a>
+                </td>
+<% scaffold_attributes.each do |attr| -%>
+                <td style={{ padding: "6px 8px" }}>{String(row.<%= attr.column_name %> ?? "")}</td>
+<% end -%>
+                <td style={{ padding: "6px 8px" }}>
+                  <a href={`/<%= plural_name %>/${row.id}/edit`}>Edit</a>
+                  {" · "}
+                  <<%= class_name %>DeleteDialog <%= singular_name %>={row} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
