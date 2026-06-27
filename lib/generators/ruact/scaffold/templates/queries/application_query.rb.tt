@@ -1,0 +1,13 @@
+# frozen_string_literal: true
+
+# Base class for the app's v2 server QUERIES (Story 9.4 contract). Mirrors the
+# app/controllers/application_controller.rb convention — a thin host base every
+# concrete query inherits. The context accessors (current_user, params, request,
+# session) come from Ruact::Query and are inherited, so they never appear in
+# public_instance_methods(false) and are NOT mounted as routes.
+#
+# Created by `ruact:scaffold` the first time a resource introduces a query
+# (`ruact:install` does not ship it). A second scaffold never clobbers it, so
+# customise this base freely.
+class ApplicationQuery < Ruact::Query
+end

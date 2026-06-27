@@ -1,0 +1,59 @@
+# frozen_string_literal: true
+
+# Read side of the CRUD. Each public instance method becomes one named GET
+# route when mounted with `ruact_queries <%= query_class_name %>`:
+#
+#   GET /q/search  → <%= query_class_name %>#search(q:)  → useQuery(<%= js_search_alias %>, { q })  (list search box)
+#
+# NOTE: there is deliberately NO whole-list query — the index list is
+# server-rendered as props (see <%= controller_class_name %>Controller#index). A query is only the
+# right tool when the *client* drives the read; here that's the search box.
+class <%= query_class_name %> < ApplicationQuery
+  # Client-driven search (FR88 kwargs). A blank/nil `q` returns the whole list;
+  # otherwise a case-insensitive match over the model's string/text columns. THIS
+  # is what justifies a query — the result depends on live client input, not on
+  # what the server already had. Rows are the SAME shape the index serializes, so
+  # the search results and the server-rendered props are interchangeable.
+  def search(q:)
+    term = q.to_s.strip
+    scope =
+<% if searchable_attributes.empty? -%>
+      # No string/text columns to match on — a text search can only match
+      # nothing, so a non-blank query returns an empty set (a blank box is idle).
+      term.empty? ? <%= class_name %>.all : <%= class_name %>.none
+<% else -%>
+      if term.empty?
+        <%= class_name %>.all
+      else
+        # `sanitize_sql_like` escapes user-supplied `%`/`_` (with `!`) so they
+        # match literally; the value is bound (`:needle`), never interpolated.
+        # `ESCAPE '!'` is explicit so the escape is honored on SQLite too (it has
+        # no default LIKE escape char, unlike Postgres/MySQL). Column names are
+        # quoted per-adapter so a column that is a SQL reserved word (`order`,
+        # `select`, …) does not break the query.
+        needle = "%#{<%= class_name %>.sanitize_sql_like(term.downcase, "!")}%"
+        columns = %w[<%= searchable_attributes.map(&:column_name).join(' ') %>]
+        clause = columns.map do |column|
+          "LOWER(#{<%= class_name %>.connection.quote_column_name(column)}) LIKE :needle ESCAPE '!'"
+        end.join(" OR ")
+        <%= class_name %>.where(clause, needle: needle)
+      end
+<% end -%>
+    # Order by `id` (always present) — newest-first without assuming timestamps.
+    scope.order(id: :desc).map { |record| as_row(record) }
+  end
+
+  private
+
+  # The wire row — must match <%= controller_class_name %>Controller#index's serialization
+  # (the `serialized_row` grain) so query results and server-rendered props are
+  # interchangeable in <%= class_name %>List.
+  def as_row(record)
+    {
+      id: record.id,
+<% scaffold_attributes.each do |attr| -%>
+      <%= attr.column_name %>: <%= row_value_expr('record', attr) %><%= attr == scaffold_attributes.last ? '' : ',' %>
+<% end -%>
+    }
+  end
+end

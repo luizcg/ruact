@@ -39,6 +39,8 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
     silently do
       gen.create_controller
       gen.add_resource_route
+      gen.create_queries
+      gen.add_query_route
       gen.create_views
       gen.create_components
       gen.create_smoke_spec
@@ -195,6 +197,213 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(form).not_to include("__ruactContract")
       expect(form).not_to include("type PostRow")
       expect(form).to include("forfeits")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Story 10.2 — shadcn DataTable List + client-driven search query.
+  # ---------------------------------------------------------------------------
+
+  describe "List is a shadcn DataTable (Story 10.2 AC1, AC2, AC3, AC4)" do
+    before { run_scaffold(%w[Post title:string body:text published:boolean views:integer published_at:datetime]) }
+
+    let(:list) { read("app/javascript/components/PostList.tsx") }
+
+    it "imports the DataTable recipe + shadcn primitives + ColumnDef", :aggregate_failures do
+      expect(list).to include('import { DataTable } from "@/components/ui/data-table"')
+      expect(list).to include('import { Badge } from "@/components/ui/badge"')
+      expect(list).to include('import { Button } from "@/components/ui/button"')
+      expect(list).to include('from "@/components/ui/dropdown-menu"')
+      expect(list).to include('import type { ColumnDef } from "@tanstack/react-table"')
+    end
+
+    it "defines a typed columns config from the attributes (AC1)" do
+      expect(list).to include("const columns: ColumnDef<PostRow>[] = [")
+    end
+
+    it "types each cell per attribute kind (AC1)", :aggregate_failures do
+      # boolean → Badge "Yes"/"No"
+      expect(list).to include('<Badge variant={value ? "default" : "secondary"}>{value ? "Yes" : "No"}</Badge>')
+      # integer → right-aligned numeric cell
+      expect(list).to include('<div className="text-right tabular-nums">{String(row.getValue("views") ?? "")}</div>')
+      # datetime → locale-formatted cell
+      expect(list).to include("new Date(String(value)).toLocaleString()")
+      # string/text → plain text cell
+      expect(list).to include('<span>{String(row.getValue("title") ?? "")}</span>')
+    end
+
+    it "renders client-side sortable column headers (AC2)" do
+      expect(list).to include("column.toggleSorting(column.getIsSorted() === \"asc\")")
+    end
+
+    it "has a per-row actions cell: Edit link + DeleteDialog, collapsing under a breakpoint (AC3)",
+       :aggregate_failures do
+      expect(list).to include('id: "actions"')
+      expect(list).to include("enableSorting: false")
+      expect(list).to include("<a href={`/posts/${record.id}/edit`}>Edit</a>")
+      expect(list).to include("<PostDeleteDialog post={record} />")
+      # responsive overflow into a … DropdownMenu under `md`
+      expect(list).to include("md:hidden")
+      expect(list).to include("md:flex")
+      expect(list).to include("<DropdownMenu>")
+    end
+
+    it "feeds the DataTable the server-rendered `posts` rows and keeps FR100 contract (AC4)", :aggregate_failures do
+      expect(list).to include("<DataTable columns={columns} data={rows} />")
+      expect(list).to include("export const __ruactContract = {")
+      expect(list).to include('posts: "required"')
+    end
+
+    it "has a documented, prop-configurable empty state (AC4)", :aggregate_failures do
+      expect(list).to include('emptyLabel = "No posts yet — create one."')
+      expect(list).to include("{emptyLabel}")
+    end
+  end
+
+  describe "List wires the client-driven search query (Story 10.2 AC5)" do
+    before { run_scaffold }
+
+    let(:list) { read("app/javascript/components/PostList.tsx") }
+
+    it "imports the aliased search accessor + useQuery from the codegen module", :aggregate_failures do
+      expect(list).to include('import { search as searchPosts, useQuery } from "@/.ruact/server-functions"')
+    end
+
+    it "drives the search box through useQuery(searchPosts, { q })", :aggregate_failures do
+      expect(list).to include("useQuery<PostRow[]>(searchPosts, { q: q.trim() })")
+      # while q is non-blank → query results; otherwise the server-rendered posts
+      expect(list).to include("const rows = searching ? searchData ?? [] : posts;")
+    end
+
+    it "uses a plural search accessor alias for a multi-word model" do
+      run_scaffold(%w[BlogPost title:string])
+      expect(read("app/javascript/components/BlogPostList.tsx"))
+        .to include("import { search as searchBlogPosts, useQuery }")
+    end
+  end
+
+  describe "generated query class (Story 10.2 AC5)" do
+    before { run_scaffold(%w[Post title:string body:text published:boolean views:integer]) }
+
+    let(:query) { read("app/queries/posts_query.rb") }
+
+    it "creates app/queries/posts_query.rb < ApplicationQuery with a search(q:) method", :aggregate_failures do
+      expect(query).to start_with("# frozen_string_literal: true")
+      expect(query).to include("class PostsQuery < ApplicationQuery")
+      expect(query).to include("def search(q:)")
+      expect(query).to include("private")
+      expect(query).to include("def as_row(record)")
+    end
+
+    it "searches string/text columns only (AC5)", :aggregate_failures do
+      # string (title) + text (body) are searchable; published/views are NOT in
+      # the searched-columns list (they still appear in the as_row serialization).
+      expect(query).to include("columns = %w[title body]")
+      expect(query).to include("LIKE :needle ESCAPE '!'")
+    end
+
+    it "escapes wildcards + quotes columns + binds the value", :aggregate_failures do
+      expect(query).to include(%(Post.sanitize_sql_like(term.downcase, "!")))
+      # reserved-word-safe column quoting, per-adapter
+      expect(query).to include("Post.connection.quote_column_name(column)")
+      expect(query).to include("ESCAPE '!'")
+      expect(query).to include("needle: needle")
+    end
+
+    it "orders by id (no timestamps assumption)" do
+      expect(query).to include("scope.order(id: :desc)")
+      expect(query).not_to include("created_at")
+    end
+
+    it "blank q returns the whole collection (AC5)" do
+      expect(query).to include("if term.empty?")
+      expect(query).to include("Post.all")
+    end
+
+    it "renders syntactically valid Ruby (AC7)" do
+      expect { RubyVM::InstructionSequence.compile(query) }.not_to raise_error
+    end
+
+    it "emits the query .rb in --javascript mode too (language-agnostic)", :aggregate_failures do
+      run_scaffold(%w[Note body:text], javascript: true)
+      expect(File).to exist(File.join(app_root, "app/queries/notes_query.rb"))
+      expect(read("app/queries/notes_query.rb")).to include("class NotesQuery < ApplicationQuery")
+    end
+
+    it "returns all when idle / none when searched if no string/text column exists", :aggregate_failures do
+      run_scaffold(%w[Tally count:integer flag:boolean])
+      tally = read("app/queries/tallies_query.rb")
+      # a text search can't match a non-text model → empty on non-blank, all when idle
+      expect(tally).to include("term.empty? ? Tally.all : Tally.none")
+      expect(tally).not_to include("LIKE")
+      expect { RubyVM::InstructionSequence.compile(tally) }.not_to raise_error
+    end
+  end
+
+  describe "ApplicationQuery base — created idempotently (Story 10.2 AC5)" do
+    it "creates app/queries/application_query.rb < Ruact::Query when absent", :aggregate_failures do
+      run_scaffold
+      base = read("app/queries/application_query.rb")
+      expect(base).to start_with("# frozen_string_literal: true")
+      expect(base).to include("class ApplicationQuery < Ruact::Query")
+    end
+
+    it "does NOT clobber a customized ApplicationQuery on a second scaffold" do
+      run_scaffold
+      sentinel = "# frozen_string_literal: true\nclass ApplicationQuery < Ruact::Query\n  # HAND EDITED\nend\n"
+      File.write(File.join(app_root, "app/queries/application_query.rb"), sentinel)
+
+      run_scaffold(%w[Comment body:text])
+
+      expect(read("app/queries/application_query.rb")).to eq(sentinel)
+    end
+  end
+
+  describe "routes inject ruact_queries (Story 10.2 AC5)" do
+    it "injects `ruact_queries PostsQuery` once, idempotently on re-run", :aggregate_failures do
+      run_scaffold
+      run_scaffold
+      routes = read("config/routes.rb")
+      expect(routes).to include("ruact_queries PostsQuery")
+      expect(routes.scan("ruact_queries PostsQuery").size).to eq(1)
+    end
+  end
+
+  describe "--javascript List forfeits the TS-only markers (Story 10.2 AC6)" do
+    before { run_scaffold(%w[Post title:string published:boolean], javascript: true) }
+
+    let(:list) { read("app/javascript/components/PostList.jsx") }
+
+    it "drops ColumnDef/type/__ruactContract but keeps the DataTable + search wiring", :aggregate_failures do
+      expect(list).not_to include("ColumnDef")
+      expect(list).not_to include("type PostRow")
+      expect(list).not_to include("__ruactContract")
+      expect(list).to include("forfeits the FR99")
+      expect(list).to include("const columns = [")
+      expect(list).to include('import { DataTable } from "@/components/ui/data-table"')
+      expect(list).to include("useQuery(searchPosts, { q: q.trim() })")
+    end
+  end
+
+  # AC7 — the committed type-test fixture (type-checked by the JS job's
+  # `npm run typecheck` against ambient shadcn/@tanstack stubs) MUST stay
+  # byte-identical to the generator's live output, or the typecheck proves
+  # nothing. This canonical model exercises every column kind.
+  describe "generated .tsx matches the isolated-typecheck fixture (Story 10.2 AC7)" do
+    let(:fixture_path) { "vendor/javascript/vite-plugin-ruact/type-tests/scaffold/PostList.tsx" }
+
+    it "PostList.tsx render stays byte-identical to the committed type-test fixture" do
+      run_scaffold(%w[Post title:string body:text published:boolean views:integer published_at:datetime
+                      author:references])
+      generated = read("app/javascript/components/PostList.tsx")
+      fixture = File.read(File.expand_path("../../#{fixture_path}", __dir__))
+
+      expect(generated).to eq(fixture),
+                           "Generated PostList.tsx drifted from the type-test fixture. " \
+                           "Regenerate it: rails g ruact:scaffold Post title:string body:text " \
+                           "published:boolean views:integer published_at:datetime author:references " \
+                           "→ copy app/javascript/components/PostList.tsx over #{fixture_path}, " \
+                           "then re-run `npm run typecheck`."
     end
   end
 
