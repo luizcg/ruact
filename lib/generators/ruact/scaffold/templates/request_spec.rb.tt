@@ -1,0 +1,80 @@
+# frozen_string_literal: true
+
+# Smoke spec for the generated <%= class_name %>Controller (Story 10.1 skeleton).
+#
+# PREREQUISITES (ruact:scaffold generates the controller/route/views/components,
+# NOT the model — keeping it orthogonal to your schema, exactly like the React
+# layer is orthogonal to Rails):
+#   1. a `<%= class_name %>` model with the scaffolded columns + a migrated table:
+#        rails generate model <%= class_name %> <%= scaffold_attributes.map { |a| "#{a.name}:#{a.type}" }.join(' ') %>
+#        rails db:migrate
+#   2. rspec-rails (`rails_helper`).
+#   3. a built client manifest (`react-client-manifest.json`) so the RSC GET
+#      index can resolve `<<%= class_name %>List />` — run the Vite build / dev
+#      server (or your test bootstrap) before the suite.
+<% if scaffold_attributes.any?(&:reference?) -%>
+#   4. this scaffold has a `references` column — adjust `valid_attributes` below
+#      to a REAL associated record id (the placeholder `1` assumes one exists;
+#      a required `belongs_to` will reject a dangling id).
+<% end -%>
+#
+# With those in place this passes unmodified. It is a LIGHT smoke of the v2
+# contract — not full coverage: RSC GET index, the Bucket-2 JSON create
+# happy-path (server-driven `$redirect`), the FR98 keyed `errors` channel, and
+# destroy. Add real coverage as the resource grows.
+require "rails_helper"
+
+RSpec.describe "<%= class_name.pluralize %>", type: :request do
+  # Every imperative accessor call (create<%= class_name %>/update<%= class_name %>/destroy<%= class_name %>) sends
+  # this exact header — it is what routes the action into the Bucket-2 JSON path.
+  let(:bucket_two) { { "Accept" => "application/json" } }
+
+  let(:valid_attributes) do
+    {
+<% scaffold_attributes.each do |attr| -%>
+      <%= attr.column_name %>: <%= sample_value(attr) %>,
+<% end -%>
+    }
+  end
+
+  describe "GET /<%= plural_name %>" do
+    it "renders the index (200)" do
+      get "/<%= plural_name %>"
+      expect(response).to have_http_status(:ok)
+    end
+  end
+
+  describe "POST /<%= plural_name %> (Bucket 2)" do
+    it "creates a <%= singular_name %> and drives a server-side redirect" do
+      expect do
+        post "/<%= plural_name %>", params: valid_attributes, headers: bucket_two
+      end.to change(<%= class_name %>, :count).by(1)
+
+      # Success path is a server-driven redirect the runtime follows ($redirect).
+      expect(response.parsed_body).to be_a(Hash).and(have_key("$redirect"))
+    end
+
+    it "rides the FR98 keyed `errors` contract" do
+      # Empty params. If the model declares a validation it fails → an
+      # attribute-keyed `errors` map; if it does not, the create succeeds and
+      # the server redirects. Either branch upholds the v2 contract.
+      post "/<%= plural_name %>", params: {}, headers: bucket_two
+      body = response.parsed_body
+      expect(body).to be_a(Hash)
+      if body.key?("errors")
+        expect(body["errors"]).to be_a(Hash)
+      else
+        expect(body).to have_key("$redirect")
+      end
+    end
+  end
+
+  describe "DELETE /<%= plural_name %>/:id (Bucket 2)" do
+    it "destroys the <%= singular_name %>" do
+      <%= singular_name %> = <%= class_name %>.create!(valid_attributes)
+      expect do
+        delete "/<%= plural_name %>/#{<%= singular_name %>.id}", headers: bucket_two
+      end.to change(<%= class_name %>, :count).by(-1)
+    end
+  end
+end

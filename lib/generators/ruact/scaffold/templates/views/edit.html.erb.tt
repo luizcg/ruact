@@ -1,0 +1,4 @@
+<%%# <%= class_name %> edit — the shared form with the record serialized to a plain
+    row hash (initial != null = edit mode). No as_json on the model. %>
+<%% initial = <%= serialized_row("@#{singular_name}") %> %>
+<<%= class_name %>Form initial={initial} />

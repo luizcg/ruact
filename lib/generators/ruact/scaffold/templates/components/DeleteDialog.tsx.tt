@@ -1,0 +1,38 @@
+"use client";
+
+<% unless typescript? -%>
+// Generated with --javascript: this .jsx file forfeits the FR99 typed server
+// boundary and the FR100 call-site contract (both TS-only). Re-run without
+// --javascript for the typed .tsx variant.
+<% end -%>
+// <%= class_name %> delete control — a plain native-confirm button. Story 10.4
+// upgrades it to a shadcn AlertDialog without changing the contract. It calls
+// the destroy<%= class_name %> action (DELETE /<%= plural_name %>/:id); on success the controller
+// redirects to the index (`$redirect`) and the runtime follows it, so the list
+// refreshes itself — no client-side row surgery or URL building here.
+import { destroy<%= class_name %> } from "@/.ruact/server-functions";
+<% if typescript? -%>
+
+// FR100 — opt-in call-site contract: the row reference `<%= singular_name %>` is required.
+export const __ruactContract = {
+  props: { <%= singular_name %>: "required" },
+};
+<% end -%>
+
+export function <%= class_name %>DeleteDialog({ <%= singular_name %> }<% if typescript? %>: { <%= singular_name %>: { id: number } }<% end %>) {
+  async function handleDelete() {
+    if (!window.confirm("Delete this <%= human_name.downcase %>?")) return;
+    await destroy<%= class_name %>({ id: <%= singular_name %>.id });
+    // success → the server's `$redirect` to the index; the runtime navigates there.
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleDelete}
+      style={{ color: "#b91c1c", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+    >
+      Delete
+    </button>
+  );
+}

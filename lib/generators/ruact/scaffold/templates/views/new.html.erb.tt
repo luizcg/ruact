@@ -1,0 +1,2 @@
+<%%# <%= class_name %> new — the shared form in create mode (no initial data). %>
+<<%= class_name %>Form />
