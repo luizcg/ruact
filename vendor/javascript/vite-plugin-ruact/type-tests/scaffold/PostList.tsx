@@ -1,16 +1,11 @@
 "use client";
 
-<% unless typescript? -%>
-// Generated with --javascript: this .jsx file forfeits the FR99 typed server
-// boundary and the FR100 call-site contract (both TS-only). Re-run without
-// --javascript for the typed .tsx variant.
-<% end -%>
-// <%= class_name %> list — a shadcn DataTable. The collection arrives as a
+// Post list — a shadcn DataTable. The collection arrives as a
 // SERVER-RENDERED prop (`posts`); there is no client query for the initial
 // render. A query only enters when the *client* drives the read: the search box
-// calls useQuery(<%= js_search_alias %>, { q }) and swaps in filtered rows as you type.
-// Per-row delete is delegated to <%= class_name %>DeleteDialog (DELETE /<%= plural_name %>/:id via the
-// destroy<%= class_name %> action). Column sorting is CLIENT-ONLY — the dataset is the
+// calls useQuery(searchPosts, { q }) and swaps in filtered rows as you type.
+// Per-row delete is delegated to PostDeleteDialog (DELETE /posts/:id via the
+// destroyPost action). Column sorting is CLIENT-ONLY — the dataset is the
 // index payload; server-side sort/pagination is Phase-3 territory.
 //
 // The `DataTable` recipe + the shadcn primitives below import from
@@ -19,8 +14,8 @@
 // A freshly scaffolded app will not resolve these until 10.5 lands; that is
 // expected (the end-to-end live demo is Story 10.7).
 import { useState } from "react";
-import { search as <%= js_search_alias %>, useQuery } from "@/.ruact/server-functions";
-import { <%= class_name %>DeleteDialog } from "./<%= class_name %>DeleteDialog";
+import { search as searchPosts, useQuery } from "@/.ruact/server-functions";
+import { PostDeleteDialog } from "./PostDeleteDialog";
 import { DataTable } from "@/components/ui/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,18 +25,16 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-<% if typescript? -%>
 import type { ColumnDef } from "@tanstack/react-table";
 
-type <%= class_name %>Row = { <%= ts_row_fields %> };
+type PostRow = { id: number; title: string | null; body: string | null; published: boolean | null; views: number | null; published_at: string | null; author_id: number | null };
 
 // FR100 — opt-in call-site contract: `posts` is required. The index view passes
-// `<<%= class_name %>List posts={rows} />` (satisfied); a call site that omits it
+// `<PostList posts={rows} />` (satisfied); a call site that omits it
 // fails at preprocess time, not as a silent `undefined` in the browser.
 export const __ruactContract = {
   props: { posts: "required" },
 };
-<% end -%>
 
 // Typed columns config (AC1) — one column per attribute, the cell renderer keyed
 // on the attribute type: boolean → Badge, numeric → right-aligned, date →
@@ -49,7 +42,7 @@ export const __ruactContract = {
 // Button (AC2). The trailing actions column (AC3) keeps Edit + delete reachable
 // and collapses into a … menu under the `md` breakpoint (768px) so it never
 // pushes the data columns out of layout on narrow viewports.
-const columns<% if typescript? %>: ColumnDef<<%= class_name %>Row>[]<% end %> = [
+const columns: ColumnDef<PostRow>[] = [
   {
     accessorKey: "id",
     header: ({ column }) => (
@@ -58,56 +51,79 @@ const columns<% if typescript? %>: ColumnDef<<%= class_name %>Row>[]<% end %> = 
       </Button>
     ),
     cell: ({ row }) => (
-      <a href={`/<%= plural_name %>/${row.original.id}`} className="font-medium underline-offset-4 hover:underline">
+      <a href={`/posts/${row.original.id}`} className="font-medium underline-offset-4 hover:underline">
         {row.original.id}
       </a>
     ),
   },
-<% scaffold_attributes.each do |attr| -%>
-<% kind = attr.column_kind -%>
   {
-    accessorKey: "<%= attr.column_name %>",
-<% if kind == :numeric -%>
+    accessorKey: "title",
+    header: ({ column }) => (
+      <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
+        Title
+      </Button>
+    ),
+    cell: ({ row }) => <span>{String(row.getValue("title") ?? "")}</span>,
+  },
+  {
+    accessorKey: "body",
+    header: ({ column }) => (
+      <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
+        Body
+      </Button>
+    ),
+    cell: ({ row }) => <span>{String(row.getValue("body") ?? "")}</span>,
+  },
+  {
+    accessorKey: "published",
+    header: ({ column }) => (
+      <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
+        Published
+      </Button>
+    ),
+    cell: ({ row }) => {
+      const value = row.getValue("published");
+      return <Badge variant={value ? "default" : "secondary"}>{value ? "Yes" : "No"}</Badge>;
+    },
+  },
+  {
+    accessorKey: "views",
     header: ({ column }) => (
       <div className="text-right">
         <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
-          <%= attr.column_name.humanize %>
+          Views
         </Button>
       </div>
     ),
     cell: ({ row }) => (
-      <div className="text-right tabular-nums">{String(row.getValue("<%= attr.column_name %>") ?? "")}</div>
+      <div className="text-right tabular-nums">{String(row.getValue("views") ?? "")}</div>
     ),
-<% elsif kind == :badge -%>
+  },
+  {
+    accessorKey: "published_at",
     header: ({ column }) => (
       <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
-        <%= attr.column_name.humanize %>
+        Published at
       </Button>
     ),
     cell: ({ row }) => {
-      const value = row.getValue("<%= attr.column_name %>");
-      return <Badge variant={value ? "default" : "secondary"}>{value ? "Yes" : "No"}</Badge>;
-    },
-<% elsif kind == :date -%>
-    header: ({ column }) => (
-      <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
-        <%= attr.column_name.humanize %>
-      </Button>
-    ),
-    cell: ({ row }) => {
-      const value = row.getValue("<%= attr.column_name %>");
+      const value = row.getValue("published_at");
       return <span>{value ? new Date(String(value)).toLocaleString() : ""}</span>;
     },
-<% else -%>
-    header: ({ column }) => (
-      <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
-        <%= attr.column_name.humanize %>
-      </Button>
-    ),
-    cell: ({ row }) => <span>{String(row.getValue("<%= attr.column_name %>") ?? "")}</span>,
-<% end -%>
   },
-<% end -%>
+  {
+    accessorKey: "author_id",
+    header: ({ column }) => (
+      <div className="text-right">
+        <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
+          Author
+        </Button>
+      </div>
+    ),
+    cell: ({ row }) => (
+      <div className="text-right tabular-nums">{String(row.getValue("author_id") ?? "")}</div>
+    ),
+  },
   {
     id: "actions",
     enableSorting: false,
@@ -118,9 +134,9 @@ const columns<% if typescript? %>: ColumnDef<<%= class_name %>Row>[]<% end %> = 
           {/* ≥ md (768px): inline actions */}
           <div className="hidden items-center gap-2 md:flex">
             <Button variant="ghost" asChild>
-              <a href={`/<%= plural_name %>/${record.id}/edit`}>Edit</a>
+              <a href={`/posts/${record.id}/edit`}>Edit</a>
             </Button>
-            <<%= class_name %>DeleteDialog <%= singular_name %>={record} />
+            <PostDeleteDialog post={record} />
           </div>
           {/* < md: collapse into a … overflow menu so actions never break layout */}
           <div className="md:hidden">
@@ -130,10 +146,10 @@ const columns<% if typescript? %>: ColumnDef<<%= class_name %>Row>[]<% end %> = 
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem asChild>
-                  <a href={`/<%= plural_name %>/${record.id}/edit`}>Edit</a>
+                  <a href={`/posts/${record.id}/edit`}>Edit</a>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
-                  <<%= class_name %>DeleteDialog <%= singular_name %>={record} />
+                  <PostDeleteDialog post={record} />
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -144,25 +160,25 @@ const columns<% if typescript? %>: ColumnDef<<%= class_name %>Row>[]<% end %> = 
   },
 ];
 
-export function <%= class_name %>List({
+export function PostList({
   posts = [],
-  emptyLabel = "No <%= plural_name %> yet — create one.",
-}<% if typescript? %>: { posts?: <%= class_name %>Row[]; emptyLabel?: string }<% end %>) {
+  emptyLabel = "No posts yet — create one.",
+}: { posts?: PostRow[]; emptyLabel?: string }) {
   const [q, setQ] = useState("");
   const searching = q.trim().length > 0;
 
   // Client-driven read (AC5) — only meaningful while searching. When q is blank
   // the box is idle and we fall back to the server-rendered `posts`.
-  const { data: searchData, loading: searchLoading } = useQuery<% if typescript? %><<%= class_name %>Row[]><% end %>(<%= js_search_alias %>, { q: q.trim() });
+  const { data: searchData, loading: searchLoading } = useQuery<PostRow[]>(searchPosts, { q: q.trim() });
 
   const rows = searching ? searchData ?? [] : posts;
 
   return (
     <section className="mx-auto max-w-4xl px-4 py-8">
       <div className="mb-4 flex items-center justify-between gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight"><%= human_name.pluralize %></h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Posts</h1>
         <Button asChild>
-          <a href="/<%= plural_name %>/new">+ New <%= human_name.downcase %></a>
+          <a href="/posts/new">+ New post</a>
         </Button>
       </div>
 
@@ -170,14 +186,14 @@ export function <%= class_name %>List({
         type="search"
         value={q}
         onChange={(e) => setQ(e.target.value)}
-        placeholder="Search <%= plural_name %>…"
+        placeholder="Search posts…"
         className="mb-4 w-full rounded-md border px-3 py-2 text-sm"
       />
 
       {searching && searchLoading && <p className="text-sm text-muted-foreground">Searching…</p>}
       {!searching && posts.length === 0 && <p className="text-sm text-muted-foreground">{emptyLabel}</p>}
       {searching && !searchLoading && rows.length === 0 && (
-        <p className="text-sm text-muted-foreground">No <%= plural_name %> match “{q.trim()}”.</p>
+        <p className="text-sm text-muted-foreground">No posts match “{q.trim()}”.</p>
       )}
 
       {rows.length > 0 && <DataTable columns={columns} data={rows} />}

@@ -4,6 +4,7 @@ require "pathname"
 require "rails/generators"
 require "rails/generators/named_base"
 require "ruact"
+require_relative "scaffold_attribute"
 
 module Ruact
   module Generators
@@ -58,51 +59,12 @@ module Ruact
 
       SUPPORTED_TYPES = TYPE_MAP.keys.freeze
 
+      # Column types the `search` query's case-insensitive LIKE scope spans —
+      # matching numeric/date/boolean columns by substring is meaningless.
+      SEARCHABLE_COLUMN_TYPES = %w[string text].freeze
+
       # Documentation anchor referenced by the unknown-type error message (AC4).
       DOCS_POINTER = "https://github.com/luizcg/ruact/blob/main/website/docs/api/scaffold.md#attribute-types"
-
-      # A single scaffold attribute (name + AR type) with the view-model helpers
-      # the templates consume. `references` columns address `<name>_id`.
-      class ScaffoldAttribute
-        attr_reader :name, :type
-
-        def initialize(name, type)
-          @name = name
-          @type = type
-        end
-
-        # The wire/DB column the controller params + serialized rows use.
-        def column_name
-          reference? ? "#{name}_id" : name
-        end
-
-        def ts_type
-          TYPE_MAP.fetch(type)[:ts]
-        end
-
-        def control
-          TYPE_MAP.fetch(type)[:control]
-        end
-
-        def boolean?
-          type == "boolean"
-        end
-
-        def reference?
-          type == "references"
-        end
-
-        # camelCase JS identifier for the column (`author_id` → `authorId`).
-        def js_var
-          parts = column_name.split("_")
-          (parts.first(1) + parts.drop(1).map(&:capitalize)).join
-        end
-
-        # The React `useState` setter name (`authorId` → `setAuthorId`).
-        def js_setter
-          "set#{js_var.sub(/\A./, &:upcase)}"
-        end
-      end
 
       def create_controller
         template "controller.rb.tt", File.join("app/controllers", "#{plural_file_name}_controller.rb")
@@ -121,6 +83,35 @@ module Ruact
         end
 
         route "resources :#{plural_name}"
+      end
+
+      # AC5 — the client-driven read path. Emits the resource query
+      # (`<Plural>Query < ApplicationQuery` with a `search(q:)` method) in BOTH
+      # `.tsx` and `.jsx` modes (the query is server-side Ruby; the language flag
+      # only governs the React component). The `ApplicationQuery` base is created
+      # idempotently — `ruact:install` does NOT ship it, and a second scaffold in
+      # the same app must NOT clobber a customized base.
+      def create_queries
+        template "queries/query.rb.tt", File.join("app/queries", "#{plural_file_name}_query.rb")
+
+        application_query = File.join("app/queries", "application_query.rb")
+        return if Pathname(destination_root).join(application_query).exist?
+
+        template "queries/application_query.rb.tt", application_query
+      end
+
+      # AC5 — mount the resource query so its `search` method becomes the named
+      # GET route the codegen exports as `search` (consumed by `useQuery`).
+      # Idempotent on re-run: guard on the drawn `ruact_queries <Plural>Query`
+      # line first (sibling of {#add_resource_route}'s `resources :posts` guard).
+      def add_query_route
+        routes_file = Pathname(destination_root).join("config/routes.rb")
+        if routes_file.exist? && routes_file.read.match?(/^\s*ruact_queries\s+#{Regexp.escape(query_class_name)}\b/)
+          say_status "skip", "ruact_queries #{query_class_name} already routed", :yellow
+          return
+        end
+
+        route "ruact_queries #{query_class_name}"
       end
 
       def create_views
@@ -223,6 +214,27 @@ module Ruact
         # `Admin::Post` → `Admin::Posts`).
         def controller_class_name
           class_name.pluralize
+        end
+
+        # The read-side query class — PLURAL, mirroring the golden `PostsQuery`
+        # (file `posts_query.rb`) and Zeitwerk's path↔constant rule. Mounted via
+        # `ruact_queries <Plural>Query`; its `search` method becomes `GET /q/search`.
+        def query_class_name
+          "#{class_name.pluralize}Query"
+        end
+
+        # The JS import alias for the query's `search` accessor. The codegen
+        # exports a generic `search` (from `<Plural>Query#search`); the component
+        # aliases it `search<Plural>` to avoid a bare-`search` collision — exactly
+        # as the golden does (`search as searchPosts`).
+        def js_search_alias
+          "search#{class_name.pluralize}"
+        end
+
+        # The columns the search `LIKE` scope spans — string/text only (a
+        # case-insensitive match over numeric/date columns is meaningless).
+        def searchable_attributes
+          scaffold_attributes.select { |attr| SEARCHABLE_COLUMN_TYPES.include?(attr.type) }
         end
 
         # FR99 — the generated `type <Model>Row` body, e.g.

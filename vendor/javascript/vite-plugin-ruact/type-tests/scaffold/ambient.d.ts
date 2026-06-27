@@ -1,0 +1,94 @@
+// Story 10.2 (AC7 / Task 5) — AMBIENT stubs so the GENERATED `<Model>List.tsx`
+// type-checks in ISOLATION, without a real shadcn install or `@tanstack/react-table`
+// dependency. The fixture `PostList.tsx` in this directory is byte-identical to
+// the generator's live output (a gem rspec example asserts that equality), so
+// type-checking it under `tsconfig.scaffold.json` proves the emitted typed List
+// holds the FR99 server boundary + the `ColumnDef`/shadcn import contract.
+//
+// These are deliberately MINIMAL structural shims — NOT the real shadcn / react /
+// react-table types. Story 10.5 installs the real `@/components/ui/*` modules + the
+// `data-table` recipe; 10.7 wires the live end-to-end demo. The point here is the
+// generated module's OWN type-safety (typed rows, sortable headers, the search
+// accessor), not re-testing upstream libraries.
+
+// JSX without `lib: ["dom"]` / `@types/react`: a permissive intrinsic-element
+// table (every native prop is `any`, so `onChange={(e) => …}` etc. need no DOM
+// event types). `jsx: "preserve"` in tsconfig.scaffold.json still type-checks
+// every JSX expression against this namespace.
+declare namespace JSX {
+  interface Element {} // eslint-disable-line @typescript-eslint/no-empty-interface
+  interface ElementClass {} // eslint-disable-line @typescript-eslint/no-empty-interface
+  interface IntrinsicElements {
+    [elem: string]: any;
+  }
+}
+
+declare module "react" {
+  export function useState<S>(initial: S | (() => S)): [S, (next: S | ((prev: S) => S)) => void];
+}
+
+declare module "@/.ruact/server-functions" {
+  // FR88/FR99 wire union — the only param value type a query accessor accepts.
+  type Wire = string | number | boolean | null;
+
+  // The codegen exports a generic `search` from `<Plural>Query#search(q:)`,
+  // typed from the declared `(q:)` kwarg (Story 13.4). The List aliases it
+  // `search<Plural>`.
+  export const search: (params: { q: Wire }) => Promise<unknown>;
+
+  // Mirrors the runtime declaration (`ruact-server-functions-runtime/index.d.ts`)
+  // — `reference` is the widened accessor shape (Story 13.4), `T` the return type.
+  export function useQuery<T = unknown>(
+    reference: (...args: never[]) => Promise<unknown>,
+    params?: Record<string, unknown>,
+  ): { data: T | undefined; loading: boolean; error: unknown };
+}
+
+declare module "@tanstack/react-table" {
+  export interface Column<TData, TValue = unknown> {
+    toggleSorting(desc?: boolean): void;
+    getIsSorted(): false | "asc" | "desc";
+  }
+  export interface Row<TData> {
+    original: TData;
+    getValue<T = unknown>(columnId: string): T;
+  }
+  export interface HeaderContext<TData, TValue> {
+    column: Column<TData, TValue>;
+  }
+  export interface CellContext<TData, TValue> {
+    row: Row<TData>;
+    column: Column<TData, TValue>;
+  }
+  export interface ColumnDef<TData, TValue = unknown> {
+    accessorKey?: string;
+    id?: string;
+    enableSorting?: boolean;
+    header?: string | ((ctx: HeaderContext<TData, TValue>) => unknown);
+    cell?: (ctx: CellContext<TData, TValue>) => unknown;
+  }
+}
+
+declare module "@/components/ui/data-table" {
+  import type { ColumnDef } from "@tanstack/react-table";
+  export function DataTable<TData, TValue>(props: {
+    columns: ColumnDef<TData, TValue>[];
+    data: TData[];
+  }): any;
+}
+
+declare module "@/components/ui/badge" {
+  export function Badge(props: { children?: any; [key: string]: any }): any;
+}
+
+declare module "@/components/ui/button" {
+  export function Button(props: { children?: any; [key: string]: any }): any;
+}
+
+declare module "@/components/ui/dropdown-menu" {
+  type Props = { children?: any; [key: string]: any };
+  export function DropdownMenu(props: Props): any;
+  export function DropdownMenuTrigger(props: Props): any;
+  export function DropdownMenuContent(props: Props): any;
+  export function DropdownMenuItem(props: Props): any;
+}

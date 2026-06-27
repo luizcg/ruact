@@ -1,0 +1,18 @@
+{
+  "//": "Story 10.2 (AC7 / Task 5) — type-check the GENERATED `<Model>List.tsx` fixture in ISOLATION against the ambient shadcn / @tanstack/react-table / server-functions stubs (type-tests/scaffold/ambient.d.ts). `jsx: preserve` type-checks JSX without `lib: dom` / @types/react. Kept separate from tsconfig.json so the strict no-JSX 13.4 type-tests stay untouched. Run via `npm run typecheck` (which runs both).",
+  "//noImplicitAny": "Relaxed ONLY here: native-element event handler params (e.g. `onChange={(e) => …}`) get no contextual type from the permissive ambient `JSX.IntrinsicElements` (no @types/react / lib:dom). The load-bearing types — PostRow, the typed `search` accessor (FR99), ColumnDef<Row>, the required `posts` prop — are all EXPLICITLY annotated and stay fully checked under `strict`.",
+  "compilerOptions": {
+    "strict": true,
+    "noImplicitAny": false,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "preserve",
+    "exactOptionalPropertyTypes": false,
+    "types": [],
+    "baseUrl": "."
+  },
+  "include": ["type-tests/scaffold/**/*.ts", "type-tests/scaffold/**/*.tsx"]
+}
