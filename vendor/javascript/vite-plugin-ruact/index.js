@@ -109,6 +109,29 @@ export default function ruact(options = {}) {
         }
       }
 
+      // Story 10.1b — id-match guard (NFR16 dev/prod parity). The auto-registry
+      // (virtual:ruact/registry) is keyed on the source-relative manifest id and
+      // is loaded BEFORE this rewrite. If a "use client" component became a
+      // standalone facade chunk (e.g. it was added to build.rollupOptions.input,
+      // or split via manualChunks), its id is rewritten to a hashed URL here
+      // while the registry still resolves it by source path — a SILENT prod
+      // hydration miss. Fail the build loudly instead. In the shipped model
+      // components are imported by the registry and inlined into the app bundle,
+      // so they never become facade chunks and this never fires.
+      const rewritten = Object.keys(updated).filter(
+        (name) => manifest[name] && updated[name].id !== manifest[name].id
+      );
+      if (rewritten.length > 0) {
+        throw new Error(
+          `[vite-plugin-ruact] component(s) ${rewritten.join(", ")} were emitted as ` +
+            "standalone (code-split) chunks, so the Flight manifest names them by a " +
+            "hashed URL while virtual:ruact/registry resolves them by source path — a " +
+            "silent hydration miss in production. Keep \"use client\" components OUT of " +
+            "build.rollupOptions.input and avoid manualChunks for them: they are meant " +
+            "to be imported by the auto-registry and inlined into the app bundle."
+        );
+      }
+
       // Merge: keep entries that didn't get a hashed URL (dev mode)
       const final = { ...manifest, ...updated };
       // Strip internal _sourceFile field

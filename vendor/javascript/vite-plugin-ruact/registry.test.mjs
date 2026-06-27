@@ -28,7 +28,9 @@ import ruact from "./index.js";
 
 let dir;
 beforeEach(() => {
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), "ruact-10-1b-"));
+  // realpath so the dir matches Rollup's symlink-resolved `facadeModuleId`
+  // (macOS /tmp → /private/tmp); the build's id-rewrite match keys off it.
+  dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ruact-10-1b-")));
 });
 afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
@@ -161,5 +163,37 @@ describe("prod id-match invariant — real vite build (Story 10.1b AC2, LOAD-BEA
       expect(registry[entry.id][entry.name]).toBeTypeOf("function");
       expect(registry[entry.id][entry.name]()).toBe(name);
     }
+  }, 30000);
+
+  it("FAILS the build loudly if a component becomes a hashed facade chunk (no silent miss)", async () => {
+    // The hazardous branch: a component is ALSO a Rollup entry → it gets its own
+    // hashed facade chunk → generateBundle would rewrite its manifest id to the
+    // hashed URL while the registry still keys it by source path. The id-match
+    // guard must turn that into a build error, not a silent prod hydration miss.
+    write("components/PostList.js", [USE_CLIENT, "export function PostList() { return 'PostList'; }"].join("\n"));
+    write("entry.js", `export { default as registry } from ${JSON.stringify(REGISTRY_VIRTUAL_ID)};`);
+
+    await expect(
+      build({
+        root: dir,
+        logLevel: "silent",
+        plugins: [ruact({ componentsDir: "components" })],
+        build: {
+          outDir: "dist",
+          write: false,
+          minify: false,
+          rollupOptions: {
+            // Force the component to be its own entry → hashed facade chunk.
+            input: {
+              entry: path.join(dir, "entry.js"),
+              PostList: path.join(dir, "components/PostList.js"),
+            },
+            preserveEntrySignatures: "strict",
+            // Hashed names mirror a real prod build (the rewrite the guard catches).
+            output: { entryFileNames: "[name]-[hash].js", format: "es" },
+          },
+        },
+      })
+    ).rejects.toThrow(/silent hydration miss|standalone .* chunks/i);
   }, 30000);
 });
