@@ -423,6 +423,46 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(error.message).not_to include("__ruact_component__ called outside a ruact_render flow")
         expect(error).to be_a(ActionController::ActionControllerError).or(be_a(ActionView::MissingTemplate))
       end
+
+      it "GET with two concrete non-HTML types (application/json, application/xml) bypasses to super (AC4)" do
+        # AC4's literal example: NEITHER member is html nor the wildcard, so the
+        # predicate is false and the request must fall through to `super`.
+        error = nil
+        begin
+          get "/implicit-demo/show", {}, { "HTTP_ACCEPT" => "application/json, application/xml" }
+        rescue StandardError => e
+          error = e
+        end
+        expect(error).not_to be_nil
+        expect(error.message).not_to include("__ruact_component__ called outside a ruact_render flow")
+      end
+
+      it "GET with a mixed Accept that includes text/html (application/json, text/html) renders the shell" do
+        # HTML is acceptable (listed explicitly) → membership predicate activates
+        # the shell. default_render is only reached on an implicitly-rendered
+        # action (no JSON representation to prefer), so serving the accepted HTML
+        # is the sensible non-error outcome — and a 200, not the pre-10.0 500.
+        get "/implicit-demo/show", {}, { "HTTP_ACCEPT" => "application/json, text/html" }
+        expect(last_response.status).to eq(200)
+        expect(last_response.headers["Content-Type"]).to include("text/html")
+        expect(last_response.body).to include("DemoButton")
+      end
+
+      it "GET with a concrete-then-wildcard Accept (application/json, */*) renders the shell" do
+        get "/implicit-demo/show", {}, { "HTTP_ACCEPT" => "application/json, */*" }
+        expect(last_response.status).to eq(200)
+        expect(last_response.headers["Content-Type"]).to include("text/html")
+        expect(last_response.body).to include("DemoButton")
+      end
+
+      it "GET with a real browser Accept (text/html,...,*/*;q=0.8) renders the shell (AC2-adjacent)" do
+        get "/implicit-demo/show", {}, {
+          "HTTP_ACCEPT" => "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        }
+        expect(last_response.status).to eq(200)
+        expect(last_response.headers["Content-Type"]).to include("text/html")
+        expect(last_response.body).to include("DemoButton")
+      end
     end
   end
 end

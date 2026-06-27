@@ -53,6 +53,17 @@ module Ruact
     # to recognize the wildcard (`*/*`) alongside concrete `text/html`. A nil
     # entry (from an empty/unparseable Accept token) is treated as "accept
     # anything" so a blank Accept degrades to HTML rather than raising.
+    #
+    # This is a MEMBERSHIP test, not a priority/quality negotiation: a mixed
+    # `application/json, text/html` (HTML listed alongside a concrete API format)
+    # activates the HTML shell, because `default_render` is only ever reached on
+    # an action that did NOT explicitly render — there is no JSON representation
+    # to prefer, and the client did say it accepts HTML. A purely concrete
+    # non-HTML Accept (`application/json`, `application/json, application/xml`)
+    # has no html/wildcard member and still bypasses to `super` (AC4).
+    # `Mime::Type.parse` discards `q` values, so an exotic `text/html;q=0` is
+    # treated as acceptable rather than as an explicit rejection — out of scope
+    # for the implicit-render contract (see story 10.0 deferred note).
     def ruact_html_acceptable?
       accepts = request.accepts
       accepts.blank? || accepts.any? { |type| type.nil? || type == Mime::ALL || type.html? }
