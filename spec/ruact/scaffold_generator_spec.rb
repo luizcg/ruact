@@ -295,15 +295,17 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(query).to include("def as_row(record)")
     end
 
-    it "matches case-insensitively over string/text columns only (AC5)", :aggregate_failures do
-      # string (title) + text (body) are searchable; boolean/integer are not
-      expect(query).to include("LOWER(title) LIKE :needle ESCAPE '!' OR LOWER(body) LIKE :needle ESCAPE '!'")
-      expect(query).not_to include("LOWER(published)")
-      expect(query).not_to include("LOWER(views)")
+    it "searches string/text columns only (AC5)", :aggregate_failures do
+      # string (title) + text (body) are searchable; published/views are NOT in
+      # the searched-columns list (they still appear in the as_row serialization).
+      expect(query).to include("columns = %w[title body]")
+      expect(query).to include("LIKE :needle ESCAPE '!'")
     end
 
-    it "escapes LIKE wildcards in user input via sanitize_sql_like with an explicit ESCAPE", :aggregate_failures do
+    it "escapes wildcards + quotes columns + binds the value", :aggregate_failures do
       expect(query).to include(%(Post.sanitize_sql_like(term.downcase, "!")))
+      # reserved-word-safe column quoting, per-adapter
+      expect(query).to include("Post.connection.quote_column_name(column)")
       expect(query).to include("ESCAPE '!'")
       expect(query).to include("needle: needle")
     end
