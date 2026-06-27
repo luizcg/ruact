@@ -36,6 +36,15 @@ import { installServerFunctionsHooks } from "./server-functions-codegen.mjs";
  * validator (`Ruact::ComponentContract`) reads this and checks `<Component .../>`
  * ERB call sites for missing-required / unknown-prop / slot-misuse before render.
  */
+// Story 10.1b — the auto-registry virtual module. The install template (and the
+// playgrounds) import this instead of hand-maintaining a `MODULE_REGISTRY`. Its
+// value is `{ [manifest id]: moduleExports }`, derived from the SAME scan that
+// writes react-client-manifest.json, so registry membership == manifest
+// membership and the keys equal the manifest `id` the gem serializes as the
+// Flight `moduleId` (client_manifest.rb:79) — by construction, in dev AND prod.
+export const REGISTRY_VIRTUAL_ID = "virtual:ruact/registry";
+const RESOLVED_REGISTRY_ID = "\0" + REGISTRY_VIRTUAL_ID;
+
 export default function ruact(options = {}) {
   const {
     componentsDir = "app/javascript/components",
@@ -50,6 +59,22 @@ export default function ruact(options = {}) {
 
     configResolved(config) {
       root = config.root;
+    },
+
+    // Story 10.1b — resolve the auto-registry virtual module id.
+    resolveId(id) {
+      if (id === REGISTRY_VIRTUAL_ID) return RESOLVED_REGISTRY_ID;
+      return null;
+    },
+
+    // Story 10.1b — emit the registry source from the in-memory manifest. The
+    // manifest is populated in `buildStart` (and rebuilt by the dev watcher
+    // below), which Rollup/Vite run before module loading, so it is ready here
+    // in both `build` and `serve`. Keys are the manifest `id` values verbatim
+    // (no re-normalization → zero drift with what the gem resolves).
+    load(id) {
+      if (id === RESOLVED_REGISTRY_ID) return generateRegistrySource(manifest);
+      return null;
     },
 
     // During dev: build the manifest from source files
@@ -94,16 +119,26 @@ export default function ruact(options = {}) {
       writeManifest(path.resolve(root, manifestOutput), final);
     },
 
-    // Dev server: watch components dir and rebuild manifest on change
+    // Dev server: watch components dir and rebuild manifest on change. Story
+    // 10.1b — also react to add/unlink and invalidate the auto-registry virtual
+    // module so a newly added (or removed) "use client" component is registered
+    // with ZERO app-code edits (AC1, dev side).
     configureServer(server) {
       const dir = path.resolve(root, componentsDir);
       server.watcher.add(dir);
-      server.watcher.on("change", (file) => {
-        if (file.startsWith(dir)) {
-          manifest = buildManifest(dir);
-          writeManifest(path.resolve(root, manifestOutput), manifest);
+      const rebuild = (file) => {
+        if (!file.startsWith(dir)) return;
+        manifest = buildManifest(dir);
+        writeManifest(path.resolve(root, manifestOutput), manifest);
+        const mod = server.moduleGraph.getModuleById(RESOLVED_REGISTRY_ID);
+        if (mod) {
+          server.moduleGraph.invalidateModule(mod);
+          server.ws.send({ type: "full-reload" });
         }
-      });
+      };
+      server.watcher.on("change", rebuild);
+      server.watcher.on("add", rebuild);
+      server.watcher.on("unlink", rebuild);
     },
   }, options);
 }
@@ -153,6 +188,58 @@ export function buildManifest(componentsDir) {
   }
 
   return manifest;
+}
+
+// Story 10.1b (AC1, AC2) — render the auto-registry virtual module source from a
+// manifest (the same object `buildManifest` produces). The result is an ESM
+// module whose default export is `{ [manifest id]: moduleNamespace }`:
+//
+//   import * as __ruact_m0 from "/abs/app/javascript/components/PostList.jsx";
+//   const MODULE_REGISTRY = { "/PostList.jsx": __ruact_m0 };
+//   export default MODULE_REGISTRY;
+//
+// Why keyed on the manifest `id` (not a re-derived path): the gem serializes
+// `entry["id"]` as the Flight `moduleId`, and the client resolves
+// `moduleRegistry[row.moduleId]` — so keying the registry on the very same
+// `id` makes the id-match invariant hold BY CONSTRUCTION. The shipped runtime
+// loads components from this eager registry (the Flight client ignores the
+// Import row's `chunks`), so each component is statically imported and inlined
+// into the app bundle; it never becomes a standalone facade chunk, and
+// `generateBundle`'s hashed-URL rewrite (which only fires for facade chunks)
+// leaves the component `id` as its source-relative path in prod exactly as in
+// dev. NFR16 dev/prod parity therefore holds with one source-relative key set.
+//
+// One import per source file (a file may export several components sharing an
+// `id`/`_sourceFile`); membership equals manifest membership because we iterate
+// the manifest the scan built ("use client"-only, `.jsx`/`.tsx`, same dir).
+export function generateRegistrySource(manifest) {
+  const byId = new Map(); // manifest id -> absolute source file
+  for (const entry of Object.values(manifest || {})) {
+    if (!entry || !entry._sourceFile || !entry.id) continue;
+    if (!byId.has(entry.id)) byId.set(entry.id, entry._sourceFile);
+  }
+
+  const lines = [
+    "// AUTO-GENERATED by vite-plugin-ruact — component auto-registry (Story 10.1b).",
+    "// Maps each react-client-manifest `id` to its module exports. Do not edit.",
+  ];
+  const props = [];
+  let i = 0;
+  for (const [id, sourceFile] of byId) {
+    const local = `__ruact_m${i++}`;
+    lines.push(`import * as ${local} from ${JSON.stringify(toImportSpecifier(sourceFile))};`);
+    props.push(`  ${JSON.stringify(id)}: ${local},`);
+  }
+  lines.push("const MODULE_REGISTRY = {", ...props, "};", "export default MODULE_REGISTRY;", "");
+
+  return lines.join("\n");
+}
+
+// A bundler import specifier for an absolute fs path. Vite/Rollup resolve
+// absolute paths directly; normalize Windows backslashes to forward slashes so
+// the emitted specifier is a valid module string on every platform.
+function toImportSpecifier(absPath) {
+  return absPath.replace(/\\/g, "/");
 }
 
 function hasUseClient(content) {
