@@ -58,6 +58,9 @@ module Ruact
 
       SUPPORTED_TYPES = TYPE_MAP.keys.freeze
 
+      # Controls whose column is a Date/Time — serialized as an ISO-8601 string.
+      DATE_CONTROLS = %i[date datetime].freeze
+
       # Documentation anchor referenced by the unknown-type error message (AC4).
       DOCS_POINTER = "https://github.com/luizcg/ruact/blob/main/website/docs/api/scaffold.md#attribute-types"
 
@@ -155,8 +158,27 @@ module Ruact
         # aborts). Raised as a `Thor::Error` so the CLI prints it without a Ruby
         # backtrace and exits non-zero.
         def parse_attributes!
+          assert_flat_resource_name!
           assert_supported_attribute_types!
           super
+        end
+
+        # 10.1 generates a FLAT resource (`Post`). A namespaced name (`Admin::Post`
+        # / `admin/post`) would desync across the emitted files — the controller
+        # file lands at the un-namespaced `posts_controller.rb` path while the
+        # class text is `Admin::PostsController` (Zeitwerk-invalid), component
+        # filenames/imports become `Admin::PostList` / `createAdmin::Post` (not
+        # valid TS, and not the route codegen's `createAdminPost`). Rather than
+        # emit silently-broken output, fail loud: namespaced scaffolds are a
+        # later concern. `name`/`class_name` are already assigned by NamedBase's
+        # `assign_names!` (it runs before `parse_attributes!`).
+        def assert_flat_resource_name!
+          return unless name.to_s.include?("/") || class_name.include?("::")
+
+          raise Thor::Error, <<~MSG.chomp
+            ruact:scaffold — namespaced resources (e.g. `#{name}`) are not supported yet.
+            Generate a flat resource, e.g. `rails generate ruact:scaffold Post title:string`.
+          MSG
         end
 
         def assert_supported_attribute_types!
@@ -213,10 +235,18 @@ module Ruact
         end
 
         # A Ruby hash literal serializing +var+ to plain row values (string keys),
-        # used by the index/edit ERB views — no `as_json` in the view.
+        # used by the index/edit ERB views — no `as_json` in the view. Date and
+        # datetime columns are emitted as ISO-8601 STRINGS (`&.iso8601`, nil-safe)
+        # so the wire value matches the declared FR99 `string` type — sending a raw
+        # `Time`/`Date` would serialize as a Flight `$D` value, not the plain string
+        # the typed `<Model>Row` (and the form's text/date inputs) expect.
         def serialized_row(var)
           pairs = [%("id" => #{var}.id)]
-          pairs += scaffold_attributes.map { |attr| %("#{attr.column_name}" => #{var}.#{attr.column_name}) }
+          pairs += scaffold_attributes.map do |attr|
+            expr = "#{var}.#{attr.column_name}"
+            expr = "#{expr}&.iso8601" if DATE_CONTROLS.include?(attr.control)
+            %("#{attr.column_name}" => #{expr})
+          end
           "{ #{pairs.join(', ')} }"
         end
 

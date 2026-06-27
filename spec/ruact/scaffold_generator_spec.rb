@@ -220,6 +220,33 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
     end
   end
 
+  describe "edge cases (Codex review round 1)" do
+    it "fails loud on a namespaced resource rather than emit broken output" do
+      expect { build(%w[Admin::Post title:string]) }.to raise_error(Thor::Error, /namespaced resources/)
+    end
+
+    it "normalizes date/datetime columns to ISO strings in the serialized rows", :aggregate_failures do
+      run_scaffold(%w[Event name:string starts_at:datetime on:date])
+      index = read("app/views/events/index.html.erb")
+      expect(index).to include("starts_at&.iso8601")
+      expect(index).to include("on&.iso8601")
+      # a scalar string column is NOT wrapped
+      expect(index).to include('"name" => event.name')
+    end
+
+    it "renders inline errors for a boolean field too" do
+      run_scaffold(%w[Post title:string published:boolean])
+      form = read("app/javascript/components/PostForm.tsx")
+      expect(form).to include('errorsFor("published")')
+    end
+
+    it "addresses a references column as <name>_id in the row type" do
+      run_scaffold(%w[Comment body:text author:references])
+      list = read("app/javascript/components/CommentList.tsx")
+      expect(list).to include("author_id: number")
+    end
+  end
+
   describe "idempotent / non-destructive re-run (AC5)" do
     it "injects `resources :posts` only once across re-runs" do
       run_scaffold
