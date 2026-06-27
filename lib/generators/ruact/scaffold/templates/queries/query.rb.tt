@@ -15,21 +15,27 @@ class <%= query_class_name %> < ApplicationQuery
   # what the server already had. Rows are the SAME shape the index serializes, so
   # the search results and the server-rendered props are interchangeable.
   def search(q:)
-    needle = q.to_s.strip.downcase
+    term = q.to_s.strip
     scope =
 <% if searchable_attributes.empty? -%>
-      <%= class_name %>.all
+      # No string/text columns to match on — a text search can only match
+      # nothing, so a non-blank query returns an empty set (a blank box is idle).
+      term.empty? ? <%= class_name %>.all : <%= class_name %>.none
 <% else -%>
-      if needle.empty?
+      if term.empty?
         <%= class_name %>.all
       else
+        # `sanitize_sql_like` escapes user-supplied `%`/`_` so they match
+        # literally; the value is bound (`:needle`), never interpolated into SQL.
+        needle = "%#{<%= class_name %>.sanitize_sql_like(term.downcase)}%"
         <%= class_name %>.where(
           "<%= searchable_attributes.map { |attr| "LOWER(#{attr.column_name}) LIKE :needle" }.join(' OR ') %>",
-          needle: "%#{needle}%"
+          needle: needle
         )
       end
 <% end -%>
-    scope.order(created_at: :desc).map { |record| as_row(record) }
+    # Order by `id` (always present) — newest-first without assuming timestamps.
+    scope.order(id: :desc).map { |record| as_row(record) }
   end
 
   private

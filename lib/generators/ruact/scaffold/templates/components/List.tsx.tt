@@ -132,7 +132,10 @@ const columns<% if typescript? %>: ColumnDef<<%= class_name %>Row>[]<% end %> = 
                 <DropdownMenuItem asChild>
                   <a href={`/<%= plural_name %>/${record.id}/edit`}>Edit</a>
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
+                {/* NOT asChild — <%= class_name %>DeleteDialog renders a plain button that does
+                    not forward props/ref (Story 10.4 upgrades it to a forwarding
+                    AlertDialog); wrap it as a normal menu-item child instead. */}
+                <DropdownMenuItem>
                   <<%= class_name %>DeleteDialog <%= singular_name %>={record} />
                 </DropdownMenuItem>
               </DropdownMenuContent>

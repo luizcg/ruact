@@ -148,7 +148,10 @@ const columns: ColumnDef<PostRow>[] = [
                 <DropdownMenuItem asChild>
                   <a href={`/posts/${record.id}/edit`}>Edit</a>
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
+                {/* NOT asChild — PostDeleteDialog renders a plain button that does
+                    not forward props/ref (Story 10.4 upgrades it to a forwarding
+                    AlertDialog); wrap it as a normal menu-item child instead. */}
+                <DropdownMenuItem>
                   <PostDeleteDialog post={record} />
                 </DropdownMenuItem>
               </DropdownMenuContent>

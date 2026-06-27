@@ -302,8 +302,18 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(query).not_to include("LOWER(views)")
     end
 
+    it "escapes LIKE wildcards in user input via sanitize_sql_like and binds the value", :aggregate_failures do
+      expect(query).to include("Post.sanitize_sql_like(term.downcase)")
+      expect(query).to include("needle: needle")
+    end
+
+    it "orders by id (no timestamps assumption)" do
+      expect(query).to include("scope.order(id: :desc)")
+      expect(query).not_to include("created_at")
+    end
+
     it "blank q returns the whole collection (AC5)" do
-      expect(query).to include("if needle.empty?")
+      expect(query).to include("if term.empty?")
       expect(query).to include("Post.all")
     end
 
@@ -317,10 +327,11 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(read("app/queries/notes_query.rb")).to include("class NotesQuery < ApplicationQuery")
     end
 
-    it "falls back to the whole collection when no string/text column exists" do
+    it "returns all when idle / none when searched if no string/text column exists", :aggregate_failures do
       run_scaffold(%w[Tally count:integer flag:boolean])
       tally = read("app/queries/tallies_query.rb")
-      expect(tally).to include("Tally.all")
+      # a text search can't match a non-text model → empty on non-blank, all when idle
+      expect(tally).to include("term.empty? ? Tally.all : Tally.none")
       expect(tally).not_to include("LIKE")
       expect { RubyVM::InstructionSequence.compile(tally) }.not_to raise_error
     end
