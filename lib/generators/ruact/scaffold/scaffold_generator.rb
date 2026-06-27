@@ -226,9 +226,14 @@ module Ruact
         end
 
         # FR99 — the generated `type <Model>Row` body, e.g.
-        # "id: number; title: string; published: boolean".
+        # "id: number; title: string | null; published: boolean | null". Attribute
+        # columns are `| null`: a scaffolded Rails column is nullable by default and
+        # the generator has no schema access to prove otherwise, so the honest type
+        # is the full FR99 wire union (`string | number | boolean | null`). `id` (the
+        # PK) is never null. The components null-guard these (`?? ""` / `Boolean(...)`).
         def ts_row_fields
-          (["id: number"] + scaffold_attributes.map { |attr| "#{attr.column_name}: #{attr.ts_type}" }).join("; ")
+          fields = scaffold_attributes.map { |attr| "#{attr.column_name}: #{attr.ts_type} | null" }
+          (["id: number"] + fields).join("; ")
         end
 
         # A Ruby hash literal serializing +var+ to plain row values (string keys),

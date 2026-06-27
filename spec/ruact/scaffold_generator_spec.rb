@@ -244,10 +244,12 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(form).to include('errorsFor("published")')
     end
 
-    it "addresses a references column as <name>_id in the row type" do
+    it "addresses a references column as <name>_id in the (nullable) row type" do
       run_scaffold(%w[Comment body:text author:references])
       list = read("app/javascript/components/CommentList.tsx")
-      expect(list).to include("author_id: number")
+      # FR99 wire union: attribute columns are nullable; the PK id is not.
+      expect(list).to include("author_id: number | null")
+      expect(list).to include("id: number;")
     end
   end
 
