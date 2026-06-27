@@ -225,11 +225,15 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect { build(%w[Admin::Post title:string]) }.to raise_error(Thor::Error, /namespaced resources/)
     end
 
-    it "normalizes date/datetime columns to ISO strings in the serialized rows", :aggregate_failures do
-      run_scaffold(%w[Event name:string starts_at:datetime on:date])
+    it "coerces date/datetime/decimal row values to their wire+control type", :aggregate_failures do
+      run_scaffold(%w[Event name:string starts_at:datetime on:date price:decimal])
       index = read("app/views/events/index.html.erb")
-      expect(index).to include("starts_at&.iso8601")
+      # datetime → datetime-local-valid string (no seconds/offset)
+      expect(index).to include('starts_at&.strftime("%Y-%m-%dT%H:%M")')
+      # date → YYYY-MM-DD
       expect(index).to include("on&.iso8601")
+      # decimal (BigDecimal serializes as a string) → number, matching ts:number
+      expect(index).to include("price&.to_f")
       # a scalar string column is NOT wrapped
       expect(index).to include('"name" => event.name')
     end

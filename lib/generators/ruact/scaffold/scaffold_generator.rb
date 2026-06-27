@@ -58,9 +58,6 @@ module Ruact
 
       SUPPORTED_TYPES = TYPE_MAP.keys.freeze
 
-      # Controls whose column is a Date/Time — serialized as an ISO-8601 string.
-      DATE_CONTROLS = %i[date datetime].freeze
-
       # Documentation anchor referenced by the unknown-type error message (AC4).
       DOCS_POINTER = "https://github.com/luizcg/ruact/blob/main/website/docs/api/scaffold.md#attribute-types"
 
@@ -235,19 +232,29 @@ module Ruact
         end
 
         # A Ruby hash literal serializing +var+ to plain row values (string keys),
-        # used by the index/edit ERB views — no `as_json` in the view. Date and
-        # datetime columns are emitted as ISO-8601 STRINGS (`&.iso8601`, nil-safe)
-        # so the wire value matches the declared FR99 `string` type — sending a raw
-        # `Time`/`Date` would serialize as a Flight `$D` value, not the plain string
-        # the typed `<Model>Row` (and the form's text/date inputs) expect.
+        # used by the index/edit ERB views — no `as_json` in the view. Each value
+        # is shaped so the wire value matches both the declared FR99 `<Model>Row`
+        # type AND the form input that binds it (see {#row_value_expr}).
         def serialized_row(var)
           pairs = [%("id" => #{var}.id)]
-          pairs += scaffold_attributes.map do |attr|
-            expr = "#{var}.#{attr.column_name}"
-            expr = "#{expr}&.iso8601" if DATE_CONTROLS.include?(attr.control)
-            %("#{attr.column_name}" => #{expr})
-          end
+          pairs += scaffold_attributes.map { |attr| %("#{attr.column_name}" => #{row_value_expr(var, attr)}) }
           "{ #{pairs.join(', ')} }"
+        end
+
+        # The Ruby expression that reads +attr+ off +var+ for the serialized row,
+        # coerced (nil-safe) to the type its FR99 wire type + form control expect:
+        #   - date     → `&.iso8601`                  (`YYYY-MM-DD`, a `<input type=date>`-valid string)
+        #   - datetime → `&.strftime("%Y-%m-%dT%H:%M")` (a `<input type=datetime-local>`-valid string;
+        #                a raw `Time#iso8601` carries seconds + offset the control rejects)
+        #   - decimal  → `&.to_f`                     (BigDecimal serializes as a STRING; the row type is `number`)
+        #   - everything else is already a wire-correct scalar.
+        def row_value_expr(var, attr)
+          base = "#{var}.#{attr.column_name}"
+          case attr.control
+          when :date then "#{base}&.iso8601"
+          when :datetime then %(#{base}&.strftime("%Y-%m-%dT%H:%M"))
+          else attr.type == "decimal" ? "#{base}&.to_f" : base
+          end
         end
 
         # The plain HTML `<input type>` for a non-checkbox/textarea control.
