@@ -4,7 +4,7 @@
 // output (a gem rspec example asserts that equality), so type-checking it under
 // `tsconfig.scaffold.json` proves the emitted typed List holds the FR99 server
 // boundary + the shadcn `table`-primitive import contract. There is NO
-// table-engine dependency — Story 10.2b moved the List off the `@tanstack/react-table`
+// table-engine dependency — Story 10.2b moved the List off the react-table-based
 // `DataTable` recipe onto the dep-free shadcn `table` primitive + a generated sort.
 //
 // These are deliberately MINIMAL structural shims — NOT the real shadcn / react

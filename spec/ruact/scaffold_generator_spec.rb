@@ -259,18 +259,22 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(list).to include("<TableRow key={row.id}>")
       # clickable header toggles the generated sort (no column.toggleSorting)
       expect(list).to include('onClick={() => toggleSort("views")}')
+      # numeric column headers keep the right-aligned wrapper preserved from 10.2
+      expect(list).to include('<div className="text-right">')
+      # trailing actions header is non-sortable (a plain label, no toggleSort)
+      expect(list).to include('<TableHead className="text-right">Actions</TableHead>')
     end
 
     it "types each cell per attribute kind, reading row.<attr> (AC1)", :aggregate_failures do
       # boolean → Badge "Yes"/"No"
       expect(list).to include('variant={row.published ? "default" : "secondary"}>')
       expect(list).to include('{row.published ? "Yes" : "No"}</Badge>')
-      # integer → right-aligned numeric cell
-      expect(list).to include('<TableCell className="text-right tabular-nums">{String(row.views ?? "")}</TableCell>')
-      # datetime → locale-formatted cell
-      expect(list).to include("new Date(String(row.published_at)).toLocaleString()")
-      # string/text → plain text cell
-      expect(list).to include("<TableCell>{String(row.title ?? \"\")}</TableCell>")
+      # integer → right-aligned numeric cell (inner div preserved from 10.2)
+      expect(list).to include('<div className="text-right tabular-nums">{String(row.views ?? "")}</div>')
+      # datetime → locale-formatted cell (inner span preserved from 10.2)
+      expect(list).to include("new Date(String(row.published_at)).toLocaleString() : \"\"}</span>")
+      # string/text → plain text cell (inner span preserved from 10.2)
+      expect(list).to include("<span>{String(row.title ?? \"\")}</span>")
     end
 
     it "has a per-row actions cell: Edit link + delete trigger, collapsing under a breakpoint (AC3)",

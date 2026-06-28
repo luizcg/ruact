@@ -272,10 +272,12 @@ export function <%= class_name %>List({
               </TableHead>
 <% scaffold_attributes.each do |attr| -%>
 <% if attr.column_kind == :numeric -%>
-              <TableHead className="text-right">
-                <Button variant="ghost" onClick={() => toggleSort("<%= attr.column_name %>")}>
-                  <%= attr.column_name.humanize %>
-                </Button>
+              <TableHead>
+                <div className="text-right">
+                  <Button variant="ghost" onClick={() => toggleSort("<%= attr.column_name %>")}>
+                    <%= attr.column_name.humanize %>
+                  </Button>
+                </div>
               </TableHead>
 <% else -%>
               <TableHead>
@@ -299,15 +301,21 @@ export function <%= class_name %>List({
 <% scaffold_attributes.each do |attr| -%>
 <% kind = attr.column_kind -%>
 <% if kind == :numeric -%>
-                <TableCell className="text-right tabular-nums">{String(row.<%= attr.column_name %> ?? "")}</TableCell>
+                <TableCell>
+                  <div className="text-right tabular-nums">{String(row.<%= attr.column_name %> ?? "")}</div>
+                </TableCell>
 <% elsif kind == :badge -%>
                 <TableCell>
                   <Badge variant={row.<%= attr.column_name %> ? "default" : "secondary"}>{row.<%= attr.column_name %> ? "Yes" : "No"}</Badge>
                 </TableCell>
 <% elsif kind == :date -%>
-                <TableCell>{row.<%= attr.column_name %> ? new Date(String(row.<%= attr.column_name %>)).toLocaleString() : ""}</TableCell>
+                <TableCell>
+                  <span>{row.<%= attr.column_name %> ? new Date(String(row.<%= attr.column_name %>)).toLocaleString() : ""}</span>
+                </TableCell>
 <% else -%>
-                <TableCell>{String(row.<%= attr.column_name %> ?? "")}</TableCell>
+                <TableCell>
+                  <span>{String(row.<%= attr.column_name %> ?? "")}</span>
+                </TableCell>
 <% end -%>
 <% end -%>
                 <TableCell>

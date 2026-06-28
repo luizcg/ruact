@@ -278,20 +278,24 @@ export function PostList({
                   Published
                 </Button>
               </TableHead>
-              <TableHead className="text-right">
-                <Button variant="ghost" onClick={() => toggleSort("views")}>
-                  Views
-                </Button>
+              <TableHead>
+                <div className="text-right">
+                  <Button variant="ghost" onClick={() => toggleSort("views")}>
+                    Views
+                  </Button>
+                </div>
               </TableHead>
               <TableHead>
                 <Button variant="ghost" onClick={() => toggleSort("published_at")}>
                   Published at
                 </Button>
               </TableHead>
-              <TableHead className="text-right">
-                <Button variant="ghost" onClick={() => toggleSort("author_id")}>
-                  Author
-                </Button>
+              <TableHead>
+                <div className="text-right">
+                  <Button variant="ghost" onClick={() => toggleSort("author_id")}>
+                    Author
+                  </Button>
+                </div>
               </TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
@@ -304,14 +308,24 @@ export function PostList({
                     {row.id}
                   </a>
                 </TableCell>
-                <TableCell>{String(row.title ?? "")}</TableCell>
-                <TableCell>{String(row.body ?? "")}</TableCell>
+                <TableCell>
+                  <span>{String(row.title ?? "")}</span>
+                </TableCell>
+                <TableCell>
+                  <span>{String(row.body ?? "")}</span>
+                </TableCell>
                 <TableCell>
                   <Badge variant={row.published ? "default" : "secondary"}>{row.published ? "Yes" : "No"}</Badge>
                 </TableCell>
-                <TableCell className="text-right tabular-nums">{String(row.views ?? "")}</TableCell>
-                <TableCell>{row.published_at ? new Date(String(row.published_at)).toLocaleString() : ""}</TableCell>
-                <TableCell className="text-right tabular-nums">{String(row.author_id ?? "")}</TableCell>
+                <TableCell>
+                  <div className="text-right tabular-nums">{String(row.views ?? "")}</div>
+                </TableCell>
+                <TableCell>
+                  <span>{row.published_at ? new Date(String(row.published_at)).toLocaleString() : ""}</span>
+                </TableCell>
+                <TableCell>
+                  <div className="text-right tabular-nums">{String(row.author_id ?? "")}</div>
+                </TableCell>
                 <TableCell>
                   <RowActions record={row} onDeleted={onDeleted} />
                 </TableCell>
