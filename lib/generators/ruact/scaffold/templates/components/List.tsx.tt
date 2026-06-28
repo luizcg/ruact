@@ -9,17 +9,19 @@
 // SERVER-RENDERED prop (`posts`); there is no client query for the initial
 // render. A query only enters when the *client* drives the read: the search box
 // calls useQuery(<%= js_search_alias %>, { q }) and swaps in filtered rows as you type.
-// Per-row delete is delegated to <%= class_name %>DeleteDialog (DELETE /<%= plural_name %>/:id via the
-// destroy<%= class_name %> action). Column sorting is CLIENT-ONLY — the dataset is the
-// index payload; server-side sort/pagination is Phase-3 territory.
+// Per-row delete drives a controlled <%= class_name %>DeleteDialog (DELETE
+// /<%= plural_name %>/:id via the destroy<%= class_name %> action); on `{ ok: true }` the row is
+// removed from the displayed rows IN PLACE (no reload, no URL built). Column
+// sorting is CLIENT-ONLY — the dataset is the index payload; server-side
+// sort/pagination is Phase-3 territory.
 //
 // The `DataTable` recipe + the shadcn primitives below import from
 // `@/components/ui/*`, which Story 10.5 installs (shadcn ships no installable
 // DataTable — it is a copy-paste @tanstack/react-table recipe 10.5 templates).
 // A freshly scaffolded app will not resolve these until 10.5 lands; that is
 // expected (the end-to-end live demo is Story 10.7).
-import { useState } from "react";
-import { search as <%= js_search_alias %>, useQuery } from "@/.ruact/server-functions";
+import { useMemo, useState } from "react";
+import { search as <%= js_search_alias %>, destroy<%= class_name %>, useQuery } from "@/.ruact/server-functions";
 import { <%= class_name %>DeleteDialog } from "./<%= class_name %>DeleteDialog";
 import { DataTable } from "@/components/ui/data-table";
 import { Badge } from "@/components/ui/badge";
@@ -43,109 +45,117 @@ export const __ruactContract = {
 };
 <% end -%>
 
-// Typed columns config (AC1) — one column per attribute, the cell renderer keyed
-// on the attribute type: boolean → Badge, numeric → right-aligned, date →
-// locale-formatted, everything else → plain text. Every header is a sortable
-// Button (AC2). The trailing actions column (AC3) keeps Edit + delete reachable
-// and collapses into a … menu under the `md` breakpoint (768px) so it never
-// pushes the data columns out of layout on narrow viewports.
-const columns<% if typescript? %>: ColumnDef<<%= class_name %>Row>[]<% end %> = [
-  {
-    accessorKey: "id",
-    header: ({ column }) => (
-      <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
-        ID
-      </Button>
-    ),
-    cell: ({ row }) => (
-      <a href={`/<%= plural_name %>/${row.original.id}`} className="font-medium underline-offset-4 hover:underline">
-        {row.original.id}
-      </a>
-    ),
-  },
-<% scaffold_attributes.each do |attr| -%>
-<% kind = attr.column_kind -%>
-  {
-    accessorKey: "<%= attr.column_name %>",
-<% if kind == :numeric -%>
-    header: ({ column }) => (
-      <div className="text-right">
-        <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
-          <%= attr.column_name.humanize %>
+// Pull a human-readable message out of the failed-delete result. A thrown
+// RuactActionError (non-2xx) carries the parsed structured-error body, whose
+// `message` the gem shapes per env (the exception message in development, the
+// generic server message in production); a resolved soft-failure may carry a
+// top-level `error`/`message`. Returns undefined when none is present, so the
+// dialog can fall back to its own generic copy.
+function deleteErrorMessage(error<% if typescript? %>: unknown<% end %>)<% if typescript? %>: string | undefined<% end %> {
+  if (error != null && typeof error === "object") {
+    const carrier = error<% if typescript? %> as { body?: unknown; error?: unknown; message?: unknown }<% end %>;
+    if (carrier.body != null && typeof carrier.body === "object") {
+      const message = (carrier.body<% if typescript? %> as { message?: unknown }<% end %>).message;
+      if (typeof message === "string" && message.length > 0) return message;
+    }
+    if (typeof carrier.error === "string" && carrier.error.length > 0) return carrier.error;
+    if (typeof carrier.message === "string" && carrier.message.length > 0) return carrier.message;
+  }
+  return undefined;
+}
+
+// A resolved delete is a SUCCESS only on the server-owned success shapes: the
+// in-list default `{ ok: true }`, or the delete-from-show `$redirect` the
+// accessor already followed (which resolves to `null`). Any other resolved shape
+// (e.g. an explicit `{ ok: false }`) is a non-success the dialog surfaces.
+function deleteSucceeded(result<% if typescript? %>: unknown<% end %>)<% if typescript? %>: boolean<% end %> {
+  if (result === null) return true;
+  return (
+    typeof result === "object" &&
+    (result<% if typescript? %> as { ok?: unknown }<% end %>).ok === true
+  );
+}
+
+// Per-row actions (AC5) — Edit + a Delete TRIGGER that opens the controlled
+// AlertDialog. Each row owns its OWN dialog `open` state (one independent
+// useState), so the dialog opens for exactly one row. `onConfirm` calls
+// destroy<%= class_name %> and, on a server-owned success, asks the List to drop the row
+// in place via `onDeleted`. The same component renders BOTH the inline (≥ md) and
+// the overflow-menu (< md) layouts. The trigger is never unmounted, so Radix
+// returns focus to it on close.
+function RowActions({ record, onDeleted }<% if typescript? %>: {
+  record: <%= class_name %>Row;
+  onDeleted: (id: number) => void;
+}<% end %>) {
+  const [open, setOpen] = useState(false);
+  // The overflow menu is CONTROLLED so the Delete item can close it explicitly
+  // and open the dialog in the same batch — preventing Radix's default
+  // close-autofocus from pulling focus back to the trigger as the dialog mounts.
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  async function onConfirm()<% if typescript? %>: Promise<{ ok: boolean; error?: string }><% end %> {
+    try {
+      const result = await destroy<%= class_name %>({ id: record.id });
+      if (deleteSucceeded(result)) {
+        onDeleted(record.id);
+        setOpen(false);
+        return { ok: true };
+      }
+      // Resolved but not a success shape → keep the dialog open with the message.
+      return { ok: false, error: deleteErrorMessage(result) };
+    } catch (error) {
+      // Failure (non-2xx structured error) → keep the dialog open, message inline.
+      return { ok: false, error: deleteErrorMessage(error) };
+    }
+  }
+
+  return (
+    <div className="flex justify-end">
+      {/* ≥ md (768px): inline actions */}
+      <div className="hidden items-center gap-2 md:flex">
+        <Button variant="ghost" asChild>
+          <a href={`/<%= plural_name %>/${record.id}/edit`}>Edit</a>
+        </Button>
+        <Button variant="ghost" className="text-destructive" onClick={() => setOpen(true)}>
+          Delete
         </Button>
       </div>
-    ),
-    cell: ({ row }) => (
-      <div className="text-right tabular-nums">{String(row.getValue("<%= attr.column_name %>") ?? "")}</div>
-    ),
-<% elsif kind == :badge -%>
-    header: ({ column }) => (
-      <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
-        <%= attr.column_name.humanize %>
-      </Button>
-    ),
-    cell: ({ row }) => {
-      const value = row.getValue("<%= attr.column_name %>");
-      return <Badge variant={value ? "default" : "secondary"}>{value ? "Yes" : "No"}</Badge>;
-    },
-<% elsif kind == :date -%>
-    header: ({ column }) => (
-      <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
-        <%= attr.column_name.humanize %>
-      </Button>
-    ),
-    cell: ({ row }) => {
-      const value = row.getValue("<%= attr.column_name %>");
-      return <span>{value ? new Date(String(value)).toLocaleString() : ""}</span>;
-    },
-<% else -%>
-    header: ({ column }) => (
-      <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
-        <%= attr.column_name.humanize %>
-      </Button>
-    ),
-    cell: ({ row }) => <span>{String(row.getValue("<%= attr.column_name %>") ?? "")}</span>,
-<% end -%>
-  },
-<% end -%>
-  {
-    id: "actions",
-    enableSorting: false,
-    cell: ({ row }) => {
-      const record = row.original;
-      return (
-        <div className="flex justify-end">
-          {/* ≥ md (768px): inline actions */}
-          <div className="hidden items-center gap-2 md:flex">
-            <Button variant="ghost" asChild>
+      {/* < md: collapse into a … overflow menu so actions never break layout */}
+      <div className="md:hidden">
+        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" aria-label="Open actions menu">…</Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem asChild>
               <a href={`/<%= plural_name %>/${record.id}/edit`}>Edit</a>
-            </Button>
-            <<%= class_name %>DeleteDialog <%= singular_name %>={record} />
-          </div>
-          {/* < md: collapse into a … overflow menu so actions never break layout */}
-          <div className="md:hidden">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" aria-label="Open actions menu">…</Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem asChild>
-                  <a href={`/<%= plural_name %>/${record.id}/edit`}>Edit</a>
-                </DropdownMenuItem>
-                {/* NOT asChild — <%= class_name %>DeleteDialog renders a plain button that does
-                    not forward props/ref (Story 10.4 upgrades it to a forwarding
-                    AlertDialog); wrap it as a normal menu-item child instead. */}
-                <DropdownMenuItem>
-                  <<%= class_name %>DeleteDialog <%= singular_name %>={record} />
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </div>
-      );
-    },
-  },
-];
+            </DropdownMenuItem>
+            {/* Close the menu and open the AlertDialog together: preventDefault
+                stops the default close (whose autofocus would fight the dialog),
+                then we close the menu and open the dialog deterministically. */}
+            <DropdownMenuItem
+              className="text-destructive"
+              onSelect={(event) => {
+                event.preventDefault();
+                setMenuOpen(false);
+                setOpen(true);
+              }}
+            >
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      <<%= class_name %>DeleteDialog
+        open={open}
+        onOpenChange={setOpen}
+        <%= singular_name %>={record}
+        onConfirm={onConfirm}
+      />
+    </div>
+  );
+}
 
 export function <%= class_name %>List({
   posts = [],
@@ -154,11 +164,101 @@ export function <%= class_name %>List({
   const [q, setQ] = useState("");
   const searching = q.trim().length > 0;
 
+  // Ids deleted IN PLACE — a single tombstone list (not a second row cache)
+  // applied to whichever source is displayed, so a delete removes the row
+  // immediately whether it happened on the server-rendered list OR on the live
+  // search results.
+  const [removedIds, setRemovedIds] = useState<% if typescript? %><number[]><% end %>([]);
+
   // Client-driven read (AC5) — only meaningful while searching. When q is blank
-  // the box is idle and we fall back to the server-rendered `posts`.
+  // the box is idle and we fall back to the server-rendered rows.
   const { data: searchData, loading: searchLoading } = useQuery<% if typescript? %><<%= class_name %>Row[]><% end %>(<%= js_search_alias %>, { q: q.trim() });
 
-  const rows = searching ? searchData ?? [] : posts;
+  const source = searching ? searchData ?? [] : posts;
+  const rows = removedIds.length === 0 ? source : source.filter((row) => !removedIds.includes(row.id));
+
+  // Typed columns config (AC1) — built INSIDE the component (design B) so the
+  // actions cell closes over component state (`onDeleted`) to drive the
+  // controlled delete dialog + in-list removal, with no change to the DataTable's
+  // `{ columns, data }` interface. One column per attribute, the cell renderer
+  // keyed on the attribute type: boolean → Badge, numeric → right-aligned, date →
+  // locale-formatted, everything else → plain text. Every header is a sortable
+  // Button (AC2). The trailing actions column collapses into a … menu under the
+  // `md` breakpoint (768px). Memoized once: `onDeleted` only calls the stable
+  // `setRemovedIds`, so the empty dependency list is correct.
+  const columns<% if typescript? %>: ColumnDef<<%= class_name %>Row>[]<% end %> = useMemo(() => {
+    const onDeleted = (id<% if typescript? %>: number<% end %>) =>
+      setRemovedIds((current) => (current.includes(id) ? current : [...current, id]));
+
+    return [
+      {
+        accessorKey: "id",
+        header: ({ column }) => (
+          <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
+            ID
+          </Button>
+        ),
+        cell: ({ row }) => (
+          <a href={`/<%= plural_name %>/${row.original.id}`} className="font-medium underline-offset-4 hover:underline">
+            {row.original.id}
+          </a>
+        ),
+      },
+<% scaffold_attributes.each do |attr| -%>
+<% kind = attr.column_kind -%>
+      {
+        accessorKey: "<%= attr.column_name %>",
+<% if kind == :numeric -%>
+        header: ({ column }) => (
+          <div className="text-right">
+            <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
+              <%= attr.column_name.humanize %>
+            </Button>
+          </div>
+        ),
+        cell: ({ row }) => (
+          <div className="text-right tabular-nums">{String(row.getValue("<%= attr.column_name %>") ?? "")}</div>
+        ),
+<% elsif kind == :badge -%>
+        header: ({ column }) => (
+          <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
+            <%= attr.column_name.humanize %>
+          </Button>
+        ),
+        cell: ({ row }) => {
+          const value = row.getValue("<%= attr.column_name %>");
+          return <Badge variant={value ? "default" : "secondary"}>{value ? "Yes" : "No"}</Badge>;
+        },
+<% elsif kind == :date -%>
+        header: ({ column }) => (
+          <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
+            <%= attr.column_name.humanize %>
+          </Button>
+        ),
+        cell: ({ row }) => {
+          const value = row.getValue("<%= attr.column_name %>");
+          return <span>{value ? new Date(String(value)).toLocaleString() : ""}</span>;
+        },
+<% else -%>
+        header: ({ column }) => (
+          <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
+            <%= attr.column_name.humanize %>
+          </Button>
+        ),
+        cell: ({ row }) => <span>{String(row.getValue("<%= attr.column_name %>") ?? "")}</span>,
+<% end -%>
+      },
+<% end -%>
+      {
+        id: "actions",
+        enableSorting: false,
+        cell: ({ row }) => <RowActions record={row.original} onDeleted={onDeleted} />,
+      },
+    ];
+    // `setRemovedIds` is a stable React setter; the column defs capture nothing
+    // else from render, so the columns are built exactly once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <section className="mx-auto max-w-4xl px-4 py-8">
@@ -178,7 +278,7 @@ export function <%= class_name %>List({
       />
 
       {searching && searchLoading && <p className="text-sm text-muted-foreground">Searching…</p>}
-      {!searching && posts.length === 0 && <p className="text-sm text-muted-foreground">{emptyLabel}</p>}
+      {!searching && rows.length === 0 && <p className="text-sm text-muted-foreground">{emptyLabel}</p>}
       {searching && !searchLoading && rows.length === 0 && (
         <p className="text-sm text-muted-foreground">No <%= plural_name %> match “{q.trim()}”.</p>
       )}

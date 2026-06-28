@@ -100,9 +100,8 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(controller).not_to match(/^\s*ruact_render\b/)
     end
 
-    it "drives navigation server-side via redirect_to on success", :aggregate_failures do
+    it "drives navigation server-side via redirect_to on create/update success", :aggregate_failures do
       expect(controller).to include("redirect_to post")
-      expect(controller).to include("redirect_to posts_url")
     end
 
     it "surfaces the FR98 keyed errors map on the failure path" do
@@ -175,9 +174,13 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(form).not_to include("useQuery")
     end
 
-    it "DeleteDialog: calls destroyPost, contract-carrying", :aggregate_failures do
+    it "DeleteDialog: a controlled AlertDialog (onConfirm-driven), contract-carrying", :aggregate_failures do
+      # Story 10.4 — the dialog no longer imports destroyPost (the List's
+      # RowActions owns the destroy call + provides onConfirm); the dialog is a
+      # controlled shadcn AlertDialog.
       dialog = read("app/javascript/components/PostDeleteDialog.tsx")
-      expect(dialog).to include('import { destroyPost } from "@/.ruact/server-functions"')
+      expect(dialog).to include('from "@/components/ui/alert-dialog"')
+      expect(dialog).not_to include("import { destroyPost }")
       expect(dialog).to include("export const __ruactContract")
     end
   end
@@ -218,7 +221,9 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
     end
 
     it "defines a typed columns config from the attributes (AC1)" do
-      expect(list).to include("const columns: ColumnDef<PostRow>[] = [")
+      # Story 10.4 (design B) — columns are built INSIDE the component (useMemo)
+      # so the actions cell can close over component state for the delete dialog.
+      expect(list).to include("const columns: ColumnDef<PostRow>[] = useMemo(() => {")
     end
 
     it "types each cell per attribute kind (AC1)", :aggregate_failures do
@@ -236,16 +241,18 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(list).to include("column.toggleSorting(column.getIsSorted() === \"asc\")")
     end
 
-    it "has a per-row actions cell: Edit link + DeleteDialog, collapsing under a breakpoint (AC3)",
+    it "has a per-row actions cell: Edit link + delete trigger, collapsing under a breakpoint (AC3)",
        :aggregate_failures do
       expect(list).to include('id: "actions"')
       expect(list).to include("enableSorting: false")
+      # Story 10.4 — the actions cell delegates to an in-file RowActions component.
+      expect(list).to include("cell: ({ row }) => <RowActions record={row.original} onDeleted={onDeleted} />")
       expect(list).to include("<a href={`/posts/${record.id}/edit`}>Edit</a>")
-      expect(list).to include("<PostDeleteDialog post={record} />")
-      # responsive overflow into a … DropdownMenu under `md`
+      # responsive overflow into a … DropdownMenu under `md` (Story 10.4 makes it
+      # controlled so the delete item can close it before opening the dialog)
       expect(list).to include("md:hidden")
       expect(list).to include("md:flex")
-      expect(list).to include("<DropdownMenu>")
+      expect(list).to include("<DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>")
     end
 
     it "feeds the DataTable the server-rendered `posts` rows and keeps FR100 contract (AC4)", :aggregate_failures do
@@ -265,20 +272,23 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
 
     let(:list) { read("app/javascript/components/PostList.tsx") }
 
-    it "imports the aliased search accessor + useQuery from the codegen module", :aggregate_failures do
-      expect(list).to include('import { search as searchPosts, useQuery } from "@/.ruact/server-functions"')
+    it "imports the aliased search accessor + destroy + useQuery from the codegen module", :aggregate_failures do
+      expect(list).to include(
+        'import { search as searchPosts, destroyPost, useQuery } from "@/.ruact/server-functions"'
+      )
     end
 
     it "drives the search box through useQuery(searchPosts, { q })", :aggregate_failures do
       expect(list).to include("useQuery<PostRow[]>(searchPosts, { q: q.trim() })")
       # while q is non-blank → query results; otherwise the server-rendered posts
-      expect(list).to include("const rows = searching ? searchData ?? [] : posts;")
+      # (Story 10.4 applies a removed-ids tombstone so a delete drops a row in place).
+      expect(list).to include("const source = searching ? searchData ?? [] : posts;")
     end
 
     it "uses a plural search accessor alias for a multi-word model" do
       run_scaffold(%w[BlogPost title:string])
       expect(read("app/javascript/components/BlogPostList.tsx"))
-        .to include("import { search as searchBlogPosts, useQuery }")
+        .to include("import { search as searchBlogPosts, destroyBlogPost, useQuery }")
     end
   end
 
@@ -379,7 +389,8 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(list).not_to include("type PostRow")
       expect(list).not_to include("__ruactContract")
       expect(list).to include("forfeits the FR99")
-      expect(list).to include("const columns = [")
+      # Story 10.4 — columns-in-component (useMemo), no TS generic in .jsx
+      expect(list).to include("const columns = useMemo(() => {")
       expect(list).to include('import { DataTable } from "@/components/ui/data-table"')
       expect(list).to include("useQuery(searchPosts, { q: q.trim() })")
     end
@@ -617,6 +628,223 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
                            "published:boolean views:integer published_on:date published_at:datetime " \
                            "author:references → copy app/javascript/components/PostForm.tsx over " \
                            "#{fixture_path}, then re-run `npm run typecheck`."
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Story 10.4 — controlled shadcn AlertDialog delete + List rewiring.
+  # ---------------------------------------------------------------------------
+
+  describe "DeleteDialog is a controlled shadcn AlertDialog (Story 10.4 AC1, AC3, AC4, AC6)" do
+    before { run_scaffold(%w[Post title:string body:text published:boolean]) }
+
+    let(:dialog) { read("app/javascript/components/PostDeleteDialog.tsx") }
+
+    it "preserves the use-client directive on line 1" do
+      expect(dialog).to start_with(%("use client";))
+    end
+
+    it "imports the shadcn AlertDialog parts from @/components/ui/alert-dialog (AC1, AC7)", :aggregate_failures do
+      expect(dialog).to include('from "@/components/ui/alert-dialog"')
+      %w[
+        AlertDialog AlertDialogAction AlertDialogCancel AlertDialogContent
+        AlertDialogDescription AlertDialogFooter AlertDialogHeader AlertDialogTitle
+      ].each { |part| expect(dialog).to include(part) }
+    end
+
+    it "is a CONTROLLED dialog with the contract props (AC1)", :aggregate_failures do
+      expect(dialog).to include("<AlertDialog open={open} onOpenChange={onOpenChange}>")
+      expect(dialog).to include("open: boolean;")
+      expect(dialog).to include("onOpenChange: (open: boolean) => void;")
+      expect(dialog).to include("post: PostRow;")
+      expect(dialog).to include("onConfirm: () => Promise<{ ok: boolean; error?: string }>;")
+    end
+
+    it "shows the Delete \"<title>\"? copy + cannot-be-undone body (AC1)", :aggregate_failures do
+      expect(dialog).to include('<AlertDialogTitle>Delete “{String(post.title ?? "")}”?</AlertDialogTitle>')
+      expect(dialog).to include("This action cannot be undone.")
+    end
+
+    it "has Cancel (AlertDialogCancel, default focus) + Delete (AlertDialogAction, destructive) (AC1, AC4)",
+       :aggregate_failures do
+      expect(dialog).to include("<AlertDialogCancel disabled={submitting}>Cancel</AlertDialogCancel>")
+      expect(dialog).to include("<AlertDialogAction")
+      expect(dialog).to include("bg-destructive")
+    end
+
+    it "calls onConfirm and STAYS OPEN with an inline error on failure (AC3)", :aggregate_failures do
+      expect(dialog).to include("const res = await onConfirm();")
+      expect(dialog).to include('setError(res.error ?? "Could not delete this post")')
+      expect(dialog).to include('{error && <p className="text-sm text-destructive">{error}</p>}')
+      # preventDefault keeps Radix from auto-closing the dialog mid-async
+      expect(dialog).to include("event.preventDefault();")
+    end
+
+    it "has NO Rails method=delete fallback and never builds a URL", :aggregate_failures do
+      # no native form-method override fallback (a real attr would be quoted;
+      # the doc comment's bare `method=delete` is not a live element attribute)
+      expect(dialog).not_to include('method="')
+      expect(dialog).not_to include("_method")
+      expect(dialog).not_to include("<form")
+      expect(dialog).not_to include("window.location")
+    end
+
+    it "retains the (inert) FR100 __ruactContract for uniformity (AC6)", :aggregate_failures do
+      expect(dialog).to include("export const __ruactContract")
+      expect(dialog).to include('post: "required"')
+    end
+
+    it "picks the first string display attribute (not hard-coded `title`) for the dialog heading" do
+      # A model whose first string attribute is NOT named `title` proves the
+      # display_attribute helper is not hard-coded.
+      run_scaffold(%w[Widget label:string body:text])
+      widget = read("app/javascript/components/WidgetDeleteDialog.tsx")
+      expect(widget).to include('Delete “{String(widget.label ?? "")}”?')
+    end
+
+    it "falls back to a text column, then to id, when no string attribute exists", :aggregate_failures do
+      run_scaffold(%w[Note body:text])
+      expect(read("app/javascript/components/NoteDeleteDialog.tsx"))
+        .to include('Delete “{String(note.body ?? "")}”?')
+
+      run_scaffold(%w[Counter tally:integer])
+      expect(read("app/javascript/components/CounterDeleteDialog.tsx"))
+        .to include('Delete “{String(counter.id ?? "")}”?')
+    end
+  end
+
+  describe "List rewires the controlled dialog + in-list removal (Story 10.4 AC2, AC5)" do
+    before { run_scaffold(%w[Post title:string body:text published:boolean views:integer]) }
+
+    let(:list) { read("app/javascript/components/PostList.tsx") }
+
+    it "imports the destroy accessor + useMemo alongside the search wiring", :aggregate_failures do
+      expect(list).to include('import { useMemo, useState } from "react"')
+      expect(list).to include("destroyPost")
+    end
+
+    it "drives a per-row controlled dialog via an in-file RowActions (own open state)", :aggregate_failures do
+      expect(list).to include("function RowActions({ record, onDeleted }")
+      expect(list).to include("const [open, setOpen] = useState(false);")
+      expect(list).to include("<PostDeleteDialog")
+      expect(list).to include("open={open}")
+      expect(list).to include("onOpenChange={setOpen}")
+      expect(list).to include("post={record}")
+      expect(list).to include("onConfirm={onConfirm}")
+    end
+
+    it "checks the { ok: true } / redirect success shape before removing the row (AC2)", :aggregate_failures do
+      expect(list).to include("await destroyPost({ id: record.id });")
+      expect(list).to include("if (deleteSucceeded(result)) {")
+      expect(list).to include("onDeleted(record.id);")
+      # success shape helper: in-list { ok: true } or the redirect-followed null
+      expect(list).to include("function deleteSucceeded(result: unknown): boolean")
+      expect(list).to include("if (result === null) return true;")
+      expect(list).to include(").ok === true")
+    end
+
+    it "removes the row via a removed-ids tombstone applied to the displayed source (AC2, AC5)",
+       :aggregate_failures do
+      expect(list).to include("const [removedIds, setRemovedIds] = useState<number[]>([]);")
+      expect(list).to include("setRemovedIds((current) => (current.includes(id) ? current : [...current, id]));")
+      # the tombstone filters WHICHEVER source is shown — search results included
+      expect(list).to include("const source = searching ? searchData ?? [] : posts;")
+      expect(list).to include("source.filter((row) => !removedIds.includes(row.id))")
+    end
+
+    it "keeps the dialog OPEN with the structured-error message on failure (AC3)", :aggregate_failures do
+      expect(list).to include("return { ok: false, error: deleteErrorMessage(error) };")
+      expect(list).to include("function deleteErrorMessage(error: unknown): string | undefined")
+    end
+
+    it "drives the trigger from BOTH layouts (inline ≥ md + overflow menu < md) (AC5)", :aggregate_failures do
+      expect(list).to include("onClick={() => setOpen(true)}")
+      expect(list).to include("md:flex")
+      expect(list).to include("md:hidden")
+      # the overflow menu is controlled so the item closes it before opening the dialog
+      expect(list).to include("<DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>")
+      expect(list).to include("event.preventDefault();")
+      expect(list).to include("setMenuOpen(false);")
+      expect(list).to include("setOpen(true);")
+    end
+
+    it "shows the empty state from the displayed rows (so deleting the last row empties) (AC5)",
+       :aggregate_failures do
+      expect(list).to include("!searching && rows.length === 0")
+    end
+
+    it "PRESERVES the 10.2 search + FR99/FR100 + empty state (no regression)", :aggregate_failures do
+      expect(list).to include(
+        'import { search as searchPosts, destroyPost, useQuery } from "@/.ruact/server-functions"'
+      )
+      expect(list).to include("export const __ruactContract = {")
+      expect(list).to include('posts: "required"')
+      expect(list).to include("type PostRow = {")
+      expect(list).to include("useQuery<PostRow[]>(searchPosts, { q: q.trim() })")
+      expect(list).to include('emptyLabel = "No posts yet — create one."')
+    end
+  end
+
+  describe "controller #destroy aligns to the in-list { ok: true } default (Story 10.4 AC2, AC3)" do
+    before { run_scaffold(%w[Post title:string published:boolean]) }
+
+    let(:controller) { read("app/controllers/posts_controller.rb") }
+
+    it "sets @ok = true; @id with no live redirect, using destroy! (AC3)", :aggregate_failures do
+      expect(controller).to match(/def destroy.*post\.destroy!.*@ok = true.*@id = post\.id/m)
+      # the redirect alternative is present only as a commented opt-in
+      expect(controller).to include("# redirect_to posts_url")
+    end
+
+    it "does NOT live-redirect from destroy", :aggregate_failures do
+      destroy_body = controller[/def destroy.*?\n  end/m]
+      expect(destroy_body).not_to match(/^\s*redirect_to /)
+    end
+
+    it "does NOT hand-roll a rescue (gem structured-error middleware owns failure) (AC3)" do
+      destroy_body = controller[/def destroy.*?\n  end/m]
+      expect(destroy_body).not_to include("rescue")
+    end
+
+    it "renders syntactically valid Ruby" do
+      expect { RubyVM::InstructionSequence.compile(controller) }.not_to raise_error
+    end
+  end
+
+  describe "--javascript DeleteDialog forfeits TS markers but keeps the AlertDialog (Story 10.4 AC6)" do
+    before { run_scaffold(%w[Post title:string published:boolean], javascript: true) }
+
+    let(:dialog) { read("app/javascript/components/PostDeleteDialog.jsx") }
+
+    it "drops type/__ruactContract/TS prop types but keeps the controlled AlertDialog", :aggregate_failures do
+      expect(dialog).not_to include("__ruactContract")
+      expect(dialog).not_to include("type PostRow")
+      expect(dialog).not_to include("Promise<{ ok")
+      expect(dialog).to include("forfeits")
+      expect(dialog).to include('from "@/components/ui/alert-dialog"')
+      expect(dialog).to include("const res = await onConfirm();")
+    end
+  end
+
+  # AC7 — the committed DeleteDialog fixture (type-checked by `npm run typecheck`
+  # against the ambient @/components/ui/alert-dialog stub) MUST stay byte-identical
+  # to the generator's live output. Uses the SAME model as the PostList fixture so
+  # their `PostRow` shapes line up when PostList imports ./PostDeleteDialog.
+  describe "generated DeleteDialog .tsx matches the isolated-typecheck fixture (Story 10.4 AC7)" do
+    let(:fixture_path) { "vendor/javascript/vite-plugin-ruact/type-tests/scaffold/PostDeleteDialog.tsx" }
+
+    it "PostDeleteDialog.tsx render stays byte-identical to the committed type-test fixture" do
+      run_scaffold(%w[Post title:string body:text published:boolean views:integer published_at:datetime
+                      author:references])
+      generated = read("app/javascript/components/PostDeleteDialog.tsx")
+      fixture = File.read(File.expand_path("../../#{fixture_path}", __dir__))
+
+      expect(generated).to eq(fixture),
+                           "Generated PostDeleteDialog.tsx drifted from the type-test fixture. " \
+                           "Regenerate it: rails g ruact:scaffold Post title:string body:text " \
+                           "published:boolean views:integer published_at:datetime author:references " \
+                           "→ copy app/javascript/components/PostDeleteDialog.tsx over #{fixture_path}, " \
+                           "then re-run `npm run typecheck`."
     end
   end
 

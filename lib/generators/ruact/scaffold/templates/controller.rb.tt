@@ -82,8 +82,20 @@ class <%= controller_class_name %>Controller < ApplicationController
 
   def destroy
     <%= singular_name %> = <%= class_name %>.find(params[:id])
-    <%= singular_name %>.destroy
-    redirect_to <%= plural_name %>_url
+    # `destroy!` (bang) so a destroy aborted by a callback RAISES
+    # `ActiveRecord::RecordNotDestroyed` instead of silently returning false —
+    # otherwise `@ok = true` below would lie. A `restrict_with_exception`
+    # foreign key raises `ActiveRecord::DeleteRestrictionError` either way. Both
+    # are shaped by the gem's structured-error middleware into the dev/prod
+    # failure response the dialog surfaces inline — do NOT catch them here.
+    <%= singular_name %>.destroy!
+    # DataTable in-list default (golden): NO redirect — the List removes the row
+    # in place from this `{ ok: true }` Bucket-2 JSON.
+    @ok = true
+    @id = <%= singular_name %>.id
+    # Delete-from-show alternative — land back on the index instead (the
+    # destroy<%= class_name %> accessor follows the emitted `$redirect` automatically):
+    # redirect_to <%= plural_name %>_url
   end
 
   # --- FR96 opt-in: a reference addressed ONLY by a signed token -------------

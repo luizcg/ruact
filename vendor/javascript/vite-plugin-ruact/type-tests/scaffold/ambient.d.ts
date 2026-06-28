@@ -25,6 +25,9 @@ declare namespace JSX {
 
 declare module "react" {
   export function useState<S>(initial: S | (() => S)): [S, (next: S | ((prev: S) => S)) => void];
+  // Story 10.4 — the generated List builds its `columns` inside the component
+  // (design B) via `useMemo` so the actions cell closes over `onDeleted`.
+  export function useMemo<T>(factory: () => T, deps: readonly unknown[]): T;
   // The generated Form's `handleSubmit(event: FormEvent)` only calls
   // `event.preventDefault()`; a minimal shim keeps the type load-bearing without
   // pulling in `@types/react`.
@@ -48,6 +51,10 @@ declare module "@/.ruact/server-functions" {
   // result with an `as { errors?: ... } | null` assertion at the call site.
   export const createPost: (payload: Record<string, unknown>) => Promise<unknown>;
   export const updatePost: (payload: Record<string, unknown>) => Promise<unknown>;
+  // Story 10.4 — the destroy accessor the List's RowActions calls in `onConfirm`
+  // (DELETE /posts/:id). Like the other actions it is not FR99-typed; it returns
+  // `Promise<unknown>` and throws a `RuactActionError` on a non-2xx response.
+  export const destroyPost: (payload: Record<string, unknown>) => Promise<unknown>;
 
   // Mirrors the runtime declaration (`ruact-server-functions-runtime/index.d.ts`)
   // — `reference` is the widened accessor shape (Story 13.4), `T` the return type.
@@ -104,6 +111,27 @@ declare module "@/components/ui/dropdown-menu" {
   export function DropdownMenuTrigger(props: Props): any;
   export function DropdownMenuContent(props: Props): any;
   export function DropdownMenuItem(props: Props): any;
+}
+
+// Story 10.4 — the shadcn AlertDialog parts the generated `<Model>DeleteDialog`
+// imports. The controlled `AlertDialog` types `open` + `onOpenChange` precisely
+// (the controlled contract the generated dialog binds); the rest stay permissive
+// structural shims (like Button/Badge above). Story 10.5 installs the real module.
+declare module "@/components/ui/alert-dialog" {
+  type Props = { children?: any; [key: string]: any };
+  export function AlertDialog(props: {
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
+    [key: string]: any;
+  }): any;
+  export function AlertDialogTrigger(props: Props): any;
+  export function AlertDialogContent(props: Props): any;
+  export function AlertDialogHeader(props: Props): any;
+  export function AlertDialogFooter(props: Props): any;
+  export function AlertDialogTitle(props: Props): any;
+  export function AlertDialogDescription(props: Props): any;
+  export function AlertDialogCancel(props: Props): any;
+  export function AlertDialogAction(props: Props): any;
 }
 
 // Story 10.3 — the shadcn Form primitives the generated `<Model>Form.tsx` imports.

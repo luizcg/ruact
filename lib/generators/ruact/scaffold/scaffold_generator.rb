@@ -289,6 +289,17 @@ module Ruact
           end
         end
 
+        # Story 10.4 (AC1) — the record attribute whose value titles the delete
+        # confirmation ("Delete '<title>'?"). No universal "title" column exists,
+        # so pick the first string-ish display attribute deterministically: the
+        # first `string` column, else the first `text`, else the PK `id` (always
+        # present, never null). Returns the wire `column_name`.
+        def display_attribute
+          attr = scaffold_attributes.find { |a| a.type == "string" } ||
+                 scaffold_attributes.find { |a| a.type == "text" }
+          attr ? attr.column_name : "id"
+        end
+
         # A valid example value (as a Ruby source literal) for the smoke spec.
         def sample_value(attr)
           case attr.type
