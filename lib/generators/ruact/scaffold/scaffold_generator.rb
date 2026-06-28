@@ -1,11 +1,13 @@
 # frozen_string_literal: true
 
+require "json"
 require "pathname"
 require "rails/generators"
 require "rails/generators/named_base"
 require "ruact"
 require_relative "scaffold_attribute"
 require_relative "scaffold_form_helpers"
+require_relative "scaffold_shadcn_preflight"
 
 module Ruact
   module Generators
@@ -32,6 +34,13 @@ module Ruact
     # Prerequisite: `rails generate ruact:install` must have run first (it creates
     # `app/javascript/.ruact/` and primes the route-driven codegen that emits the
     # `createPost`/`updatePost`/`destroyPost` accessors the components import).
+    # rubocop:disable Metrics/ClassLength
+    # Thor requires command methods (the public tasks) and `class_option`
+    # declarations to live on the generator class itself; every non-command
+    # helper is already extracted into a module ({FormHelpers},
+    # {ShadcnPreflight}) or class ({ScaffoldAttribute}). The remaining surface
+    # is irreducible Thor command/option declarations + their view-model
+    # accessors, so the class sits a little over the default length budget.
     class ScaffoldGenerator < Rails::Generators::NamedBase
       source_root File.expand_path("templates", __dir__)
 
@@ -41,12 +50,22 @@ module Ruact
       class_option :javascript, type: :boolean, default: false,
                                 desc: "Emit untyped .jsx components instead of typed .tsx (forfeits FR99/FR100)"
 
+      class_option :skip_shadcn_check, type: :boolean, default: false,
+                                       desc: "Skip the shadcn/ui dependency pre-flight and write anyway " \
+                                             "(emits an in-file warning banner when @/components/ui/* is missing)"
+
       desc "Generates a complete CRUD skeleton (controller, route, ERB views, React components) on the v2 contract"
 
       # Story 10.3 — the shadcn Form view-model helpers (import predicates, prop
       # signature, `references` options). Module-housed so they don't register as
       # Thor commands and to keep this class within its length budget.
       include FormHelpers
+
+      # Story 10.5 — the shadcn dependency pre-flight's read-only helpers
+      # (detection / guidance messages / version read). Module-housed so they
+      # don't register as Thor commands; only `check_shadcn_setup` below is a
+      # command. See {ShadcnPreflight}.
+      include ShadcnPreflight
 
       # Supported attribute types → their TS wire type (FR99 wire-union grain:
       # string | number | boolean | null) + the plain form control kind. The rich
@@ -80,6 +99,21 @@ module Ruact
 
       # Documentation anchor referenced by the unknown-type error message (AC4).
       DOCS_POINTER = "https://github.com/luizcg/ruact/blob/main/website/docs/api/scaffold.md#attribute-types"
+
+      # Story 10.5 (AC1, AC2, AC4) — the shadcn/ui dependency PRE-FLIGHT, declared
+      # FIRST so it runs (and can abort) before any file-producing task writes.
+      # Detect the host's shadcn state (complete / missing / partial) and either
+      # proceed (complete), or print copy-pasteable `npx shadcn` guidance and
+      # ABORT before any write (missing / partial), unless `--skip-shadcn-check`
+      # bypasses the abort. The generator NEVER auto-runs `npx`/`npm` (AC4 — no
+      # surprising network/install behavior, critical for CI). Aborting via
+      # `raise Thor::Error` mirrors `assert_supported_attribute_types!`: the CLI
+      # prints the message without a Ruby backtrace and exits non-zero, and
+      # because this is the FIRST task, no controller/route/view/component/spec
+      # is ever written (zero partial state).
+      def check_shadcn_setup
+        run_shadcn_preflight! # {ShadcnPreflight} — detection / guidance / abort
+      end
 
       def create_controller
         template "controller.rb.tt", File.join("app/controllers", "#{plural_file_name}_controller.rb")
@@ -313,5 +347,6 @@ module Ruact
         end
       end
     end
+    # rubocop:enable Metrics/ClassLength
   end
 end

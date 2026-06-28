@@ -448,6 +448,57 @@ module Ruact
       end
     end
 
+    describe "Story 10.5 — shadcn_compatible_versions attribute", :story_10_5 do
+      it "defaults to [1, 2]" do
+        expect(Ruact.config.shadcn_compatible_versions).to eq([1, 2])
+      end
+
+      it "accepts a custom list inside Ruact.configure" do
+        Ruact.configure { |c| c.shadcn_compatible_versions = [1, 2, 3] }
+        expect(Ruact.config.shadcn_compatible_versions).to eq([1, 2, 3])
+      end
+
+      it "is sealed by the standard freeze contract — direct mutation raises ConfigurationError" do
+        Ruact.configure { |c| c.shadcn_compatible_versions = [2] }
+        expect { Ruact.config.shadcn_compatible_versions = [3] }
+          .to raise_error(Ruact::ConfigurationError, /Ruact::Configuration#shadcn_compatible_versions/)
+      end
+
+      it "deep-freezes the Array value so in-place mutation cannot bypass the writer guard" do
+        Ruact.configure { |c| c.shadcn_compatible_versions = [2] }
+        expect(Ruact.config.shadcn_compatible_versions).to be_frozen
+        expect { Ruact.config.shadcn_compatible_versions << 3 }.to raise_error(FrozenError)
+      end
+
+      it "is carried across atomic re-configuration (template clone)" do
+        Ruact.configure { |c| c.shadcn_compatible_versions = [2, 3] }
+        Ruact.configure { |c| c.suspense_timeout = 6.0 }
+        expect(Ruact.config.shadcn_compatible_versions).to eq([2, 3])
+      end
+
+      describe "writer-time validation" do
+        it "rejects a non-Array with ConfigurationError naming the offending value + class" do
+          expect { Ruact.configure { |c| c.shadcn_compatible_versions = 2 } }
+            .to raise_error(Ruact::ConfigurationError, /got 2 \(Integer\)/)
+        end
+
+        it "rejects an empty Array" do
+          expect { Ruact.configure { |c| c.shadcn_compatible_versions = [] } }
+            .to raise_error(Ruact::ConfigurationError, /non-empty Array/)
+        end
+
+        it "rejects an Array with non-Integer elements" do
+          expect { Ruact.configure { |c| c.shadcn_compatible_versions = ["2"] } }
+            .to raise_error(Ruact::ConfigurationError, /only Integer/)
+        end
+
+        it "rejects nil" do
+          expect { Ruact.configure { |c| c.shadcn_compatible_versions = nil } }
+            .to raise_error(Ruact::ConfigurationError, /non-empty Array/)
+        end
+      end
+    end
+
     describe "error message includes caller location" do
       it "names the file:line of the offending mutation (AC2.2)" do
         Ruact.configure { |c| c.suspense_timeout = 5.0 }

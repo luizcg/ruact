@@ -1004,4 +1004,296 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(spec_file).to start_with("# frozen_string_literal: true")
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Story 10.5 — shadcn dependency pre-flight: detect (complete / missing /
+  # partial), guide (copy-pasteable `npx shadcn` commands, never auto-run),
+  # validate the installed shadcn major against `shadcn_compatible_versions`.
+  # Fixture-driven (no network — the real `npx shadcn` install is Story 10.7).
+  # ---------------------------------------------------------------------------
+  describe "shadcn dependency pre-flight (Story 10.5)", :story_10_5 do
+    # The default model exercises input (string), textarea (text), switch
+    # (boolean). The add-list is DERIVED from the generator, so these fixtures
+    # never drift from the emitted import set.
+    let(:default_args) { %w[Post title:string body:text published:boolean] }
+    let(:full_required) { build(default_args).required_shadcn_components }
+
+    def capture_stdout
+      original = $stdout
+      $stdout = StringIO.new
+      yield
+      $stdout.string
+    ensure
+      $stdout = original
+    end
+
+    def write_components_json
+      File.write(File.join(app_root, "components.json"), %({ "style": "default" }\n))
+    end
+
+    def write_ui_components(names)
+      ui = File.join(app_root, "app/javascript/components/ui")
+      FileUtils.mkdir_p(ui)
+      names.each { |name| File.write(File.join(ui, "#{name}.tsx"), "export const stub = {};\n") }
+    end
+
+    def write_package_json(sections)
+      File.write(File.join(app_root, "package.json"), JSON.generate(sections))
+    end
+
+    # Runs the FULL generator including the pre-flight as the first step.
+    def run_full_scaffold(args = default_args, options = {})
+      gen = build(args, options)
+      silently do
+        gen.check_shadcn_setup
+        gen.create_controller
+        gen.add_resource_route
+        gen.create_queries
+        gen.add_query_route
+        gen.create_views
+        gen.create_components
+        gen.create_smoke_spec
+      end
+      gen
+    end
+
+    describe "add-list derivation (AC1, AC7)" do
+      it "derives the full add-list from the templates' own predicates (no hardcoded drift)" do
+        full = build(%w[Post title:string body:text published:boolean author:references])
+               .required_shadcn_components
+        expect(full).to eq(%w[button input textarea switch select label badge table alert-dialog dropdown-menu])
+      end
+
+      it "drops the conditional input-family a model does not use" do
+        minimal = build(%w[Tag name:string]).required_shadcn_components
+        expect(minimal).to eq(%w[button input label badge table alert-dialog dropdown-menu])
+      end
+
+      it "maps each component to its app/javascript/components/ui/<name>.tsx file" do
+        gen = build(default_args)
+        expect(gen.shadcn_component_file("table").to_s)
+          .to end_with("app/javascript/components/ui/table.tsx")
+      end
+    end
+
+    describe "complete setup → reuse, proceed (AC1)" do
+      before do
+        write_components_json
+        write_ui_components(full_required)
+        write_package_json({ "devDependencies" => { "shadcn" => "^2.1.0" } })
+      end
+
+      it "proceeds and writes the scaffold without aborting" do
+        expect { run_full_scaffold }.not_to raise_error
+        expect(File).to exist(File.join(app_root, "app/controllers/posts_controller.rb"))
+      end
+
+      it "reuses the existing ui/* files (creates no duplicate, leaves them untouched)" do
+        run_full_scaffold
+        # The generator imports ui/* but never writes them — the stub content is intact.
+        expect(read("app/javascript/components/ui/button.tsx")).to eq("export const stub = {};\n")
+      end
+
+      it "emits .tsx components carrying the FR99/FR100 markers (unchanged, no banner)", :aggregate_failures do
+        run_full_scaffold
+        list = read("app/javascript/components/PostList.tsx")
+        expect(list).to include("export const __ruactContract")
+        expect(list).not_to include("--skip-shadcn-check")
+      end
+    end
+
+    describe "missing setup → print init + add, abort, write nothing (AC2)" do
+      it "raises Thor::Error with the init + single add <full list> sequence", :aggregate_failures do
+        gen = build(default_args)
+        silently do
+          expect { gen.check_shadcn_setup }.to raise_error(Thor::Error) do |error|
+            expect(error.message).to include("npx shadcn@latest init")
+            expect(error.message)
+              .to include("npx shadcn@latest add button input textarea switch label badge " \
+                          "table alert-dialog dropdown-menu")
+            expect(error.message).to include("--skip-shadcn-check")
+          end
+        end
+      end
+
+      it "includes label, badge, AND table in the add-list (corrects the epic's stale list)", :aggregate_failures do
+        gen = build(default_args)
+        message = gen.missing_shadcn_message
+        expect(message).to include("label")
+        expect(message).to include("badge")
+        expect(message).to include("table")
+      end
+
+      it "writes NO scaffold file (no partial state)", :aggregate_failures do
+        gen = build(default_args)
+        silently { expect { gen.check_shadcn_setup }.to raise_error(Thor::Error) }
+        %w[
+          app/controllers/posts_controller.rb
+          app/javascript/components/PostList.tsx
+          app/queries/posts_query.rb
+          spec/requests/posts_spec.rb
+        ].each { |path| expect(File).not_to exist(File.join(app_root, path)) }
+        # the route line is never injected either
+        expect(read("config/routes.rb")).not_to include("resources :posts")
+      end
+
+      it "treats a present ui/ dir WITHOUT components.json as missing — init + FULL add, never a bare add",
+         :aggregate_failures do
+        # Regression (Codex R1): a config-less app with ui/* files present must
+        # route to the init+full-add guidance, not a `:partial` with an empty add.
+        write_ui_components(full_required)
+        gen = build(default_args)
+        silently do
+          expect { gen.check_shadcn_setup }.to raise_error(Thor::Error) do |error|
+            expect(error.message).to include("npx shadcn@latest init")
+            expect(error.message)
+              .to include("npx shadcn@latest add button input textarea switch label badge " \
+                          "table alert-dialog dropdown-menu")
+            expect(error.message).not_to match(/add\s*$/) # no bare/empty `add` line
+          end
+        end
+      end
+    end
+
+    describe "partial setup → list exactly the missing + targeted add, abort (AC4)" do
+      before do
+        write_components_json
+        # everything present EXCEPT badge + table
+        write_ui_components(full_required - %w[badge table])
+      end
+
+      it "lists exactly the missing components and the targeted add command", :aggregate_failures do
+        gen = build(default_args)
+        silently do
+          expect { gen.check_shadcn_setup }.to raise_error(Thor::Error) do |error|
+            expect(error.message).to include("badge, table")
+            expect(error.message).to include("npx shadcn@latest add badge table")
+            # a partial setup does NOT re-run init
+            expect(error.message).not_to include("npx shadcn@latest init")
+            expect(error.message).not_to include("button input")
+          end
+        end
+      end
+
+      it "does NOT auto-run any npx/npm command and writes nothing", :aggregate_failures do
+        gen = build(default_args)
+        silently { expect { gen.check_shadcn_setup }.to raise_error(Thor::Error) }
+        expect(File).not_to exist(File.join(app_root, "app/controllers/posts_controller.rb"))
+      end
+    end
+
+    describe "--skip-shadcn-check → write anyway with an in-file banner (AC3)" do
+      it "writes the scaffold despite a missing setup", :aggregate_failures do
+        expect { run_full_scaffold(default_args, skip_shadcn_check: true) }.not_to raise_error
+        expect(File).to exist(File.join(app_root, "app/controllers/posts_controller.rb"))
+      end
+
+      it "emits a prominent banner in each component naming the unresolved imports + the fix", :aggregate_failures do
+        run_full_scaffold(default_args, skip_shadcn_check: true)
+        %w[PostList PostForm PostDeleteDialog].each do |name|
+          component = read("app/javascript/components/#{name}.tsx")
+          expect(component).to include("--skip-shadcn-check")
+          expect(component).to include("@/components/ui/*")
+          expect(component).to include("npx shadcn@latest add")
+        end
+      end
+
+      it "does NOT emit the banner when the setup is complete (byte-stable default path)", :aggregate_failures do
+        write_components_json
+        write_ui_components(full_required)
+        run_full_scaffold(default_args, skip_shadcn_check: true)
+        expect(read("app/javascript/components/PostList.tsx")).not_to include("--skip-shadcn-check")
+      end
+
+      it "the banner never prints a bare add when ui/ files exist but components.json is absent" do
+        # Regression (Codex R1): state is :missing (no config) → missing list is
+        # empty → the banner falls back to the FULL required add-list.
+        write_ui_components(full_required)
+        run_full_scaffold(default_args, skip_shadcn_check: true)
+        expect(read("app/javascript/components/PostList.tsx"))
+          .to include("npx shadcn@latest add button input textarea switch label badge " \
+                      "table alert-dialog dropdown-menu")
+      end
+    end
+
+    describe "version-compat validation against shadcn_compatible_versions (AC6, AC8)" do
+      before do
+        write_components_json
+        write_ui_components(full_required)
+      end
+
+      it "does NOT warn when the installed major is in the compatible list (v2)", :aggregate_failures do
+        write_package_json({ "devDependencies" => { "shadcn" => "^2.1.0" } })
+        output = capture_stdout { build(default_args).check_shadcn_setup }
+        expect(output).not_to include("not regression-tested")
+      end
+
+      it "does NOT warn for a prior compatible major (v1)", :aggregate_failures do
+        write_package_json({ "dependencies" => { "shadcn" => "1.0.4" } })
+        output = capture_stdout { build(default_args).check_shadcn_setup }
+        expect(output).not_to include("not regression-tested")
+      end
+
+      it "WARNS (does not abort) when the installed major is outside the list", :aggregate_failures do
+        write_package_json({ "dependencies" => { "shadcn" => "^3.0.0" } })
+        output = capture_stdout { build(default_args).check_shadcn_setup }
+        expect(output).to include("shadcn v3 is not regression-tested")
+        expect(output).to include("tested majors: 1, 2")
+        expect(output).to include("scaffold.md#shadcnui-setup")
+        # the override points to the Ruact.configure block, NOT the freeze-blocked
+        # direct mutation of Ruact.config (Codex R1)
+        expect(output).to include("Ruact.configure { |c| c.shadcn_compatible_versions")
+        expect(output).not_to include("set Ruact.config.shadcn_compatible_versions")
+        # a warning, never a hard stop — the scaffold still writes
+        expect { run_full_scaffold }.not_to raise_error
+        expect(File).to exist(File.join(app_root, "app/controllers/posts_controller.rb"))
+      end
+
+      it "WARNS for the legacy shadcn-ui 0.x package name (out of range)" do
+        write_package_json({ "devDependencies" => { "shadcn-ui" => "^0.8.0" } })
+        output = capture_stdout { build(default_args).check_shadcn_setup }
+        expect(output).to include("shadcn v0 is not regression-tested")
+      end
+
+      it "emits a SOFT NOTE (not a warning) when the version cannot be determined (npx)", :aggregate_failures do
+        # no package.json — shadcn was run via npx, no pin
+        output = capture_stdout { build(default_args).check_shadcn_setup }
+        expect(output).to include("could not determine the installed shadcn version")
+        expect(output).not_to include("not regression-tested")
+      end
+
+      it "reads the major best-effort from both deps and devDeps (≥2 majors at the detection level)",
+         :aggregate_failures do
+        write_package_json({ "dependencies" => { "shadcn" => "^2.3.0" } })
+        expect(build(default_args).installed_shadcn_major).to eq(2)
+        write_package_json({ "devDependencies" => { "shadcn-ui" => "1.9.0" } })
+        expect(build(default_args).installed_shadcn_major).to eq(1)
+        File.write(File.join(app_root, "package.json"), "{ not valid json")
+        expect(build(default_args).installed_shadcn_major).to be_nil
+      end
+
+      it "honors a custom Ruact.config.shadcn_compatible_versions override" do
+        Ruact.configure { |c| c.shadcn_compatible_versions = [1, 2, 3] }
+        write_package_json({ "dependencies" => { "shadcn" => "^3.0.0" } })
+        output = capture_stdout { build(default_args).check_shadcn_setup }
+        expect(output).not_to include("not regression-tested")
+      end
+    end
+
+    describe "dep-free invariant — never @tanstack / data-table in printed guidance (AC7)" do
+      it "the missing-setup guidance contains neither @tanstack nor data-table", :aggregate_failures do
+        gen = build(%w[Post title:string body:text published:boolean author:references])
+        expect(gen.missing_shadcn_message).not_to include("@tanstack")
+        expect(gen.missing_shadcn_message).not_to include("data-table")
+      end
+
+      it "the partial-setup guidance contains neither @tanstack nor data-table", :aggregate_failures do
+        write_components_json
+        write_ui_components([])
+        gen = build(%w[Post title:string body:text published:boolean author:references])
+        expect(gen.partial_shadcn_message).not_to include("@tanstack")
+        expect(gen.partial_shadcn_message).not_to include("data-table")
+      end
+    end
+  end
 end

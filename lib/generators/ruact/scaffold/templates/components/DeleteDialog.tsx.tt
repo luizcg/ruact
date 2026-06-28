@@ -5,6 +5,13 @@
 // boundary and the FR100 call-site contract (both TS-only). Re-run without
 // --javascript for the typed .tsx variant.
 <% end -%>
+<% if shadcn_missing? -%>
+// ⚠️ GENERATED WITH --skip-shadcn-check — shadcn/ui is not fully set up.
+// The @/components/ui/* imports below will NOT resolve until you install them
+// (the Vite dev server fails the build with an import error — loud by design):
+//   <%= shadcn_banner_add_command %>
+// (If you have not set up shadcn at all, run `npx shadcn@latest init` first.)
+<% end -%>
 // <%= class_name %> delete confirmation — a CONTROLLED shadcn AlertDialog. The
 // PARENT owns `open` and provides `onConfirm`; this component owns only its local
 // submit/error state. `onConfirm` performs the destroy<%= class_name %> call (DELETE

@@ -23,6 +23,7 @@ module Ruact
       query_parent_controller
       signed_global_id_default_purpose
       signed_global_id_default_expires_in
+      shadcn_compatible_versions
     ].freeze
 
     # @!attribute [r] manifest_path
@@ -121,6 +122,19 @@ module Ruact
     #     call site (a reviewed per-call choice), never via this default.
     #   @example Set an app-wide default expiry
     #     Ruact.configure { |c| c.signed_global_id_default_expires_in = 1.hour }
+    #
+    # @!attribute [r] shadcn_compatible_versions
+    #   @return [Array<Integer>] Story 10.5 — the shadcn/ui MAJOR versions the
+    #     `ruact:scaffold` generator is regression-tested against. When the
+    #     generator detects an installed shadcn major (best-effort, from the
+    #     host `package.json`) that is NOT in this list, it emits a warning
+    #     (never a hard stop) that the generated components may import from
+    #     outdated `@/components/ui/*` paths. Must be a non-empty Array of
+    #     Integers. Default `[1, 2]` (the majors tested at gem-release time).
+    #     A dev who has manually verified a newer major adds it here to
+    #     suppress the warning — the documented "override" path.
+    #   @example Allow shadcn v3 once you have verified it
+    #     Ruact.configure { |c| c.shadcn_compatible_versions = [1, 2, 3] }
     ATTRIBUTES.each do |attr|
       attr_reader attr
 
@@ -173,6 +187,7 @@ module Ruact
         @query_parent_controller = "ApplicationController"
         @signed_global_id_default_purpose = nil
         @signed_global_id_default_expires_in = nil
+        @shadcn_compatible_versions = [1, 2]
       end
     end
 
@@ -233,6 +248,7 @@ module Ruact
       when :max_upload_bytes        then validate_max_upload_bytes!(value)
       when :query_route_prefix      then validate_query_route_prefix!(value)
       when :query_parent_controller then validate_query_parent_controller!(value)
+      when :shadcn_compatible_versions then validate_shadcn_compatible_versions!(value)
       end
     end
 
@@ -274,6 +290,27 @@ module Ruact
             "Ruact::Configuration#query_parent_controller must be a non-empty String " \
             "(the controller class NAME, constantized lazily at route-draw time); " \
             "got #{value.inspect} (#{value.class.name})."
+    end
+
+    # Story 10.5 — the scaffold generator validates the detected shadcn major
+    # against this list (`Array#include?`), so a non-Array would raise at the
+    # first scaffold run instead of at boot, and an empty Array would make every
+    # detected major "incompatible" (a global false warning). Both are
+    # configuration-time errors. Element-type strictness (Integer-only majors)
+    # is enforced too — a `["2"]` typo would silently never match a detected
+    # Integer major and warn on every run.
+    def validate_shadcn_compatible_versions!(value)
+      unless value.is_a?(Array) && !value.empty?
+        raise Ruact::ConfigurationError,
+              "Ruact::Configuration#shadcn_compatible_versions must be a non-empty Array " \
+              "of major-version Integers (e.g. [1, 2]); " \
+              "got #{value.inspect} (#{value.class.name})."
+      end
+      return if value.all?(Integer)
+
+      raise Ruact::ConfigurationError,
+            "Ruact::Configuration#shadcn_compatible_versions must contain only Integer " \
+            "major versions (e.g. [1, 2]); got #{value.inspect}."
     end
 
     def build_error_message(attr, location)

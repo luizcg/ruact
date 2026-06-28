@@ -5,6 +5,13 @@
 // boundary and the FR100 call-site contract (both TS-only). Re-run without
 // --javascript for the typed .tsx variant.
 <% end -%>
+<% if shadcn_missing? -%>
+// ⚠️ GENERATED WITH --skip-shadcn-check — shadcn/ui is not fully set up.
+// The @/components/ui/* imports below will NOT resolve until you install them
+// (the Vite dev server fails the build with an import error — loud by design):
+//   <%= shadcn_banner_add_command %>
+// (If you have not set up shadcn at all, run `npx shadcn@latest init` first.)
+<% end -%>
 // <%= class_name %> form — shared by `new` (initial == null) and `edit` (initial
 // == the serialized record). Each field renders the shadcn control mapped to its
 // attribute type (Input / Textarea / Switch / Select), labelled, with the FR98
