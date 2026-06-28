@@ -248,10 +248,11 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       # Story 10.4 — the actions cell delegates to an in-file RowActions component.
       expect(list).to include("cell: ({ row }) => <RowActions record={row.original} onDeleted={onDeleted} />")
       expect(list).to include("<a href={`/posts/${record.id}/edit`}>Edit</a>")
-      # responsive overflow into a … DropdownMenu under `md`
+      # responsive overflow into a … DropdownMenu under `md` (Story 10.4 makes it
+      # controlled so the delete item can close it before opening the dialog)
       expect(list).to include("md:hidden")
       expect(list).to include("md:flex")
-      expect(list).to include("<DropdownMenu>")
+      expect(list).to include("<DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>")
     end
 
     it "feeds the DataTable the server-rendered `posts` rows and keeps FR100 contract (AC4)", :aggregate_failures do
@@ -279,9 +280,9 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
 
     it "drives the search box through useQuery(searchPosts, { q })", :aggregate_failures do
       expect(list).to include("useQuery<PostRow[]>(searchPosts, { q: q.trim() })")
-      # while q is non-blank → query results; otherwise the local server rows
-      # (Story 10.4 makes them local state so a delete can drop a row in place).
-      expect(list).to include("const rows = searching ? searchData ?? [] : serverRows;")
+      # while q is non-blank → query results; otherwise the server-rendered posts
+      # (Story 10.4 applies a removed-ids tombstone so a delete drops a row in place).
+      expect(list).to include("const source = searching ? searchData ?? [] : posts;")
     end
 
     it "uses a plural search accessor alias for a multi-word model" do
@@ -732,11 +733,23 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(list).to include("onConfirm={onConfirm}")
     end
 
-    it "calls destroyPost({ id }) in onConfirm and removes the row in place on { ok: true } (AC2)",
-       :aggregate_failures do
+    it "checks the { ok: true } / redirect success shape before removing the row (AC2)", :aggregate_failures do
       expect(list).to include("await destroyPost({ id: record.id });")
+      expect(list).to include("if (deleteSucceeded(result)) {")
       expect(list).to include("onDeleted(record.id);")
-      expect(list).to include("setServerRows((current) => current.filter((row) => row.id !== id));")
+      # success shape helper: in-list { ok: true } or the redirect-followed null
+      expect(list).to include("function deleteSucceeded(result: unknown): boolean")
+      expect(list).to include("if (result === null) return true;")
+      expect(list).to include(").ok === true")
+    end
+
+    it "removes the row via a removed-ids tombstone applied to the displayed source (AC2, AC5)",
+       :aggregate_failures do
+      expect(list).to include("const [removedIds, setRemovedIds] = useState<number[]>([]);")
+      expect(list).to include("setRemovedIds((current) => (current.includes(id) ? current : [...current, id]));")
+      # the tombstone filters WHICHEVER source is shown — search results included
+      expect(list).to include("const source = searching ? searchData ?? [] : posts;")
+      expect(list).to include("source.filter((row) => !removedIds.includes(row.id))")
     end
 
     it "keeps the dialog OPEN with the structured-error message on failure (AC3)", :aggregate_failures do
@@ -748,15 +761,16 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(list).to include("onClick={() => setOpen(true)}")
       expect(list).to include("md:flex")
       expect(list).to include("md:hidden")
-      # the overflow item opens the dialog after the menu closes (onSelect guard)
+      # the overflow menu is controlled so the item closes it before opening the dialog
+      expect(list).to include("<DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>")
       expect(list).to include("event.preventDefault();")
+      expect(list).to include("setMenuOpen(false);")
       expect(list).to include("setOpen(true);")
     end
 
-    it "seeds the rendered rows from the posts prop as LOCAL state (AC5)", :aggregate_failures do
-      expect(list).to include("const [serverRows, setServerRows] = useState(posts);")
-      expect(list).to include("const rows = searching ? searchData ?? [] : serverRows;")
-      expect(list).to include("!searching && serverRows.length === 0")
+    it "shows the empty state from the displayed rows (so deleting the last row empties) (AC5)",
+       :aggregate_failures do
+      expect(list).to include("!searching && rows.length === 0")
     end
 
     it "PRESERVES the 10.2 search + FR99/FR100 + empty state (no regression)", :aggregate_failures do
@@ -776,8 +790,8 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
 
     let(:controller) { read("app/controllers/posts_controller.rb") }
 
-    it "sets @ok = true; @id with no live redirect", :aggregate_failures do
-      expect(controller).to match(/def destroy.*post\.destroy.*@ok = true.*@id = post\.id/m)
+    it "sets @ok = true; @id with no live redirect, using destroy! (AC3)", :aggregate_failures do
+      expect(controller).to match(/def destroy.*post\.destroy!.*@ok = true.*@id = post\.id/m)
       # the redirect alternative is present only as a commented opt-in
       expect(controller).to include("# redirect_to posts_url")
     end

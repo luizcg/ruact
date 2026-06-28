@@ -6,9 +6,9 @@
 // calls useQuery(searchPosts, { q }) and swaps in filtered rows as you type.
 // Per-row delete drives a controlled PostDeleteDialog (DELETE
 // /posts/:id via the destroyPost action); on `{ ok: true }` the row is
-// removed from the local rows IN PLACE (no reload, no URL built). Column sorting
-// is CLIENT-ONLY — the dataset is the index payload; server-side sort/pagination
-// is Phase-3 territory.
+// removed from the displayed rows IN PLACE (no reload, no URL built). Column
+// sorting is CLIENT-ONLY — the dataset is the index payload; server-side
+// sort/pagination is Phase-3 territory.
 //
 // The `DataTable` recipe + the shadcn primitives below import from
 // `@/components/ui/*`, which Story 10.5 installs (shadcn ships no installable
@@ -38,48 +38,66 @@ export const __ruactContract = {
   props: { posts: "required" },
 };
 
-// Pull a human-readable message out of the structured-error response the
-// destroyPost action throws on failure. The runtime raises a
-// RuactActionError carrying the parsed body; the gem's structured-error
-// middleware shapes `message` (the exception message in development, the generic
-// server message in production). Returns undefined when no message is present, so
-// the dialog can fall back to its own generic copy.
+// Pull a human-readable message out of the failed-delete result. A thrown
+// RuactActionError (non-2xx) carries the parsed structured-error body, whose
+// `message` the gem shapes per env (the exception message in development, the
+// generic server message in production); a resolved soft-failure may carry a
+// top-level `error`/`message`. Returns undefined when none is present, so the
+// dialog can fall back to its own generic copy.
 function deleteErrorMessage(error: unknown): string | undefined {
-  const body =
-    error != null && typeof error === "object"
-      ? (error as { body?: unknown }).body
-      : undefined;
-  if (body != null && typeof body === "object") {
-    const message = (body as { message?: unknown }).message;
-    if (typeof message === "string" && message.length > 0) return message;
+  if (error != null && typeof error === "object") {
+    const carrier = error as { body?: unknown; error?: unknown; message?: unknown };
+    if (carrier.body != null && typeof carrier.body === "object") {
+      const message = (carrier.body as { message?: unknown }).message;
+      if (typeof message === "string" && message.length > 0) return message;
+    }
+    if (typeof carrier.error === "string" && carrier.error.length > 0) return carrier.error;
+    if (typeof carrier.message === "string" && carrier.message.length > 0) return carrier.message;
   }
-  if (error instanceof Error && error.message.length > 0) return error.message;
   return undefined;
 }
 
+// A resolved delete is a SUCCESS only on the server-owned success shapes: the
+// in-list default `{ ok: true }`, or the delete-from-show `$redirect` the
+// accessor already followed (which resolves to `null`). Any other resolved shape
+// (e.g. an explicit `{ ok: false }`) is a non-success the dialog surfaces.
+function deleteSucceeded(result: unknown): boolean {
+  if (result === null) return true;
+  return (
+    typeof result === "object" &&
+    (result as { ok?: unknown }).ok === true
+  );
+}
+
 // Per-row actions (AC5) — Edit + a Delete TRIGGER that opens the controlled
-// AlertDialog. Each row owns its OWN `open` state (one independent useState), so
-// the dialog opens for exactly one row. `onConfirm` calls destroyPost
-// and, on success, asks the List to drop the row in place via `onDeleted`. The
-// same component renders BOTH the inline (≥ md) and the overflow-menu (< md)
-// layouts. The trigger is never unmounted, so Radix returns focus to it on close.
+// AlertDialog. Each row owns its OWN dialog `open` state (one independent
+// useState), so the dialog opens for exactly one row. `onConfirm` calls
+// destroyPost and, on a server-owned success, asks the List to drop the row
+// in place via `onDeleted`. The same component renders BOTH the inline (≥ md) and
+// the overflow-menu (< md) layouts. The trigger is never unmounted, so Radix
+// returns focus to it on close.
 function RowActions({ record, onDeleted }: {
   record: PostRow;
   onDeleted: (id: number) => void;
 }) {
   const [open, setOpen] = useState(false);
+  // The overflow menu is CONTROLLED so the Delete item can close it explicitly
+  // and open the dialog in the same batch — preventing Radix's default
+  // close-autofocus from pulling focus back to the trigger as the dialog mounts.
+  const [menuOpen, setMenuOpen] = useState(false);
 
   async function onConfirm(): Promise<{ ok: boolean; error?: string }> {
     try {
-      await destroyPost({ id: record.id });
-      // Success: in-list `{ ok: true }` → remove the row; the documented
-      // delete-from-show `{ "$redirect" }` alternative was already followed by
-      // the accessor (this component then unmounts harmlessly).
-      onDeleted(record.id);
-      setOpen(false);
-      return { ok: true };
+      const result = await destroyPost({ id: record.id });
+      if (deleteSucceeded(result)) {
+        onDeleted(record.id);
+        setOpen(false);
+        return { ok: true };
+      }
+      // Resolved but not a success shape → keep the dialog open with the message.
+      return { ok: false, error: deleteErrorMessage(result) };
     } catch (error) {
-      // Failure → keep the dialog open and surface the message inline.
+      // Failure (non-2xx structured error) → keep the dialog open, message inline.
       return { ok: false, error: deleteErrorMessage(error) };
     }
   }
@@ -97,7 +115,7 @@ function RowActions({ record, onDeleted }: {
       </div>
       {/* < md: collapse into a … overflow menu so actions never break layout */}
       <div className="md:hidden">
-        <DropdownMenu>
+        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" aria-label="Open actions menu">…</Button>
           </DropdownMenuTrigger>
@@ -105,14 +123,14 @@ function RowActions({ record, onDeleted }: {
             <DropdownMenuItem asChild>
               <a href={`/posts/${record.id}/edit`}>Edit</a>
             </DropdownMenuItem>
-            {/* Open the AlertDialog only AFTER the menu's own close settles:
-                a DropdownMenuItem's default onSelect closes the menu, which would
-                tear the dialog down mid-open. preventDefault keeps our state
-                authoritative, then we open the dialog. */}
+            {/* Close the menu and open the AlertDialog together: preventDefault
+                stops the default close (whose autofocus would fight the dialog),
+                then we close the menu and open the dialog deterministically. */}
             <DropdownMenuItem
               className="text-destructive"
               onSelect={(event) => {
                 event.preventDefault();
+                setMenuOpen(false);
                 setOpen(true);
               }}
             >
@@ -136,18 +154,21 @@ export function PostList({
   posts = [],
   emptyLabel = "No posts yet — create one.",
 }: { posts?: PostRow[]; emptyLabel?: string }) {
-  // The server-rendered list is LOCAL state so a successful delete can drop the
-  // row in place (golden single-source filter — no dual cache while searching).
-  const [serverRows, setServerRows] = useState(posts);
-
   const [q, setQ] = useState("");
   const searching = q.trim().length > 0;
+
+  // Ids deleted IN PLACE — a single tombstone list (not a second row cache)
+  // applied to whichever source is displayed, so a delete removes the row
+  // immediately whether it happened on the server-rendered list OR on the live
+  // search results.
+  const [removedIds, setRemovedIds] = useState<number[]>([]);
 
   // Client-driven read (AC5) — only meaningful while searching. When q is blank
   // the box is idle and we fall back to the server-rendered rows.
   const { data: searchData, loading: searchLoading } = useQuery<PostRow[]>(searchPosts, { q: q.trim() });
 
-  const rows = searching ? searchData ?? [] : serverRows;
+  const source = searching ? searchData ?? [] : posts;
+  const rows = removedIds.length === 0 ? source : source.filter((row) => !removedIds.includes(row.id));
 
   // Typed columns config (AC1) — built INSIDE the component (design B) so the
   // actions cell closes over component state (`onDeleted`) to drive the
@@ -157,10 +178,10 @@ export function PostList({
   // locale-formatted, everything else → plain text. Every header is a sortable
   // Button (AC2). The trailing actions column collapses into a … menu under the
   // `md` breakpoint (768px). Memoized once: `onDeleted` only calls the stable
-  // `setServerRows`, so the empty dependency list is correct.
+  // `setRemovedIds`, so the empty dependency list is correct.
   const columns: ColumnDef<PostRow>[] = useMemo(() => {
     const onDeleted = (id: number) =>
-      setServerRows((current) => current.filter((row) => row.id !== id));
+      setRemovedIds((current) => (current.includes(id) ? current : [...current, id]));
 
     return [
       {
@@ -250,7 +271,7 @@ export function PostList({
         cell: ({ row }) => <RowActions record={row.original} onDeleted={onDeleted} />,
       },
     ];
-    // `setServerRows` is a stable React setter; the column defs capture nothing
+    // `setRemovedIds` is a stable React setter; the column defs capture nothing
     // else from render, so the columns are built exactly once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -273,7 +294,7 @@ export function PostList({
       />
 
       {searching && searchLoading && <p className="text-sm text-muted-foreground">Searching…</p>}
-      {!searching && serverRows.length === 0 && <p className="text-sm text-muted-foreground">{emptyLabel}</p>}
+      {!searching && rows.length === 0 && <p className="text-sm text-muted-foreground">{emptyLabel}</p>}
       {searching && !searchLoading && rows.length === 0 && (
         <p className="text-sm text-muted-foreground">No posts match “{q.trim()}”.</p>
       )}
