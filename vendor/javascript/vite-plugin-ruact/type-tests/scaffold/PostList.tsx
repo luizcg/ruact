@@ -1,33 +1,41 @@
 "use client";
 
-// Post list — a shadcn DataTable. The collection arrives as a
-// SERVER-RENDERED prop (`posts`); there is no client query for the initial
-// render. A query only enters when the *client* drives the read: the search box
-// calls useQuery(searchPosts, { q }) and swaps in filtered rows as you type.
+// Post list — a shadcn `table` primitive (a styled HTML table) plus a
+// small GENERATED client-side sort. There is NO table-engine dependency: the
+// scaffold stays dep-free (no react-table runtime), matching the dep-free
+// Form and the native date inputs. The collection arrives as a SERVER-RENDERED
+// prop (`posts`); there is no client query for the initial render. A query only
+// enters when the *client* drives the read: the search box calls
+// useQuery(searchPosts, { q }) and swaps in filtered rows as you type.
 // Per-row delete drives a controlled PostDeleteDialog (DELETE
 // /posts/:id via the destroyPost action); on `{ ok: true }` the row is
 // removed from the displayed rows IN PLACE (no reload, no URL built). Column
 // sorting is CLIENT-ONLY — the dataset is the index payload; server-side
 // sort/pagination is Phase-3 territory.
 //
-// The `DataTable` recipe + the shadcn primitives below import from
-// `@/components/ui/*`, which Story 10.5 installs (shadcn ships no installable
-// DataTable — it is a copy-paste @tanstack/react-table recipe 10.5 templates).
-// A freshly scaffolded app will not resolve these until 10.5 lands; that is
+// The `@/components/ui/table` primitive (and the Badge/Button/DropdownMenu
+// primitives below) is installed by Story 10.5 (`npx shadcn add table`). A
+// freshly scaffolded app will not resolve these until 10.5 lands; that is
 // expected (the end-to-end live demo is Story 10.7).
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { search as searchPosts, destroyPost, useQuery } from "@/.ruact/server-functions";
 import { PostDeleteDialog } from "./PostDeleteDialog";
-import { DataTable } from "@/components/ui/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { ColumnDef } from "@tanstack/react-table";
 
 type PostRow = { id: number; title: string | null; body: string | null; published: boolean | null; views: number | null; published_at: string | null; author_id: number | null };
 
@@ -37,6 +45,41 @@ type PostRow = { id: number; title: string | null; body: string | null; publishe
 export const __ruactContract = {
   props: { posts: "required" },
 };
+
+// Columns whose values are date/datetime strings: the sort compares these by
+// epoch time (`new Date(value).getTime()`) rather than lexically, so they order
+// chronologically. Generated from the model's date/datetime attributes.
+const DATE_KEYS = new Set<string>(["published_at"]);
+
+// Generated client-side comparator (no table engine). Sorts a COPY of the rows
+// by the active key + direction: `null`/`undefined` always sort LAST (so a blank
+// cell never jumps to the top, regardless of direction); date columns compare by
+// time, numbers numerically, booleans false-before-true, everything else via a
+// locale-aware string compare. The direction flip is applied AFTER the null
+// handling, never to it.
+function compareRows(
+  a: PostRow,
+  b: PostRow,
+  sort: { key: string; dir: "asc" | "desc" },
+): number {
+  const av = a[sort.key as keyof PostRow];
+  const bv = b[sort.key as keyof PostRow];
+  if (av == null && bv == null) return 0;
+  if (av == null) return 1;
+  if (bv == null) return -1;
+
+  let result: number;
+  if (DATE_KEYS.has(sort.key)) {
+    result = new Date(String(av)).getTime() - new Date(String(bv)).getTime();
+  } else if (typeof av === "number" && typeof bv === "number") {
+    result = av - bv;
+  } else if (typeof av === "boolean" && typeof bv === "boolean") {
+    result = Number(av) - Number(bv);
+  } else {
+    result = String(av).localeCompare(String(bv));
+  }
+  return sort.dir === "desc" ? -result : result;
+}
 
 // Pull a human-readable message out of the failed-delete result. A thrown
 // RuactActionError (non-2xx) carries the parsed structured-error body, whose
@@ -163,118 +206,32 @@ export function PostList({
   // search results.
   const [removedIds, setRemovedIds] = useState<number[]>([]);
 
+  // Sort state (AC2) — the active column key + direction, or null when unsorted
+  // (server/insertion order). A new key sorts ascending; clicking the same key
+  // again flips asc↔desc.
+  const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" } | null>(null);
+
   // Client-driven read (AC5) — only meaningful while searching. When q is blank
   // the box is idle and we fall back to the server-rendered rows.
   const { data: searchData, loading: searchLoading } = useQuery<PostRow[]>(searchPosts, { q: q.trim() });
 
   const source = searching ? searchData ?? [] : posts;
   const rows = removedIds.length === 0 ? source : source.filter((row) => !removedIds.includes(row.id));
+  // Always sort a COPY — never mutate the prop/source array.
+  const sortedRows = sort ? [...rows].sort((a, b) => compareRows(a, b, sort)) : rows;
 
-  // Typed columns config (AC1) — built INSIDE the component (design B) so the
-  // actions cell closes over component state (`onDeleted`) to drive the
-  // controlled delete dialog + in-list removal, with no change to the DataTable's
-  // `{ columns, data }` interface. One column per attribute, the cell renderer
-  // keyed on the attribute type: boolean → Badge, numeric → right-aligned, date →
-  // locale-formatted, everything else → plain text. Every header is a sortable
-  // Button (AC2). The trailing actions column collapses into a … menu under the
-  // `md` breakpoint (768px). Memoized once: `onDeleted` only calls the stable
-  // `setRemovedIds`, so the empty dependency list is correct.
-  const columns: ColumnDef<PostRow>[] = useMemo(() => {
-    const onDeleted = (id: number) =>
-      setRemovedIds((current) => (current.includes(id) ? current : [...current, id]));
+  const onDeleted = (id: number) =>
+    setRemovedIds((current) => (current.includes(id) ? current : [...current, id]));
 
-    return [
-      {
-        accessorKey: "id",
-        header: ({ column }) => (
-          <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
-            ID
-          </Button>
-        ),
-        cell: ({ row }) => (
-          <a href={`/posts/${row.original.id}`} className="font-medium underline-offset-4 hover:underline">
-            {row.original.id}
-          </a>
-        ),
-      },
-      {
-        accessorKey: "title",
-        header: ({ column }) => (
-          <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
-            Title
-          </Button>
-        ),
-        cell: ({ row }) => <span>{String(row.getValue("title") ?? "")}</span>,
-      },
-      {
-        accessorKey: "body",
-        header: ({ column }) => (
-          <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
-            Body
-          </Button>
-        ),
-        cell: ({ row }) => <span>{String(row.getValue("body") ?? "")}</span>,
-      },
-      {
-        accessorKey: "published",
-        header: ({ column }) => (
-          <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
-            Published
-          </Button>
-        ),
-        cell: ({ row }) => {
-          const value = row.getValue("published");
-          return <Badge variant={value ? "default" : "secondary"}>{value ? "Yes" : "No"}</Badge>;
-        },
-      },
-      {
-        accessorKey: "views",
-        header: ({ column }) => (
-          <div className="text-right">
-            <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
-              Views
-            </Button>
-          </div>
-        ),
-        cell: ({ row }) => (
-          <div className="text-right tabular-nums">{String(row.getValue("views") ?? "")}</div>
-        ),
-      },
-      {
-        accessorKey: "published_at",
-        header: ({ column }) => (
-          <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
-            Published at
-          </Button>
-        ),
-        cell: ({ row }) => {
-          const value = row.getValue("published_at");
-          return <span>{value ? new Date(String(value)).toLocaleString() : ""}</span>;
-        },
-      },
-      {
-        accessorKey: "author_id",
-        header: ({ column }) => (
-          <div className="text-right">
-            <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
-              Author
-            </Button>
-          </div>
-        ),
-        cell: ({ row }) => (
-          <div className="text-right tabular-nums">{String(row.getValue("author_id") ?? "")}</div>
-        ),
-      },
-      {
-        id: "actions",
-        enableSorting: false,
-        cell: ({ row }) => <RowActions record={row.original} onDeleted={onDeleted} />,
-      },
-    ];
-    // `setRemovedIds` is a stable React setter; the column defs capture nothing
-    // else from render, so the columns are built exactly once.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Set the sort to a new key (ascending), or flip the direction when the active
+  // key is clicked again.
+  function toggleSort(key: string) {
+    setSort((current) =>
+      current && current.key === key
+        ? { key, dir: current.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: "asc" },
+    );
+  }
 
   return (
     <section className="mx-auto max-w-4xl px-4 py-8">
@@ -299,7 +256,70 @@ export function PostList({
         <p className="text-sm text-muted-foreground">No posts match “{q.trim()}”.</p>
       )}
 
-      {rows.length > 0 && <DataTable columns={columns} data={rows} />}
+      {sortedRows.length > 0 && (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>
+                <Button variant="ghost" onClick={() => toggleSort("id")}>ID</Button>
+              </TableHead>
+              <TableHead>
+                <Button variant="ghost" onClick={() => toggleSort("title")}>
+                  Title
+                </Button>
+              </TableHead>
+              <TableHead>
+                <Button variant="ghost" onClick={() => toggleSort("body")}>
+                  Body
+                </Button>
+              </TableHead>
+              <TableHead>
+                <Button variant="ghost" onClick={() => toggleSort("published")}>
+                  Published
+                </Button>
+              </TableHead>
+              <TableHead className="text-right">
+                <Button variant="ghost" onClick={() => toggleSort("views")}>
+                  Views
+                </Button>
+              </TableHead>
+              <TableHead>
+                <Button variant="ghost" onClick={() => toggleSort("published_at")}>
+                  Published at
+                </Button>
+              </TableHead>
+              <TableHead className="text-right">
+                <Button variant="ghost" onClick={() => toggleSort("author_id")}>
+                  Author
+                </Button>
+              </TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {sortedRows.map((row) => (
+              <TableRow key={row.id}>
+                <TableCell>
+                  <a href={`/posts/${row.id}`} className="font-medium underline-offset-4 hover:underline">
+                    {row.id}
+                  </a>
+                </TableCell>
+                <TableCell>{String(row.title ?? "")}</TableCell>
+                <TableCell>{String(row.body ?? "")}</TableCell>
+                <TableCell>
+                  <Badge variant={row.published ? "default" : "secondary"}>{row.published ? "Yes" : "No"}</Badge>
+                </TableCell>
+                <TableCell className="text-right tabular-nums">{String(row.views ?? "")}</TableCell>
+                <TableCell>{row.published_at ? new Date(String(row.published_at)).toLocaleString() : ""}</TableCell>
+                <TableCell className="text-right tabular-nums">{String(row.author_id ?? "")}</TableCell>
+                <TableCell>
+                  <RowActions record={row} onDeleted={onDeleted} />
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
     </section>
   );
 }
