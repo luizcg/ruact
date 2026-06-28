@@ -83,7 +83,16 @@ class <%= controller_class_name %>Controller < ApplicationController
   def destroy
     <%= singular_name %> = <%= class_name %>.find(params[:id])
     <%= singular_name %>.destroy
-    redirect_to <%= plural_name %>_url
+    # DataTable in-list default (golden): NO redirect — the List removes the row
+    # in place from this `{ ok: true }` Bucket-2 JSON. A failed destroy (e.g.
+    # `restrict_with_exception` on a foreign key) RAISES; the gem's
+    # structured-error middleware shapes the dev/prod failure response the dialog
+    # surfaces inline — do NOT catch it here.
+    @ok = true
+    @id = <%= singular_name %>.id
+    # Delete-from-show alternative — land back on the index instead (the
+    # destroy<%= class_name %> accessor follows the emitted `$redirect` automatically):
+    # redirect_to <%= plural_name %>_url
   end
 
   # --- FR96 opt-in: a reference addressed ONLY by a signed token -------------
