@@ -1,2 +1,5 @@
 <%%# <%= class_name %> new — the shared form in create mode (no initial data). %>
-<<%= class_name %>Form />
+<% reference_attributes.each do |ref| -%>
+<%% <%= ref.options_ivar %> = @<%= ref.options_ivar %> %>
+<% end -%>
+<<%= class_name %>Form<% reference_attributes.each do |ref| %> <%= ref.options_prop %>={<%= ref.options_ivar %>}<% end %> />

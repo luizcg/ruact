@@ -6,14 +6,45 @@
 // --javascript for the typed .tsx variant.
 <% end -%>
 // <%= class_name %> form — shared by `new` (initial == null) and `edit` (initial
-// == the serialized record). Submits through the v2 action accessors:
-// create<%= class_name %> (POST /<%= plural_name %>) or update<%= class_name %> (PATCH /<%= plural_name %>/:id). On
+// == the serialized record). Each field renders the shadcn control mapped to its
+// attribute type (Input / Textarea / Switch / Select), labelled, with the FR98
+// server error surfaced inline beneath it. Submits through the v2 action
+// accessors: create<%= class_name %> (POST /<%= plural_name %>) or update<%= class_name %> (PATCH /<%= plural_name %>/:id). On
 // success the controller drives navigation SERVER-SIDE via `redirect_to`
 // (the `$redirect` the runtime follows) — there is no client URL building here.
 // On a validation failure the SAME response carries the FR98 attribute-keyed
 // `errors` map, surfaced inline per field (the client stays on the form).
+//
+// The `@/components/ui/*` primitives below are installed by Story 10.5; a freshly
+// scaffolded app will not resolve them until then (the live demo is Story 10.7).
+//
+// Client-side validation is intentionally NOT here — it is server-only with a
+// full round-trip (Story 10.6 adds the model-validation bridge). The controlled
+// `useState` keeps this dependency-free; to adopt rich client validation later,
+// swap the controlled state for react-hook-form's `useForm` + shadcn `<Form>` and
+// feed these same FR98 `errors` into `setError` per key (opt-in — not the default).
 import { useState<% if typescript? %>, type FormEvent<% end %> } from "react";
 import { create<%= class_name %>, update<%= class_name %> } from "@/.ruact/server-functions";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+<% if form_uses_input? -%>
+import { Input } from "@/components/ui/input";
+<% end -%>
+<% if form_uses_textarea? -%>
+import { Textarea } from "@/components/ui/textarea";
+<% end -%>
+<% if form_uses_switch? -%>
+import { Switch } from "@/components/ui/switch";
+<% end -%>
+<% if form_uses_select? -%>
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+<% end -%>
 <% if typescript? -%>
 
 type <%= class_name %>Row = { <%= ts_row_fields %> };
@@ -26,7 +57,7 @@ export const __ruactContract = {
 };
 <% end -%>
 
-export function <%= class_name %>Form({ initial = null }<% if typescript? %>: { initial?: <%= class_name %>Row | null }<% end %>) {
+export function <%= class_name %>Form({ <%= form_props_params.join(", ") %> }<% if typescript? %>: <%= form_props_type %><% end %>) {
 <% scaffold_attributes.each do |attr| -%>
 <% if attr.boolean? -%>
   const [<%= attr.js_var %>, <%= attr.js_setter %>] = useState(Boolean(initial?.<%= attr.column_name %> ?? false));
@@ -65,66 +96,106 @@ export function <%= class_name %>Form({ initial = null }<% if typescript? %>: { 
   const errorsFor = (attr<% if typescript? %>: string<% end %>) => errors[attr] ?? [];
 
   return (
-    <form onSubmit={handleSubmit} style={{ fontFamily: "system-ui, sans-serif", maxWidth: 560, margin: "2rem auto", padding: "0 1rem" }}>
-      <h1>{initial != null ? `Edit <%= human_name %> #${initial.id}` : "New <%= human_name %>"}</h1>
+    <form onSubmit={handleSubmit} className="mx-auto max-w-xl space-y-6 px-4 py-8">
+      <h1 className="text-2xl font-semibold tracking-tight">
+        {initial != null ? `Edit <%= human_name %> #${initial.id}` : "New <%= human_name %>"}
+      </h1>
 
       {errorsFor("base").length > 0 && (
-        <ul style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", borderRadius: 6, padding: "8px 8px 8px 24px" }}>
-          {errorsFor("base").map((message, i) => (
-            <li key={i}>{message}</li>
-          ))}
-        </ul>
+        <div className="rounded-md border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          <ul className="list-disc space-y-1 pl-4">
+            {errorsFor("base").map((message, i) => (
+              <li key={i}>{message}</li>
+            ))}
+          </ul>
+        </div>
       )}
 <% scaffold_attributes.each do |attr| -%>
-<% if attr.control == :checkbox -%>
+<% case attr.shadcn_control -%>
+<% when :switch -%>
 
-      <div style={{ marginBottom: 12 }}>
-        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <input type="checkbox" checked={<%= attr.js_var %>} onChange={(e) => <%= attr.js_setter %>(e.target.checked)} disabled={saving} />
-          <%= attr.column_name.humanize %>
-        </label>
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <Switch
+            id="<%= attr.column_name %>"
+            checked={<%= attr.js_var %>}
+            onCheckedChange={<%= attr.js_setter %>}
+            disabled={saving}
+          />
+          <Label htmlFor="<%= attr.column_name %>"><%= attr.column_name.humanize %></Label>
+        </div>
         {errorsFor("<%= attr.column_name %>").map((message, i) => (
-          <span key={i} style={{ color: "#b91c1c", fontSize: 13, marginTop: 4, display: "block" }}>{message}</span>
+          <p key={i} className="text-sm text-destructive">{message}</p>
         ))}
       </div>
-<% elsif attr.control == :textarea -%>
+<% when :textarea -%>
 
-      <label style={{ display: "block", marginBottom: 12 }}>
-        <%= attr.column_name.humanize %>
-        <textarea
-          style={{ display: "block", width: "100%", minHeight: 120, padding: 6, marginTop: 4, boxSizing: "border-box" }}
+      <div className="space-y-2">
+        <Label htmlFor="<%= attr.column_name %>"><%= attr.column_name.humanize %></Label>
+        <Textarea
+          id="<%= attr.column_name %>"
           value={<%= attr.js_var %>}
           onChange={(e) => <%= attr.js_setter %>(e.target.value)}
           disabled={saving}
         />
         {errorsFor("<%= attr.column_name %>").map((message, i) => (
-          <span key={i} style={{ color: "#b91c1c", fontSize: 13, marginTop: 4, display: "block" }}>{message}</span>
+          <p key={i} className="text-sm text-destructive">{message}</p>
         ))}
-      </label>
+      </div>
+<% when :select -%>
+
+      <div className="space-y-2">
+        <Label htmlFor="<%= attr.column_name %>"><%= attr.name.humanize %></Label>
+        {/* Eager <Select> of controller-provided options (ivar → `<%= attr.options_prop %>` prop),
+            capped at the generator's REFERENCE_OPTIONS_LIMIT. For a parent set
+            larger than that, swap this for a server-search combobox backed by a
+            parent-options read query (opt-in follow-up — that query is out of this
+            scaffold's scope since the parent model isn't scaffolded here). */}
+        <Select
+          value={<%= attr.js_var %> ? String(<%= attr.js_var %>) : ""}
+          onValueChange={<%= attr.js_setter %>}
+          disabled={saving}
+        >
+          <SelectTrigger id="<%= attr.column_name %>">
+            <SelectValue placeholder="Select <%= attr.name.humanize.downcase %>" />
+          </SelectTrigger>
+          <SelectContent>
+            {<%= attr.options_prop %>.map((option) => (
+              <SelectItem key={option.id} value={String(option.id)}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {errorsFor("<%= attr.column_name %>").map((message, i) => (
+          <p key={i} className="text-sm text-destructive">{message}</p>
+        ))}
+      </div>
 <% else -%>
 
-      <label style={{ display: "block", marginBottom: 12 }}>
-        <%= attr.column_name.humanize %>
-        <input
-          style={{ display: "block", width: "100%", padding: 6, marginTop: 4, boxSizing: "border-box" }}
+      <div className="space-y-2">
+        <Label htmlFor="<%= attr.column_name %>"><%= attr.column_name.humanize %></Label>
+        <Input
+          id="<%= attr.column_name %>"
           type="<%= html_input_type(attr) %>"
           value={<%= attr.js_var %>}
           onChange={(e) => <%= attr.js_setter %>(e.target.value)}
           disabled={saving}
         />
         {errorsFor("<%= attr.column_name %>").map((message, i) => (
-          <span key={i} style={{ color: "#b91c1c", fontSize: 13, marginTop: 4, display: "block" }}>{message}</span>
+          <p key={i} className="text-sm text-destructive">{message}</p>
         ))}
-      </label>
+      </div>
 <% end -%>
 <% end -%>
 
-      <div style={{ marginTop: 16 }}>
-        <button type="submit" disabled={saving} style={{ padding: "8px 16px", fontWeight: 600 }}>
+      <div className="flex items-center gap-3 pt-2">
+        <Button type="submit" disabled={saving}>
           {saving ? "Saving…" : initial != null ? "Update <%= human_name.downcase %>" : "Create <%= human_name.downcase %>"}
-        </button>
-        {" "}
-        <a href={initial != null ? `/<%= plural_name %>/${initial.id}` : "/<%= plural_name %>"} style={{ marginLeft: 8 }}>Cancel</a>
+        </Button>
+        <Button variant="outline" asChild>
+          <a href={initial != null ? `/<%= plural_name %>/${initial.id}` : "/<%= plural_name %>"}>Cancel</a>
+        </Button>
       </div>
     </form>
   );

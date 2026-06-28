@@ -25,6 +25,12 @@ declare namespace JSX {
 
 declare module "react" {
   export function useState<S>(initial: S | (() => S)): [S, (next: S | ((prev: S) => S)) => void];
+  // The generated Form's `handleSubmit(event: FormEvent)` only calls
+  // `event.preventDefault()`; a minimal shim keeps the type load-bearing without
+  // pulling in `@types/react`.
+  export interface FormEvent {
+    preventDefault(): void;
+  }
 }
 
 declare module "@/.ruact/server-functions" {
@@ -35,6 +41,13 @@ declare module "@/.ruact/server-functions" {
   // typed from the declared `(q:)` kwarg (Story 13.4). The List aliases it
   // `search<Plural>`.
   export const search: (params: { q: Wire }) => Promise<unknown>;
+
+  // Action accessors the generated Form imports (Story 10.3). Actions are NOT
+  // typed by FR99 (only queries are — Story 13.4 decision A), so the accessors
+  // take a loose payload and return `Promise<unknown>`; the Form narrows the
+  // result with an `as { errors?: ... } | null` assertion at the call site.
+  export const createPost: (payload: Record<string, unknown>) => Promise<unknown>;
+  export const updatePost: (payload: Record<string, unknown>) => Promise<unknown>;
 
   // Mirrors the runtime declaration (`ruact-server-functions-runtime/index.d.ts`)
   // — `reference` is the widened accessor shape (Story 13.4), `T` the return type.
@@ -91,4 +104,34 @@ declare module "@/components/ui/dropdown-menu" {
   export function DropdownMenuTrigger(props: Props): any;
   export function DropdownMenuContent(props: Props): any;
   export function DropdownMenuItem(props: Props): any;
+}
+
+// Story 10.3 — the shadcn Form primitives the generated `<Model>Form.tsx` imports.
+// Permissive structural shims (like Button/Badge above): the point is the
+// generated module's OWN type-safety (controlled state, the typed action
+// accessors, the `initial` prop + `{ id; label }[]` options props), not
+// re-testing upstream shadcn. Story 10.5 installs the real modules.
+declare module "@/components/ui/label" {
+  export function Label(props: { children?: any; [key: string]: any }): any;
+}
+
+declare module "@/components/ui/input" {
+  export function Input(props: { [key: string]: any }): any;
+}
+
+declare module "@/components/ui/textarea" {
+  export function Textarea(props: { [key: string]: any }): any;
+}
+
+declare module "@/components/ui/switch" {
+  export function Switch(props: { [key: string]: any }): any;
+}
+
+declare module "@/components/ui/select" {
+  type Props = { children?: any; [key: string]: any };
+  export function Select(props: Props): any;
+  export function SelectContent(props: Props): any;
+  export function SelectItem(props: Props): any;
+  export function SelectTrigger(props: Props): any;
+  export function SelectValue(props: Props): any;
 }

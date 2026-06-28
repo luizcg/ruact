@@ -48,6 +48,47 @@ module Ruact
           end
         end
 
+        # The shadcn Form control this attribute renders as (Story 10.3 AC1):
+        #   :input    → string                → <Input type="text">
+        #   :textarea → text                  → <Textarea>
+        #   :switch   → boolean               → <Switch>
+        #   :number   → integer/float/decimal → <Input type="number">
+        #   :date     → date                  → <Input type="date">
+        #   :datetime → datetime              → <Input type="datetime-local">
+        #   :select   → references            → <Select> of parent options
+        # The :input/:number/:date/:datetime kinds all render an <Input>; the
+        # concrete `type=` attribute comes from `html_input_type` (FormHelpers).
+        def shadcn_control
+          case type
+          when "text" then :textarea
+          when "boolean" then :switch
+          when "integer", "float", "decimal" then :number
+          when "date" then :date
+          when "datetime" then :datetime
+          when "references" then :select
+          else :input
+          end
+        end
+
+        # references only — the parent model constant (`author` → `Author`,
+        # `blog_post` → `BlogPost`), used by the controller's options loader.
+        def reference_class_name
+          name.camelize
+        end
+
+        # references only — the controller ivar / view local holding the capped
+        # parent options (`author` → `author_options`).
+        def options_ivar
+          "#{name}_options"
+        end
+
+        # references only — the camelCase prop the view passes and the Form reads
+        # (`author` → `authorOptions`, `blog_post` → `blogPostOptions`).
+        def options_prop
+          parts = name.split("_")
+          "#{(parts.first(1) + parts.drop(1).map(&:capitalize)).join}Options"
+        end
+
         def reference?
           type == "references"
         end
