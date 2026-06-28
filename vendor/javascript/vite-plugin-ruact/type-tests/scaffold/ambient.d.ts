@@ -115,21 +115,41 @@ declare module "@/components/ui/label" {
   export function Label(props: { children?: any; [key: string]: any }): any;
 }
 
+// Input/Textarea/Switch/Select type the value + change handler precisely (the
+// rest of the props stay permissive) so the isolated typecheck actually proves
+// the generated Form binds STRING state to string controls and a boolean to the
+// Switch — the controlled-state contract, not just import resolution.
 declare module "@/components/ui/input" {
-  export function Input(props: { [key: string]: any }): any;
+  export function Input(props: {
+    value?: string;
+    onChange?: (event: { target: { value: string } }) => void;
+    [key: string]: any;
+  }): any;
 }
 
 declare module "@/components/ui/textarea" {
-  export function Textarea(props: { [key: string]: any }): any;
+  export function Textarea(props: {
+    value?: string;
+    onChange?: (event: { target: { value: string } }) => void;
+    [key: string]: any;
+  }): any;
 }
 
 declare module "@/components/ui/switch" {
-  export function Switch(props: { [key: string]: any }): any;
+  export function Switch(props: {
+    checked?: boolean;
+    onCheckedChange?: (checked: boolean) => void;
+    [key: string]: any;
+  }): any;
 }
 
 declare module "@/components/ui/select" {
   type Props = { children?: any; [key: string]: any };
-  export function Select(props: Props): any;
+  export function Select(props: {
+    value?: string;
+    onValueChange?: (value: string) => void;
+    [key: string]: any;
+  }): any;
   export function SelectContent(props: Props): any;
   export function SelectItem(props: Props): any;
   export function SelectTrigger(props: Props): any;

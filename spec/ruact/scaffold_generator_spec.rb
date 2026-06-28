@@ -480,8 +480,8 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(form).not_to include("useQuery")
     end
 
-    it "keeps the controlled useState per attribute", :aggregate_failures do
-      expect(form).to include("const [title, setTitle] = useState(initial?.title ?? \"\");")
+    it "keeps the controlled useState per attribute (string-valued, boolean via Boolean)", :aggregate_failures do
+      expect(form).to include("const [title, setTitle] = useState(String(initial?.title ?? \"\"));")
       expect(form).to include("const [published, setPublished] = useState(Boolean(initial?.published ?? false));")
     end
 
@@ -502,8 +502,13 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
     it "is typed (FR99 row) and carries the FR100 contract (initial optional) (AC4)", :aggregate_failures do
       expect(form).to include("type PostRow = {")
       expect(form).to include("export const __ruactContract")
-      expect(form).to include('props: { initial: "optional" }')
+      expect(form).to include('initial: "optional"')
       expect(form).to include("initial?: PostRow | null")
+    end
+
+    it "declares every references options prop in the FR100 contract (else 13.5 rejects the call site)" do
+      # the new/edit views pass `authorOptions`; an undeclared prop fails preprocess
+      expect(form).to include('authorOptions: "optional"')
     end
 
     it "submits through a shadcn <Button type=\"submit\"> and a <Button> Cancel link", :aggregate_failures do
@@ -526,7 +531,10 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       run_scaffold(%w[Tag name:string])
       form = read("app/javascript/components/TagForm.tsx")
       expect(form).to include("export function TagForm({ initial = null }")
-      expect(form).not_to include("Options")
+      expect(form).to include('props: { initial: "optional" }')
+      expect(form).not_to include("Options = []")
+      expect(form).not_to include('Options: "optional"')
+      expect(form).not_to include("Options?:")
     end
   end
 

@@ -36,20 +36,33 @@ import {
 type PostRow = { id: number; title: string | null; body: string | null; published: boolean | null; views: number | null; published_on: string | null; published_at: string | null; author_id: number | null };
 
 // FR100 — opt-in call-site contract: `initial` is OPTIONAL (`new` omits it,
-// `edit` passes the serialized record). A typo'd prop name fails at preprocess
-// time instead of silently arriving as `undefined` in the browser.
+// `edit` passes the serialized record); each `references` field adds an
+// optional `<name>Options` prop the new/edit views pass. A typo'd prop name
+// fails at preprocess time instead of silently arriving as `undefined`.
 export const __ruactContract = {
-  props: { initial: "optional" },
+  props: { initial: "optional", authorOptions: "optional" },
 };
 
 export function PostForm({ initial = null, authorOptions = [] }: { initial?: PostRow | null; authorOptions?: { id: number; label: string }[] }) {
-  const [title, setTitle] = useState(initial?.title ?? "");
-  const [body, setBody] = useState(initial?.body ?? "");
+  // String-valued state: native/shadcn controls bind `string` (numbers + refs
+  // arrive on the row as numbers, so coerce here). The controller re-coerces.
+  const [title, setTitle] = useState(String(initial?.title ?? ""));
+  // String-valued state: native/shadcn controls bind `string` (numbers + refs
+  // arrive on the row as numbers, so coerce here). The controller re-coerces.
+  const [body, setBody] = useState(String(initial?.body ?? ""));
   const [published, setPublished] = useState(Boolean(initial?.published ?? false));
-  const [views, setViews] = useState(initial?.views ?? "");
-  const [publishedOn, setPublishedOn] = useState(initial?.published_on ?? "");
-  const [publishedAt, setPublishedAt] = useState(initial?.published_at ?? "");
-  const [authorId, setAuthorId] = useState(initial?.author_id ?? "");
+  // String-valued state: native/shadcn controls bind `string` (numbers + refs
+  // arrive on the row as numbers, so coerce here). The controller re-coerces.
+  const [views, setViews] = useState(String(initial?.views ?? ""));
+  // String-valued state: native/shadcn controls bind `string` (numbers + refs
+  // arrive on the row as numbers, so coerce here). The controller re-coerces.
+  const [publishedOn, setPublishedOn] = useState(String(initial?.published_on ?? ""));
+  // String-valued state: native/shadcn controls bind `string` (numbers + refs
+  // arrive on the row as numbers, so coerce here). The controller re-coerces.
+  const [publishedAt, setPublishedAt] = useState(String(initial?.published_at ?? ""));
+  // String-valued state: native/shadcn controls bind `string` (numbers + refs
+  // arrive on the row as numbers, so coerce here). The controller re-coerces.
+  const [authorId, setAuthorId] = useState(String(initial?.author_id ?? ""));
   // FR98 — keyed { [attr]: string[] }; `{}` means "no errors" (always present).
   const [errors, setErrors] = useState<Record<string, string[]>>({});
   const [saving, setSaving] = useState(false);
@@ -192,7 +205,7 @@ export function PostForm({ initial = null, authorOptions = [] }: { initial?: Pos
             parent-options read query (opt-in follow-up — that query is out of this
             scaffold's scope since the parent model isn't scaffolded here). */}
         <Select
-          value={authorId ? String(authorId) : ""}
+          value={authorId}
           onValueChange={setAuthorId}
           disabled={saving}
         >

@@ -73,6 +73,16 @@ module Ruact
           "{ #{parts.join('; ')} }"
         end
 
+        # FR100 — the `__ruactContract` props object. EVERY prop the view may pass
+        # must be declared or the 13.5 call-site validator rejects it: `initial`
+        # plus each `references` options prop the new/edit views hand the Form.
+        # All optional (`new` omits `initial`; a reference-free Form omits options).
+        def form_contract_props
+          parts = ['initial: "optional"']
+          parts += reference_attributes.map { |ref| %(#{ref.options_prop}: "optional") }
+          "{ #{parts.join(', ')} }"
+        end
+
         # The `<Input type>` for the :input-family controls (string→text,
         # number, date, datetime→datetime-local). The shadcn `<Input>` forwards
         # `type` to the native element, so the wire formats match for free.

@@ -50,10 +50,11 @@ import {
 type <%= class_name %>Row = { <%= ts_row_fields %> };
 
 // FR100 — opt-in call-site contract: `initial` is OPTIONAL (`new` omits it,
-// `edit` passes the serialized record). A typo'd prop name fails at preprocess
-// time instead of silently arriving as `undefined` in the browser.
+// `edit` passes the serialized record); each `references` field adds an
+// optional `<name>Options` prop the new/edit views pass. A typo'd prop name
+// fails at preprocess time instead of silently arriving as `undefined`.
 export const __ruactContract = {
-  props: { initial: "optional" },
+  props: <%= form_contract_props %>,
 };
 <% end -%>
 
@@ -62,7 +63,9 @@ export function <%= class_name %>Form({ <%= form_props_params.join(", ") %> }<% 
 <% if attr.boolean? -%>
   const [<%= attr.js_var %>, <%= attr.js_setter %>] = useState(Boolean(initial?.<%= attr.column_name %> ?? false));
 <% else -%>
-  const [<%= attr.js_var %>, <%= attr.js_setter %>] = useState(initial?.<%= attr.column_name %> ?? "");
+  // String-valued state: native/shadcn controls bind `string` (numbers + refs
+  // arrive on the row as numbers, so coerce here). The controller re-coerces.
+  const [<%= attr.js_var %>, <%= attr.js_setter %>] = useState(String(initial?.<%= attr.column_name %> ?? ""));
 <% end -%>
 <% end -%>
   // FR98 — keyed { [attr]: string[] }; `{}` means "no errors" (always present).
@@ -152,7 +155,7 @@ export function <%= class_name %>Form({ <%= form_props_params.join(", ") %> }<% 
             parent-options read query (opt-in follow-up — that query is out of this
             scaffold's scope since the parent model isn't scaffolded here). */}
         <Select
-          value={<%= attr.js_var %> ? String(<%= attr.js_var %>) : ""}
+          value={<%= attr.js_var %>}
           onValueChange={<%= attr.js_setter %>}
           disabled={saving}
         >
