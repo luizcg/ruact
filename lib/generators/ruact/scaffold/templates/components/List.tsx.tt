@@ -5,6 +5,13 @@
 // boundary and the FR100 call-site contract (both TS-only). Re-run without
 // --javascript for the typed .tsx variant.
 <% end -%>
+<% if shadcn_missing? -%>
+// ⚠️ GENERATED WITH --skip-shadcn-check — shadcn/ui is not fully set up.
+// The @/components/ui/* imports below will NOT resolve until you install them
+// (the Vite dev server fails the build with an import error — loud by design):
+//   <%= shadcn_add_command(missing_shadcn_components) %>
+// (If you have not set up shadcn at all, run `npx shadcn@latest init` first.)
+<% end -%>
 // <%= class_name %> list — a shadcn `table` primitive (a styled HTML table) plus a
 // small GENERATED client-side sort. There is NO table-engine dependency: the
 // scaffold stays dep-free (no react-table runtime), matching the dep-free
