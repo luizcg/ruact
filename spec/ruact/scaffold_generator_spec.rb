@@ -204,59 +204,95 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
   end
 
   # ---------------------------------------------------------------------------
-  # Story 10.2 — shadcn DataTable List + client-driven search query.
+  # Story 10.2 / 10.2b — the List: a dep-free shadcn `table` primitive (10.2b
+  # moved it off the `@tanstack/react-table` DataTable recipe) + a generated
+  # client-side sort + a client-driven search query.
   # ---------------------------------------------------------------------------
 
-  describe "List is a shadcn DataTable (Story 10.2 AC1, AC2, AC3, AC4)" do
+  describe "List is a shadcn table primitive (Story 10.2b AC1, AC2, AC3, AC4)" do
     before { run_scaffold(%w[Post title:string body:text published:boolean views:integer published_at:datetime]) }
 
     let(:list) { read("app/javascript/components/PostList.tsx") }
 
-    it "imports the DataTable recipe + shadcn primitives + ColumnDef", :aggregate_failures do
-      expect(list).to include('import { DataTable } from "@/components/ui/data-table"')
+    it "imports the shadcn `table` primitive + the other shadcn primitives", :aggregate_failures do
+      expect(list).to include(<<~TS.strip)
+        import {
+          Table,
+          TableBody,
+          TableCell,
+          TableHead,
+          TableHeader,
+          TableRow,
+        } from "@/components/ui/table";
+      TS
       expect(list).to include('import { Badge } from "@/components/ui/badge"')
       expect(list).to include('import { Button } from "@/components/ui/button"')
       expect(list).to include('from "@/components/ui/dropdown-menu"')
-      expect(list).to include('import type { ColumnDef } from "@tanstack/react-table"')
     end
 
-    it "defines a typed columns config from the attributes (AC1)" do
-      # Story 10.4 (design B) — columns are built INSIDE the component (useMemo)
-      # so the actions cell can close over component state for the delete dialog.
-      expect(list).to include("const columns: ColumnDef<PostRow>[] = useMemo(() => {")
+    it "drives the sort from a small generated useState + comparator, no table engine (AC2)",
+       :aggregate_failures do
+      # sort state: the active key + direction (or null = unsorted)
+      expect(list).to include('const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" } | null>(null);')
+      # a generated comparator over the rows array (not the @tanstack engine API)
+      expect(list).to include("function compareRows(")
+      # date columns compare by epoch time; the generated date-keys set
+      expect(list).to include('const DATE_KEYS = new Set<string>(["published_at"]);')
+      expect(list).to include("new Date(String(av)).getTime() - new Date(String(bv)).getTime()")
+      # numbers numerically, booleans false<true, strings via localeCompare
+      expect(list).to include("result = av - bv;")
+      expect(list).to include("result = Number(av) - Number(bv);")
+      expect(list).to include("result = String(av).localeCompare(String(bv));")
+      # null/undefined always sort LAST, before the direction flip
+      expect(list).to include("if (av == null) return 1;")
+      expect(list).to include("if (bv == null) return -1;")
+      expect(list).to include('return sort.dir === "desc" ? -result : result;')
+      # always sorts a COPY — never mutates the source/prop array
+      expect(list).to include("const sortedRows = sort ? [...rows].sort((a, b) => compareRows(a, b, sort)) : rows;")
     end
 
-    it "types each cell per attribute kind (AC1)", :aggregate_failures do
+    it "renders a `table`-primitive header/body, reading row.<attr> directly (AC1)", :aggregate_failures do
+      expect(list).to include("<Table>")
+      expect(list).to include("<TableHeader>")
+      expect(list).to include("<TableBody>")
+      expect(list).to include("{sortedRows.map((row) => (")
+      expect(list).to include("<TableRow key={row.id}>")
+      # clickable header toggles the generated sort (no column.toggleSorting)
+      expect(list).to include('onClick={() => toggleSort("views")}')
+      # numeric column headers keep the right-aligned wrapper preserved from 10.2
+      expect(list).to include('<div className="text-right">')
+      # trailing actions header is non-sortable (a plain label, no toggleSort)
+      expect(list).to include('<TableHead className="text-right">Actions</TableHead>')
+    end
+
+    it "types each cell per attribute kind, reading row.<attr> (AC1)", :aggregate_failures do
       # boolean → Badge "Yes"/"No"
-      expect(list).to include('<Badge variant={value ? "default" : "secondary"}>{value ? "Yes" : "No"}</Badge>')
-      # integer → right-aligned numeric cell
-      expect(list).to include('<div className="text-right tabular-nums">{String(row.getValue("views") ?? "")}</div>')
-      # datetime → locale-formatted cell
-      expect(list).to include("new Date(String(value)).toLocaleString()")
-      # string/text → plain text cell
-      expect(list).to include('<span>{String(row.getValue("title") ?? "")}</span>')
-    end
-
-    it "renders client-side sortable column headers (AC2)" do
-      expect(list).to include("column.toggleSorting(column.getIsSorted() === \"asc\")")
+      expect(list).to include('variant={row.published ? "default" : "secondary"}>')
+      expect(list).to include('{row.published ? "Yes" : "No"}</Badge>')
+      # integer → right-aligned numeric cell (inner div preserved from 10.2)
+      expect(list).to include('<div className="text-right tabular-nums">{String(row.views ?? "")}</div>')
+      # datetime → locale-formatted cell (inner span preserved from 10.2)
+      expect(list).to include("new Date(String(row.published_at)).toLocaleString() : \"\"}</span>")
+      # string/text → plain text cell (inner span preserved from 10.2)
+      expect(list).to include("<span>{String(row.title ?? \"\")}</span>")
     end
 
     it "has a per-row actions cell: Edit link + delete trigger, collapsing under a breakpoint (AC3)",
        :aggregate_failures do
-      expect(list).to include('id: "actions"')
-      expect(list).to include("enableSorting: false")
-      # Story 10.4 — the actions cell delegates to an in-file RowActions component.
-      expect(list).to include("cell: ({ row }) => <RowActions record={row.original} onDeleted={onDeleted} />")
+      # the actions column is a trailing, NON-sortable header/cell (no toggleSort)
+      expect(list).to include('<TableHead className="text-right">Actions</TableHead>')
+      # the actions cell delegates to an in-file RowActions component (row.<attr>, not row.original)
+      expect(list).to include("<RowActions record={row} onDeleted={onDeleted} />")
       expect(list).to include("<a href={`/posts/${record.id}/edit`}>Edit</a>")
-      # responsive overflow into a … DropdownMenu under `md` (Story 10.4 makes it
-      # controlled so the delete item can close it before opening the dialog)
+      # responsive overflow into a … DropdownMenu under `md` (controlled so the
+      # delete item can close it before opening the dialog)
       expect(list).to include("md:hidden")
       expect(list).to include("md:flex")
       expect(list).to include("<DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>")
     end
 
-    it "feeds the DataTable the server-rendered `posts` rows and keeps FR100 contract (AC4)", :aggregate_failures do
-      expect(list).to include("<DataTable columns={columns} data={rows} />")
+    it "gates the table on the server-rendered `posts` rows and keeps FR100 contract (AC4)", :aggregate_failures do
+      expect(list).to include("{sortedRows.length > 0 && (")
       expect(list).to include("export const __ruactContract = {")
       expect(list).to include('posts: "required"')
     end
@@ -264,6 +300,17 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
     it "has a documented, prop-configurable empty state (AC4)", :aggregate_failures do
       expect(list).to include('emptyLabel = "No posts yet — create one."')
       expect(list).to include("{emptyLabel}")
+    end
+
+    it "carries NO table-engine markers anywhere in the output (AC1, AC5)", :aggregate_failures do
+      expect(list).not_to include("@tanstack")
+      expect(list).not_to include("@/components/ui/data-table")
+      expect(list).not_to include("ColumnDef")
+      expect(list).not_to include("<DataTable")
+      expect(list).not_to include("row.getValue")
+      expect(list).not_to include("row.original")
+      expect(list).not_to include("toggleSorting")
+      expect(list).not_to include("getIsSorted")
     end
   end
 
@@ -384,20 +431,32 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
 
     let(:list) { read("app/javascript/components/PostList.jsx") }
 
-    it "drops ColumnDef/type/__ruactContract but keeps the DataTable + search wiring", :aggregate_failures do
-      expect(list).not_to include("ColumnDef")
+    it "drops the TS-only markers but keeps the table primitive + sort + search wiring", :aggregate_failures do
       expect(list).not_to include("type PostRow")
       expect(list).not_to include("__ruactContract")
       expect(list).to include("forfeits the FR99")
-      # Story 10.4 — columns-in-component (useMemo), no TS generic in .jsx
-      expect(list).to include("const columns = useMemo(() => {")
-      expect(list).to include('import { DataTable } from "@/components/ui/data-table"')
+      # the sort state + comparator are untyped in .jsx (no generic annotations)
+      expect(list).to include("const [sort, setSort] = useState(null);")
+      expect(list).to include("const DATE_KEYS = new Set([]);")
+      expect(list).to include("function compareRows(")
+      expect(list).not_to include(": PostRow")
+      expect(list).to include('return sort.dir === "desc" ? -result : result;')
+      # the shadcn `table` primitive, NOT the DataTable recipe
+      expect(list).to include('} from "@/components/ui/table"')
+      expect(list).to include("<Table>")
       expect(list).to include("useQuery(searchPosts, { q: q.trim() })")
+    end
+
+    it "carries NO table-engine markers in the .jsx output either (AC5)", :aggregate_failures do
+      expect(list).not_to include("@tanstack")
+      expect(list).not_to include("@/components/ui/data-table")
+      expect(list).not_to include("ColumnDef")
+      expect(list).not_to include("<DataTable")
     end
   end
 
   # AC7 — the committed type-test fixture (type-checked by the JS job's
-  # `npm run typecheck` against ambient shadcn/@tanstack stubs) MUST stay
+  # `npm run typecheck` against the ambient shadcn stubs) MUST stay
   # byte-identical to the generator's live output, or the typecheck proves
   # nothing. This canonical model exercises every column kind.
   describe "generated .tsx matches the isolated-typecheck fixture (Story 10.2 AC7)" do
@@ -718,8 +777,8 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
 
     let(:list) { read("app/javascript/components/PostList.tsx") }
 
-    it "imports the destroy accessor + useMemo alongside the search wiring", :aggregate_failures do
-      expect(list).to include('import { useMemo, useState } from "react"')
+    it "imports the destroy accessor alongside the search wiring", :aggregate_failures do
+      expect(list).to include('import { useState } from "react"')
       expect(list).to include("destroyPost")
     end
 

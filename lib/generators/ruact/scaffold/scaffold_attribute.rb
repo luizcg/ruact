@@ -34,6 +34,11 @@ module Ruact
           type == "boolean"
         end
 
+        # date/datetime — the List sorts these columns by epoch time (Story 10.2b).
+        def date?
+          column_kind == :date
+        end
+
         # The DataTable cell renderer kind (Story 10.2 AC1):
         #   :badge   → boolean                          → Badge "Yes"/"No"
         #   :numeric → integer/float/decimal/references → right-aligned numeric

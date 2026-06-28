@@ -1,13 +1,15 @@
 // Story 10.2 (AC7 / Task 5) — AMBIENT stubs so the GENERATED `<Model>List.tsx`
-// type-checks in ISOLATION, without a real shadcn install or `@tanstack/react-table`
-// dependency. The fixture `PostList.tsx` in this directory is byte-identical to
-// the generator's live output (a gem rspec example asserts that equality), so
-// type-checking it under `tsconfig.scaffold.json` proves the emitted typed List
-// holds the FR99 server boundary + the `ColumnDef`/shadcn import contract.
+// type-checks in ISOLATION, without a real shadcn install. The fixture
+// `PostList.tsx` in this directory is byte-identical to the generator's live
+// output (a gem rspec example asserts that equality), so type-checking it under
+// `tsconfig.scaffold.json` proves the emitted typed List holds the FR99 server
+// boundary + the shadcn `table`-primitive import contract. There is NO
+// table-engine dependency — Story 10.2b moved the List off the react-table-based
+// `DataTable` recipe onto the dep-free shadcn `table` primitive + a generated sort.
 //
-// These are deliberately MINIMAL structural shims — NOT the real shadcn / react /
-// react-table types. Story 10.5 installs the real `@/components/ui/*` modules + the
-// `data-table` recipe; 10.7 wires the live end-to-end demo. The point here is the
+// These are deliberately MINIMAL structural shims — NOT the real shadcn / react
+// types. Story 10.5 installs the real `@/components/ui/*` modules (incl. the
+// `table` primitive); 10.7 wires the live end-to-end demo. The point here is the
 // generated module's OWN type-safety (typed rows, sortable headers, the search
 // accessor), not re-testing upstream libraries.
 
@@ -25,9 +27,6 @@ declare namespace JSX {
 
 declare module "react" {
   export function useState<S>(initial: S | (() => S)): [S, (next: S | ((prev: S) => S)) => void];
-  // Story 10.4 — the generated List builds its `columns` inside the component
-  // (design B) via `useMemo` so the actions cell closes over `onDeleted`.
-  export function useMemo<T>(factory: () => T, deps: readonly unknown[]): T;
   // The generated Form's `handleSubmit(event: FormEvent)` only calls
   // `event.preventDefault()`; a minimal shim keeps the type load-bearing without
   // pulling in `@types/react`.
@@ -64,37 +63,19 @@ declare module "@/.ruact/server-functions" {
   ): { data: T | undefined; loading: boolean; error: unknown };
 }
 
-declare module "@tanstack/react-table" {
-  export interface Column<TData, TValue = unknown> {
-    toggleSorting(desc?: boolean): void;
-    getIsSorted(): false | "asc" | "desc";
-  }
-  export interface Row<TData> {
-    original: TData;
-    getValue<T = unknown>(columnId: string): T;
-  }
-  export interface HeaderContext<TData, TValue> {
-    column: Column<TData, TValue>;
-  }
-  export interface CellContext<TData, TValue> {
-    row: Row<TData>;
-    column: Column<TData, TValue>;
-  }
-  export interface ColumnDef<TData, TValue = unknown> {
-    accessorKey?: string;
-    id?: string;
-    enableSorting?: boolean;
-    header?: string | ((ctx: HeaderContext<TData, TValue>) => unknown);
-    cell?: (ctx: CellContext<TData, TValue>) => unknown;
-  }
-}
-
-declare module "@/components/ui/data-table" {
-  import type { ColumnDef } from "@tanstack/react-table";
-  export function DataTable<TData, TValue>(props: {
-    columns: ColumnDef<TData, TValue>[];
-    data: TData[];
-  }): any;
+// Story 10.2b — the shadcn `table` primitive (a styled HTML table; no engine).
+// Permissive structural shims (like Button/Badge/DropdownMenu below): the
+// generated List reads `row.<attr>` directly and drives its own `useState` sort,
+// so there is nothing engine-typed left to check here. Story 10.5 installs the
+// real module (`npx shadcn add table`).
+declare module "@/components/ui/table" {
+  type Props = { children?: any; [key: string]: any };
+  export function Table(props: Props): any;
+  export function TableHeader(props: Props): any;
+  export function TableBody(props: Props): any;
+  export function TableRow(props: Props): any;
+  export function TableHead(props: Props): any;
+  export function TableCell(props: Props): any;
 }
 
 declare module "@/components/ui/badge" {
