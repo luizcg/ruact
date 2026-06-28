@@ -79,20 +79,22 @@ module Ruact
 
         # Detection (memoized — the FS does not change during a run):
         #   :complete = components.json present AND every required ui/<name>.tsx present
-        #   :missing  = no components.json AND no components/ui/ dir
-        #   :partial  = otherwise (configured but some required primitive absent)
+        #   :missing  = no components.json (shadcn is not initialized) → guide to
+        #               `init` + the full `add`. A `components.json` is the
+        #               authoritative "shadcn is set up" marker; without it the
+        #               setup is incomplete even if a `components/ui/` dir exists
+        #               (so we never emit a bare/empty `add` for a config-less app).
+        #   :partial  = components.json present but some required primitive absent
+        #               → targeted `add` of exactly the missing pieces.
         def shadcn_setup_state
           @shadcn_setup_state ||= compute_shadcn_setup_state
         end
 
         def compute_shadcn_setup_state
-          config_present = shadcn_config_path.exist?
-          ui_present = shadcn_ui_dir.directory?
+          return :missing unless shadcn_config_path.exist?
+          return :complete if missing_shadcn_components.empty?
 
-          return :missing unless config_present || ui_present
-          return :partial unless config_present && missing_shadcn_components.empty?
-
-          :complete
+          :partial
         end
 
         def skip_shadcn_check?
@@ -111,6 +113,16 @@ module Ruact
         # The single copy-pasteable `add` line for the given component list.
         def shadcn_add_command(components)
           "npx shadcn@latest add #{components.join(' ')}"
+        end
+
+        # AC3 — the `add` command for the in-file banner. Uses the detectably
+        # missing primitives, falling back to the full required list when none is
+        # missing (e.g. the `ui/*` files exist but `components.json` is absent →
+        # state `:missing`) so the banner NEVER prints a bare `npx shadcn add`.
+        def shadcn_banner_add_command
+          components = missing_shadcn_components
+          components = required_shadcn_components if components.empty?
+          shadcn_add_command(components)
         end
 
         # AC2 — missing setup: the full `init` + single `add <full list>` sequence
@@ -206,9 +218,10 @@ module Ruact
           say_status "warning",
                      "shadcn v#{major} is not regression-tested with this ruact " \
                      "(tested majors: #{compatible.join(', ')}); the generated code may import " \
-                     "from outdated @/components/ui/* paths. Align shadcn to a tested major, or set " \
-                     "Ruact.config.shadcn_compatible_versions to include #{major} once verified. " \
-                     "See #{SHADCN_DOCS_POINTER}", :yellow
+                     "from outdated @/components/ui/* paths. Align shadcn to a tested major, or add " \
+                     "#{major} via Ruact.configure { |c| c.shadcn_compatible_versions = " \
+                     "#{(compatible + [major]).sort.inspect} } in config/initializers/ruact.rb once " \
+                     "verified. See #{SHADCN_DOCS_POINTER}", :yellow
         end
       end
     end

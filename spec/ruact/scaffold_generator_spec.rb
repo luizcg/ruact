@@ -1136,6 +1136,23 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
         # the route line is never injected either
         expect(read("config/routes.rb")).not_to include("resources :posts")
       end
+
+      it "treats a present ui/ dir WITHOUT components.json as missing — init + FULL add, never a bare add",
+         :aggregate_failures do
+        # Regression (Codex R1): a config-less app with ui/* files present must
+        # route to the init+full-add guidance, not a `:partial` with an empty add.
+        write_ui_components(full_required)
+        gen = build(default_args)
+        silently do
+          expect { gen.check_shadcn_setup }.to raise_error(Thor::Error) do |error|
+            expect(error.message).to include("npx shadcn@latest init")
+            expect(error.message)
+              .to include("npx shadcn@latest add button input textarea switch label badge " \
+                          "table alert-dialog dropdown-menu")
+            expect(error.message).not_to match(/add\s*$/) # no bare/empty `add` line
+          end
+        end
+      end
     end
 
     describe "partial setup → list exactly the missing + targeted add, abort (AC4)" do
@@ -1187,6 +1204,16 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
         run_full_scaffold(default_args, skip_shadcn_check: true)
         expect(read("app/javascript/components/PostList.tsx")).not_to include("--skip-shadcn-check")
       end
+
+      it "the banner never prints a bare add when ui/ files exist but components.json is absent" do
+        # Regression (Codex R1): state is :missing (no config) → missing list is
+        # empty → the banner falls back to the FULL required add-list.
+        write_ui_components(full_required)
+        run_full_scaffold(default_args, skip_shadcn_check: true)
+        expect(read("app/javascript/components/PostList.tsx"))
+          .to include("npx shadcn@latest add button input textarea switch label badge " \
+                      "table alert-dialog dropdown-menu")
+      end
     end
 
     describe "version-compat validation against shadcn_compatible_versions (AC6, AC8)" do
@@ -1213,6 +1240,10 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
         expect(output).to include("shadcn v3 is not regression-tested")
         expect(output).to include("tested majors: 1, 2")
         expect(output).to include("scaffold.md#shadcnui-setup")
+        # the override points to the Ruact.configure block, NOT the freeze-blocked
+        # direct mutation of Ruact.config (Codex R1)
+        expect(output).to include("Ruact.configure { |c| c.shadcn_compatible_versions")
+        expect(output).not_to include("set Ruact.config.shadcn_compatible_versions")
         # a warning, never a hard stop — the scaffold still writes
         expect { run_full_scaffold }.not_to raise_error
         expect(File).to exist(File.join(app_root, "app/controllers/posts_controller.rb"))
