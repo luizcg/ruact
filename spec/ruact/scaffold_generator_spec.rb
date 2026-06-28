@@ -407,6 +407,219 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # Story 10.3 — shadcn Form with controls mapped by attribute type.
+  # ---------------------------------------------------------------------------
+
+  describe "Form maps each attribute type to its shadcn control (Story 10.3 AC1, AC2)" do
+    before do
+      run_scaffold(%w[Post title:string body:text published:boolean views:integer
+                      published_on:date published_at:datetime author:references])
+    end
+
+    let(:form) { read("app/javascript/components/PostForm.tsx") }
+
+    it "imports the shadcn primitives the controls use", :aggregate_failures do
+      expect(form).to include('import { Button } from "@/components/ui/button"')
+      expect(form).to include('import { Label } from "@/components/ui/label"')
+      expect(form).to include('import { Input } from "@/components/ui/input"')
+      expect(form).to include('import { Textarea } from "@/components/ui/textarea"')
+      expect(form).to include('import { Switch } from "@/components/ui/switch"')
+      expect(form).to include('from "@/components/ui/select"')
+    end
+
+    it "renders string → <Input type=\"text\">", :aggregate_failures do
+      expect(form).to include('<Label htmlFor="title">Title</Label>')
+      expect(form).to match(/<Input\s+id="title"\s+type="text"/m)
+    end
+
+    it "renders text → <Textarea>", :aggregate_failures do
+      expect(form).to include('<Label htmlFor="body">Body</Label>')
+      expect(form).to match(/<Textarea\s+id="body"/m)
+    end
+
+    it "renders boolean → <Switch> with onCheckedChange", :aggregate_failures do
+      expect(form).to match(/<Switch\s+id="published"/m)
+      expect(form).to include("onCheckedChange={setPublished}")
+    end
+
+    it "renders integer/float/decimal → <Input type=\"number\">" do
+      expect(form).to match(/<Input\s+id="views"\s+type="number"/m)
+    end
+
+    it "renders date → <Input type=\"date\"> (AC2 — native, wire format YYYY-MM-DD)" do
+      expect(form).to match(/<Input\s+id="published_on"\s+type="date"/m)
+    end
+
+    it "renders datetime → <Input type=\"datetime-local\"> (AC2 — native, wire format YYYY-MM-DDTHH:MM)" do
+      expect(form).to match(/<Input\s+id="published_at"\s+type="datetime-local"/m)
+    end
+
+    it "renders references → <Select> over the controller-provided options prop (AC6)", :aggregate_failures do
+      expect(form).to include('<Label htmlFor="author_id">Author</Label>')
+      expect(form).to include("onValueChange={setAuthorId}")
+      expect(form).to include("{authorOptions.map((option) => (")
+      expect(form).to include("<SelectItem key={option.id} value={String(option.id)}>")
+    end
+
+    it "wraps every field with a label + inline FR98 error from errorsFor(attr)", :aggregate_failures do
+      %w[title body published views published_on published_at author_id].each do |col|
+        expect(form).to include(%(errorsFor("#{col}")))
+      end
+      expect(form).to include('<p key={i} className="text-sm text-destructive">{message}</p>')
+    end
+  end
+
+  describe "Form preserves the v2 server-driven contract (Story 10.3 AC3, AC4, AC5)" do
+    before { run_scaffold(%w[Post title:string published:boolean author:references]) }
+
+    let(:form) { read("app/javascript/components/PostForm.tsx") }
+
+    it "imports ONLY the action accessors (no useQuery in the Form)", :aggregate_failures do
+      expect(form).to include('import { createPost, updatePost } from "@/.ruact/server-functions"')
+      expect(form).not_to include("useQuery")
+    end
+
+    it "keeps the controlled useState per attribute (string-valued, boolean via Boolean)", :aggregate_failures do
+      expect(form).to include("const [title, setTitle] = useState(String(initial?.title ?? \"\"));")
+      expect(form).to include("const [published, setPublished] = useState(Boolean(initial?.published ?? false));")
+    end
+
+    it "drives navigation SERVER-SIDE — no client URL building (AC5)", :aggregate_failures do
+      # the redirect is followed by the accessor; the component never assigns a URL
+      expect(form).not_to include("window.location.assign")
+      expect(form).not_to include("window.location")
+      expect(form).to include("? await updatePost({ id: initial.id, ...payload })")
+      expect(form).to include(": await createPost(payload))")
+    end
+
+    it "surfaces FR98 keyed errors inline + a top-level base block (AC3)", :aggregate_failures do
+      expect(form).to include("const [errors, setErrors] = useState<Record<string, string[]>>({});")
+      expect(form).to include("if (result && result.errors) {")
+      expect(form).to include('errorsFor("base").length > 0')
+    end
+
+    it "is typed (FR99 row) and carries the FR100 contract (initial optional) (AC4)", :aggregate_failures do
+      expect(form).to include("type PostRow = {")
+      expect(form).to include("export const __ruactContract")
+      expect(form).to include('initial: "optional"')
+      expect(form).to include("initial?: PostRow | null")
+    end
+
+    it "declares every references options prop in the FR100 contract (else 13.5 rejects the call site)" do
+      # the new/edit views pass `authorOptions`; an undeclared prop fails preprocess
+      expect(form).to include('authorOptions: "optional"')
+    end
+
+    it "submits through a shadcn <Button type=\"submit\"> and a <Button> Cancel link", :aggregate_failures do
+      expect(form).to include('<Button type="submit" disabled={saving}>')
+      expect(form).to include('<Button variant="outline" asChild>')
+    end
+  end
+
+  describe "Form imports only the primitives the model's controls need (Story 10.3)" do
+    it "a string-only model imports Input but not Textarea/Switch/Select", :aggregate_failures do
+      run_scaffold(%w[Tag name:string])
+      form = read("app/javascript/components/TagForm.tsx")
+      expect(form).to include('import { Input } from "@/components/ui/input"')
+      expect(form).not_to include("@/components/ui/textarea")
+      expect(form).not_to include("@/components/ui/switch")
+      expect(form).not_to include("@/components/ui/select")
+    end
+
+    it "a reference-free model takes only the `initial` prop (no options prop)", :aggregate_failures do
+      run_scaffold(%w[Tag name:string])
+      form = read("app/javascript/components/TagForm.tsx")
+      expect(form).to include("export function TagForm({ initial = null }")
+      expect(form).to include('props: { initial: "optional" }')
+      expect(form).not_to include("Options = []")
+      expect(form).not_to include('Options: "optional"')
+      expect(form).not_to include("Options?:")
+    end
+  end
+
+  describe "references options sourcing — controller ivar → view prop (Story 10.3 AC6)" do
+    before { run_scaffold(%w[Post title:string author:references category:references]) }
+
+    it "loads a capped, labelled options ivar in new AND edit", :aggregate_failures do
+      controller = read("app/controllers/posts_controller.rb")
+      expect(controller).to include("@author_options = Author.limit(101).map")
+      expect(controller).to include("@category_options = Category.limit(101).map")
+      expect(controller).to include(%(record.try(:name) || record.try(:title) || record.to_s))
+      # both new and edit set the ivar
+      expect(controller.scan("@author_options = Author.limit(101)").size).to eq(2)
+    end
+
+    it "renders syntactically valid Ruby" do
+      controller = read("app/controllers/posts_controller.rb")
+      expect { RubyVM::InstructionSequence.compile(controller) }.not_to raise_error
+    end
+
+    it "passes the options ivar as a camelCase prop from new + edit views", :aggregate_failures do
+      new_view = read("app/views/posts/new.html.erb")
+      edit_view = read("app/views/posts/edit.html.erb")
+      expect(new_view).to include("<PostForm authorOptions={author_options} categoryOptions={category_options} />")
+      expect(edit_view).to include("authorOptions={author_options}")
+      expect(edit_view).to include("categoryOptions={category_options}")
+    end
+
+    it "types the options prop on the Form signature (FR99)", :aggregate_failures do
+      form = read("app/javascript/components/PostForm.tsx")
+      expect(form).to include("authorOptions = []")
+      expect(form).to include("authorOptions?: { id: number; label: string }[]")
+    end
+
+    it "documents the >threshold server-search combobox opt-in trail" do
+      form = read("app/javascript/components/PostForm.tsx")
+      expect(form).to include("server-search combobox")
+    end
+  end
+
+  describe "--javascript Form forfeits TS markers but keeps the shadcn controls (Story 10.3 AC7)" do
+    before { run_scaffold(%w[Post title:string body:text published:boolean author:references], javascript: true) }
+
+    let(:form) { read("app/javascript/components/PostForm.jsx") }
+
+    it "drops type/__ruactContract but keeps the shadcn controls + behaviour", :aggregate_failures do
+      expect(form).not_to include("__ruactContract")
+      expect(form).not_to include("type PostRow")
+      expect(form).not_to include(": FormEvent")
+      expect(form).to include("forfeits")
+      expect(form).to include('import { Input } from "@/components/ui/input"')
+      expect(form).to include('import { Textarea } from "@/components/ui/textarea"')
+      expect(form).to include('import { Switch } from "@/components/ui/switch"')
+      expect(form).to include('from "@/components/ui/select"')
+      expect(form).to include("onCheckedChange={setPublished}")
+      expect(form).not_to include("window.location.assign")
+    end
+
+    it "still takes the options prop (untyped) for references", :aggregate_failures do
+      expect(form).to include("authorOptions = []")
+      expect(form).not_to include("{ id: number; label: string }[]")
+    end
+  end
+
+  # AC8 — the committed Form fixture (type-checked by `npm run typecheck` against
+  # the ambient shadcn stubs) MUST stay byte-identical to the generator's live
+  # output. This canonical model exercises every shadcn control kind.
+  describe "generated Form .tsx matches the isolated-typecheck fixture (Story 10.3 AC8)" do
+    let(:fixture_path) { "vendor/javascript/vite-plugin-ruact/type-tests/scaffold/PostForm.tsx" }
+
+    it "PostForm.tsx render stays byte-identical to the committed type-test fixture" do
+      run_scaffold(%w[Post title:string body:text published:boolean views:integer
+                      published_on:date published_at:datetime author:references])
+      generated = read("app/javascript/components/PostForm.tsx")
+      fixture = File.read(File.expand_path("../../#{fixture_path}", __dir__))
+
+      expect(generated).to eq(fixture),
+                           "Generated PostForm.tsx drifted from the type-test fixture. " \
+                           "Regenerate it: rails g ruact:scaffold Post title:string body:text " \
+                           "published:boolean views:integer published_on:date published_at:datetime " \
+                           "author:references → copy app/javascript/components/PostForm.tsx over " \
+                           "#{fixture_path}, then re-run `npm run typecheck`."
+    end
+  end
+
   describe "unknown attribute type fails clearly before writing (AC4)" do
     # Enforced at construction (parse_attributes!) so it fires BEFORE Rails'
     # GeneratedAttribute — whose own unknown-type error neither lists ruact's

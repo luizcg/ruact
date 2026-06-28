@@ -38,10 +38,18 @@ class <%= controller_class_name %>Controller < ApplicationController
   end
 
   def new
+<% reference_attributes.each do |ref| -%>
+    # Story 10.3 (AC6) — parent options for the <%= ref.name %> <Select> (ivar → prop,
+    # capped at <%= reference_options_limit %>+1). Labels: name → title → to_s.
+    @<%= ref.options_ivar %> = <%= reference_options_expr(ref) %>
+<% end -%>
   end
 
   def edit
     @<%= singular_name %> = <%= class_name %>.find(params[:id])
+<% reference_attributes.each do |ref| -%>
+    @<%= ref.options_ivar %> = <%= reference_options_expr(ref) %>
+<% end -%>
   end
 
   # --- Writes (v2 actions → Bucket 2 JSON / $redirect) ---------------------

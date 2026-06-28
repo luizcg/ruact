@@ -5,6 +5,7 @@ require "rails/generators"
 require "rails/generators/named_base"
 require "ruact"
 require_relative "scaffold_attribute"
+require_relative "scaffold_form_helpers"
 
 module Ruact
   module Generators
@@ -42,6 +43,11 @@ module Ruact
 
       desc "Generates a complete CRUD skeleton (controller, route, ERB views, React components) on the v2 contract"
 
+      # Story 10.3 — the shadcn Form view-model helpers (import predicates, prop
+      # signature, `references` options). Module-housed so they don't register as
+      # Thor commands and to keep this class within its length budget.
+      include FormHelpers
+
       # Supported attribute types → their TS wire type (FR99 wire-union grain:
       # string | number | boolean | null) + the plain form control kind. The rich
       # shadcn control mapping lands in 10.2/10.3; this stays minimal.
@@ -62,6 +68,15 @@ module Ruact
       # Column types the `search` query's case-insensitive LIKE scope spans —
       # matching numeric/date/boolean columns by substring is meaningless.
       SEARCHABLE_COLUMN_TYPES = %w[string text].freeze
+
+      # Story 10.3 (AC6) — parent-set size at/under which a `references` field
+      # renders an eager shadcn `<Select>` of controller-provided options. Above
+      # it, a server-search combobox is the right control; the generated Form
+      # leaves a documented opt-in trail (the parent-options query it would query
+      # is out of this scaffold's scope — the parent model isn't scaffolded here).
+      # Adjustable: re-run with a different value and re-generate, or edit the
+      # emitted controller's `.limit(...)`.
+      REFERENCE_OPTIONS_LIMIT = 100
 
       # Documentation anchor referenced by the unknown-type error message (AC4).
       DOCS_POINTER = "https://github.com/luizcg/ruact/blob/main/website/docs/api/scaffold.md#attribute-types"
@@ -271,16 +286,6 @@ module Ruact
           when :date then "#{base}&.iso8601"
           when :datetime then %(#{base}&.strftime("%Y-%m-%dT%H:%M"))
           else attr.type == "decimal" ? "#{base}&.to_f" : base
-          end
-        end
-
-        # The plain HTML `<input type>` for a non-checkbox/textarea control.
-        def html_input_type(attr)
-          case attr.control
-          when :number then "number"
-          when :date then "date"
-          when :datetime then "datetime-local"
-          else "text"
           end
         end
 
