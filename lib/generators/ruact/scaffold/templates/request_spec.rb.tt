@@ -2,18 +2,15 @@
 
 # Smoke spec for the generated <%= class_name %>Controller (Story 10.1 skeleton).
 #
-# PREREQUISITES (ruact:scaffold generates the controller/route/views/components,
-# NOT the model — keeping it orthogonal to your schema, exactly like the React
-# layer is orthogonal to Rails):
-#   1. a `<%= class_name %>` model with the scaffolded columns + a migrated table:
-#        rails generate model <%= class_name %> <%= scaffold_attributes.map { |a| "#{a.name}:#{a.type}" }.join(' ') %>
-#        rails db:migrate
-#   2. rspec-rails (`rails_helper`).
-#   3. a built client manifest (`react-client-manifest.json`) so the RSC GET
+# PREREQUISITES (the model + migration are now generated for you — ruact:scaffold
+# delegates them to Rails' own `resource` generator (FR102), so after
+# `rails db:migrate` this resource is ready, with no manual model step):
+#   1. rspec-rails (`rails_helper`).
+#   2. a built client manifest (`react-client-manifest.json`) so the RSC GET
 #      index can resolve `<<%= class_name %>List />` — run the Vite build / dev
 #      server (or your test bootstrap) before the suite.
 <% if scaffold_attributes.any?(&:reference?) -%>
-#   4. this scaffold has a `references` column — adjust `valid_attributes` below
+#   3. this scaffold has a `references` column — adjust `valid_attributes` below
 #      to a REAL associated record id (the placeholder `1` assumes one exists;
 #      a required `belongs_to` will reject a dangling id).
 <% end -%>

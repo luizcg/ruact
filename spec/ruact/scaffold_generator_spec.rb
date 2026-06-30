@@ -969,25 +969,29 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(read("config/routes.rb").scan("resources :posts").size).to eq(1)
     end
 
-    it "does NOT silently overwrite an existing file when skipped" do
+    # The overlay TEMPLATE files that are not force-pinned (views/components/the
+    # query) still honor Thor's --skip/--force on re-run. (The controller and the
+    # RSpec smoke spec force-overwrite by design — Story 14.3 D2/D4 — covered in
+    # the :story_14_3 block below.) Exercised here on the index view.
+    it "does NOT silently overwrite an existing overlay-template file when skipped" do
       run_scaffold
-      sentinel = "# HAND EDITED — do not clobber\n"
-      File.write(File.join(app_root, "app/controllers/posts_controller.rb"), sentinel)
+      sentinel = "<%# HAND EDITED — do not clobber %>\n"
+      File.write(File.join(app_root, "app/views/posts/index.html.erb"), sentinel)
 
       gen = build(%w[Post title:string body:text published:boolean], skip: true)
-      silently { gen.create_controller }
+      silently { gen.create_views }
 
-      expect(read("app/controllers/posts_controller.rb")).to eq(sentinel)
+      expect(read("app/views/posts/index.html.erb")).to eq(sentinel)
     end
 
-    it "overwrites only when --force is given" do
+    it "overwrites an overlay-template file only when --force is given" do
       run_scaffold
-      File.write(File.join(app_root, "app/controllers/posts_controller.rb"), "# stale\n")
+      File.write(File.join(app_root, "app/views/posts/index.html.erb"), "<%# stale %>\n")
 
       gen = build(%w[Post title:string body:text published:boolean], force: true)
-      silently { gen.create_controller }
+      silently { gen.create_views }
 
-      expect(read("app/controllers/posts_controller.rb")).to include("class PostsController < ApplicationController")
+      expect(read("app/views/posts/index.html.erb")).to include("<PostList posts={rows} />")
     end
   end
 
@@ -1293,6 +1297,168 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
         gen = build(%w[Post title:string body:text published:boolean author:references])
         expect(gen.partial_shadcn_message).not_to include("@tanstack")
         expect(gen.partial_shadcn_message).not_to include("data-table")
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Story 14.3 (FR102) — the scaffold delegates model + migration + the
+  # `resources` route + host-framework test stubs to Rails' own public
+  # `resource` generator, THEN overlays the ruact layer. These specs STUB the
+  # `invoke_rails_resource` seam: a bare `Dir.mktmpdir` is not a booted Rails
+  # app (no `config.generators` hooks, no ActiveRecord migration machinery), so
+  # a real `invoke "resource"` cannot run here — exactly as Story 14.1 stubs
+  # `run_npm_install`. The REAL end-to-end delegation (real model/migration/test
+  # files on disk, then `rails db:migrate`, then a live CRUD round-trip) is
+  # proven by Story 14.6's clean-room Docker E2E, not by these unit specs.
+  # ---------------------------------------------------------------------------
+  describe "delegates to Rails `resource`, then overlays (Story 14.3 — FR102)", :story_14_3 do
+    describe "the delegation seam (AC1, AC5)" do
+      it "invokes invoke_rails_resource exactly once with the resource name + raw field:type args" do
+        gen = build(%w[Post title:string body:text published:boolean])
+        allow(gen).to receive(:invoke_rails_resource)
+
+        silently { gen.generate_rails_resource }
+
+        expect(gen).to have_received(:invoke_rails_resource)
+          .with("Post", "title:string", "body:text", "published:boolean").once
+      end
+
+      it "passes the RAW field:type strings through, not reconstructed view-models (modifiers survive)" do
+        # `title:string{80}` / `author:references{polymorphic}` carry modifiers
+        # ruact's ScaffoldAttribute view-models drop — the raw args must reach
+        # `resource` verbatim so Rails parses the correct migration columns.
+        gen = build(%w[Post title:string author:references])
+        allow(gen).to receive(:invoke_rails_resource)
+
+        silently { gen.generate_rails_resource }
+
+        expect(gen).to have_received(:invoke_rails_resource).with("Post", "title:string", "author:references")
+      end
+
+      it "delegates through the PUBLIC resource generator surface (Thor invoke), no private API", :aggregate_failures do
+        gen = build(%w[Post title:string])
+        allow(gen).to receive(:invoke)
+
+        gen.send(:invoke_rails_resource, "Post", "title:string")
+
+        expect(gen).to have_received(:invoke).with("resource", %w[Post title:string])
+      end
+    end
+
+    describe "ordering — delegation runs BEFORE the overlay (AC1, AC5)" do
+      # Thor runs public command methods in SOURCE definition order, so the
+      # delegation winning-by-precedence reduces to a source-line assertion
+      # (mirrors install_generator_spec's npm-step ordering check).
+      it "defines generate_rails_resource before every overlay task", :aggregate_failures do
+        line = ->(name) { described_class.instance_method(name).source_location.last }
+        %i[create_controller add_resource_route create_queries create_views
+           create_components create_smoke_spec].each do |overlay|
+          expect(line.call(:generate_rails_resource)).to be < line.call(overlay),
+                                                         "expected generate_rails_resource before #{overlay}"
+        end
+      end
+
+      it "runs the delegation before the overlay controller write at call time" do
+        gen = build(%w[Post title:string body:text published:boolean])
+        order = []
+        allow(gen).to receive(:invoke_rails_resource) { order << :resource }
+        allow(gen).to receive(:template) { order << :controller }
+
+        silently do
+          gen.generate_rails_resource
+          gen.create_controller
+        end
+
+        expect(order).to eq(%i[resource controller])
+      end
+
+      it "is declared after check_shadcn_setup so a missing-shadcn abort prevents delegation (zero partial)" do
+        line = ->(name) { described_class.instance_method(name).source_location.last }
+        expect(line.call(:check_shadcn_setup)).to be < line.call(:generate_rails_resource)
+      end
+    end
+
+    describe "controller overlay force-overwrites resource's bare controller (AC4, D2)" do
+      it "writes the v2 controller with force, beating an existing bare controller — no prompt", :aggregate_failures do
+        run_scaffold # seeds an existing controller on disk
+        File.write(File.join(app_root, "app/controllers/posts_controller.rb"),
+                   "class PostsController < ApplicationController\nend\n") # resource's bare shape
+
+        gen = build(%w[Post title:string body:text published:boolean]) # no --force flag
+        silently { gen.create_controller }
+
+        controller = read("app/controllers/posts_controller.rb")
+        expect(controller).to include("include Ruact::Server")
+        expect(controller).to include("def post_params")
+      end
+    end
+
+    describe "route + query mount reconciliation (AC4, D3)" do
+      it "keeps exactly one resources :posts line (guard no-ops on the drawn line)" do
+        # Simulate resource having already drawn the route, then run the overlay.
+        File.write(File.join(app_root, "config/routes.rb"),
+                   "Rails.application.routes.draw do\n  resources :posts\nend\n")
+        gen = build(%w[Post title:string body:text published:boolean])
+        silently do
+          gen.add_resource_route
+          gen.add_query_route
+        end
+        routes = read("config/routes.rb")
+        expect(routes.scan("resources :posts").size).to eq(1)
+        expect(routes).to include("ruact_queries PostsQuery")
+      end
+    end
+
+    describe "request-spec template drops the manual `rails g model` prerequisite (AC3)" do
+      before { run_scaffold }
+
+      let(:spec_file) { read("spec/requests/posts_spec.rb") }
+
+      it "no longer instructs the developer to rails generate model / db:migrate by hand", :aggregate_failures do
+        expect(spec_file).not_to include("rails generate model")
+        expect(spec_file).not_to include("rails g model")
+        expect(spec_file).not_to match(/^\s*#\s*rails db:migrate/)
+      end
+
+      it "states the model + migration are generated by delegation to resource (FR102)" do
+        expect(spec_file).to include("delegates them to Rails' own `resource` generator")
+      end
+    end
+
+    describe "smoke spec is framework-gated (AC2, D4)" do
+      it "emits ruact's RSpec smoke spec when the host framework is RSpec" do
+        gen = build(%w[Post title:string body:text published:boolean])
+        allow(gen).to receive(:host_test_framework).and_return(:rspec)
+        silently { gen.create_smoke_spec }
+        expect(File).to exist(File.join(app_root, "spec/requests/posts_spec.rb"))
+      end
+
+      it "does NOT write the RSpec smoke spec under a Minitest host (no broken rails_helper file)",
+         :aggregate_failures do
+        gen = build(%w[Post title:string body:text published:boolean])
+        allow(gen).to receive(:host_test_framework).and_return(:test_unit)
+        silently { gen.create_smoke_spec }
+        expect(File).not_to exist(File.join(app_root, "spec/requests/posts_spec.rb"))
+      end
+
+      it "defaults to emitting when the framework is undeterminable (no booted app — the unit harness)" do
+        gen = build(%w[Post title:string body:text published:boolean])
+        allow(gen).to receive(:host_test_framework).and_return(nil)
+        silently { gen.create_smoke_spec }
+        expect(File).to exist(File.join(app_root, "spec/requests/posts_spec.rb"))
+      end
+
+      it "force-overwrites a same-path RSpec request stub (single request spec — AC4)" do
+        # Simulate resource's RSpec request stub already at ruact's path.
+        FileUtils.mkdir_p(File.join(app_root, "spec/requests"))
+        File.write(File.join(app_root, "spec/requests/posts_spec.rb"),
+                   "# resource's empty stub\nRSpec.describe \"Posts\", type: :request do\nend\n")
+        gen = build(%w[Post title:string body:text published:boolean]) # no --force flag
+        silently { gen.create_smoke_spec }
+        spec_file = read("spec/requests/posts_spec.rb")
+        expect(spec_file).to include(%("Accept" => "application/json"))
+        expect(spec_file).not_to include("resource's empty stub")
       end
     end
   end
