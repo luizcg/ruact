@@ -15,12 +15,23 @@ module Ruact
     # 4. Creates app/javascript/components/.keep
     # 5. Creates vite.config.js (or shows manual instructions if one exists)
     # 6. Creates app/javascript/application.jsx (or skips if one exists)
+    # 7. Runs `npm install` so JavaScript dependencies are ready (FR101);
+    #    skippable via --skip-npm.
     #
     # Run: rails generate ruact:install
     class InstallGenerator < Rails::Generators::Base
       source_root File.expand_path("templates", __dir__)
 
       desc "Installs ruact into the current Rails application"
+
+      # Story 14.1 (FR101) — one-command install. By default the generator
+      # runs `npm install` after writing every file so a fresh app is runnable
+      # straight away. `--skip-npm` opts out (CI, or a non-npm package manager —
+      # run the manager's install manually, then `bin/dev`).
+      class_option :skip_npm,
+                   type: :boolean,
+                   default: false,
+                   desc: "Skip running npm install (for CI or non-npm package managers)"
 
       def create_initializer
         template "initializer.rb.tt", "config/initializers/ruact.rb"
@@ -121,19 +132,116 @@ module Ruact
         template "application.jsx.tt", "app/javascript/application.jsx"
       end
 
+      # Story 14.1 (FR101) — install JavaScript dependencies so a fresh app is
+      # runnable in one command. Runs LAST among the file-producing actions
+      # (after every file is written) so a failure here leaves the generated
+      # files in place and reported. Records the outcome in @npm_outcome so
+      # show_post_install_message can tell the truth about what happened.
+      def install_javascript_dependencies
+        if options[:skip_npm]
+          @npm_outcome = :skipped
+          say_status "skip", "npm install (--skip-npm) — install JS deps manually before bin/dev", :yellow
+          return
+        end
+
+        unless npm_on_path?
+          @npm_outcome = :unavailable
+          warn_npm_unavailable
+          return
+        end
+
+        # Thor's `run` returns false on a non-zero exit (Rails generators set
+        # exit_on_failure? = false, so a failed `npm install` does NOT raise),
+        # and nil under `--pretend` (the command is previewed, not executed).
+        # Branch so the post-install message never claims deps are installed
+        # when npm failed (AC#3) — and a `--pretend` dry run is NOT misreported
+        # as a failure (run_npm_install still prints the previewed command).
+        if run_npm_install || options[:pretend]
+          @npm_outcome = options[:pretend] ? :pretend : :installed
+        else
+          @npm_outcome = :failed
+          warn_npm_install_failed
+        end
+      end
+
       def show_post_install_message
+        say "\n#{'=' * 60}\n  ruact installed successfully!\n#{'=' * 60}\n"
+
+        if @npm_outcome == :installed
+          say "JavaScript dependencies are installed."
+          say ""
+          say "Next step:"
+          say "  Start your app:  bin/dev"
+        else
+          say "JavaScript dependencies are not yet installed."
+          say ""
+          say "Next steps:"
+          say "  1. Install JS dependencies:  npm install"
+          say "  2. Start your app:           bin/dev"
+        end
+
+        say "\nThen add <MyComponent /> to any ERB view.\n"
+        say "Note: re-run this generator after updating the ruact gem to refresh"
+        say "the bundled Vite plugin path in vite.config.js."
         say ""
-        say "=" * 60
-        say "  ruact installed successfully!"
-        say "=" * 60
+      end
+
+      private
+
+      # The stubbable seam (AC#6): the literal shell-out lives here, isolated
+      # so the generator spec can assert/stub it without invoking real npm or
+      # hitting the network. Runs in the app root (destination_root) so it
+      # picks up the app's package.json. Returns Thor's `run` result (truthy on
+      # success, false on a non-zero exit) — captured inside the block so the
+      # value is propagated regardless of `inside`'s return semantics.
+      def run_npm_install
+        result = nil
+        inside(destination_root) { result = run "npm install" }
+        result
+      end
+
+      # Cross-platform `npm`-on-PATH detection (AC#5). Honors PATHEXT on
+      # Windows (npm ships as npm.cmd there); on POSIX the bare `npm` is
+      # checked. Stubbed in specs to exercise both branches deterministically
+      # without depending on the CI host having Node installed.
+      def npm_on_path?
+        exts = ENV.fetch("PATHEXT", "").split(File::PATH_SEPARATOR)
+        exts = [""] if exts.empty?
+
+        ENV.fetch("PATH", "").split(File::PATH_SEPARATOR).any? do |dir|
+          next false if dir.empty?
+
+          exts.any? do |ext|
+            candidate = File.join(dir, "npm#{ext}")
+            File.file?(candidate) && File.executable?(candidate)
+          end
+        end
+      end
+
+      # Clear, actionable message (AC#5) when npm is unavailable — the written
+      # files are NOT rolled back; the developer is pointed at Node or the
+      # --skip-npm escape hatch. No raw Errno/NoMethodError stack trace leaks.
+      def warn_npm_unavailable
+        say_status "warn", "npm not found on PATH — skipping JavaScript dependency install", :yellow
         say ""
-        say "Next steps:"
-        say "  1. Start the Vite dev server:  npm run dev"
-        say "  2. Start Rails:                rails server"
-        say "  3. Add <MyComponent /> to any ERB view"
+        say "  ruact wrote all of its files, but could NOT install JavaScript"
+        say "  dependencies: `npm` is not available on your PATH."
         say ""
-        say "Note: Re-run this generator after updating the ruact gem"
-        say "to refresh the bundled Vite plugin path in vite.config.js."
+        say "  Install Node >= 20 (https://nodejs.org), then run `npm install`,"
+        say "  or re-run with `--skip-npm` and install JS deps with your own"
+        say "  package manager. Then start your app with `bin/dev`."
+        say ""
+      end
+
+      # Reported when `npm install` ran but exited non-zero (AC#1/#3) — the
+      # written files are kept; the developer is told to resolve the npm error
+      # and re-run, and the post-install summary will NOT claim deps installed.
+      def warn_npm_install_failed
+        say_status "warn", "npm install did not complete successfully", :yellow
+        say ""
+        say "  ruact wrote all of its files, but `npm install` reported a failure."
+        say "  Re-run `npm install` in the app root and resolve the npm error,"
+        say "  then start your app with `bin/dev`."
         say ""
       end
     end
