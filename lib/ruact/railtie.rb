@@ -100,9 +100,20 @@ module Ruact
     # Extracted as a class method for direct testability without a full Rails app.
     def self.check_vite!
       require "socket"
-      TCPSocket.new("localhost", 5173).close
-    rescue Errno::ECONNREFUSED, Errno::EHOSTUNREACH
-      Rails.logger.warn "[ruact] Vite dev server not detected at localhost:5173 " \
+      require "uri"
+      uri  = URI.parse(Ruact.config.vite_dev_server)
+      host = uri.host || "localhost"
+      port = uri.port || 5173
+      # `connect_timeout` so a blackholed/remote configured host can't stall dev
+      # boot from `after_initialize` until the OS TCP timeout (matches
+      # ViewHelper#vite_dev_running?).
+      TCPSocket.new(host, port, connect_timeout: 1).close
+    rescue Errno::ECONNREFUSED, Errno::EHOSTUNREACH, Errno::ETIMEDOUT, SocketError
+      # Broad rescue (incl. SocketError) because the host is now configurable: a
+      # misconfigured/unresolvable `vite_dev_server` must downgrade to this dev
+      # warning, never crash boot from `after_initialize`. `host`/`port` are
+      # assigned before the connect attempt, so they are always in scope here.
+      Rails.logger.warn "[ruact] Vite dev server not detected at #{host}:#{port} " \
                         "— run npm run dev for HMR"
     end
 

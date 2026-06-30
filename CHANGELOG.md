@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Boot-race that 500'd the first request in development — the manifest is now resolved from the Vite dev server over HTTP.** On a fresh app the Railtie's `config.to_prepare` read `public/react-client-manifest.json` **once at boot**, but Rails frequently booted (and read the still-missing file) **before** the Vite dev server wrote it — leaving `Ruact.manifest` `nil`. `public/` is not watched, so `to_prepare` never re-fired, and the first request to a view containing a component hit `nil.reference_for` → a cryptic 500. The bundled Vite plugin now **serves the live in-memory manifest at `GET <vite_dev_server>/__ruact/manifest`** (always fresh, reflects HMR rebuilds, internal `_sourceFile` field stripped), and in **development** the gem resolves the manifest through a new `Ruact::ManifestResolver`: it fetches that endpoint over `Net::HTTP` (~1s timeout, once per render/preprocess — not per component), **falls back** to `public/react-client-manifest.json` on disk when the dev server is down, and otherwise raises a **clear, actionable** error (`Vite dev server inacessível … rode bin/dev`) instead of a `NoMethodError`. **Production is untouched** — it still uses the boot-loaded `Ruact.manifest` (raising at boot if the build is missing); the HTTP fetch is dev-only. The Vite plugin continues to **write** `public/react-client-manifest.json` (prod build + the dev fallback). Both render and the FR100 contract validator resolve through the same path (the validator fails open to no-validation when the manifest is unreachable). The three hardcoded `http://localhost:5173` references in `ruact_js_assets` (the react-refresh preamble, `@vite/client`, and the bootstrap `<script src>`) now honor `Ruact.config.vite_dev_server` for consistency.
+
 ## [0.0.6] - 2026-06-30
 
 > **Server functions are route-driven.** A server **mutation** is a normal non-GET

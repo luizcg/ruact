@@ -166,7 +166,14 @@ module Ruact
     def render_erb_enum(erb_source, binding_context, streaming:)
       Enumerator.new do |y|
         render_context = RenderContext.new
-        transformed    = ErbPreprocessor.transform(erb_source)
+        # `registry: nil` → fail-open, no FR100 contract validation for this
+        # low-level programmatic render path (contract checking lives on the
+        # ActionView preprocessor hook used by real controllers). This keeps the
+        # path off `Ruact::ManifestResolver` entirely — historically it read the
+        # global `Ruact.manifest` (typically nil here, so already no validation),
+        # so passing nil is byte-for-byte equivalent while avoiding any dev HTTP
+        # fetch / test-double dispatch inside callers that measure this path.
+        transformed    = ErbPreprocessor.transform(erb_source, registry: nil)
         receiver       = binding_context.eval("self")
         prev_ctx       = receiver.instance_variable_get(:@__ruact_render_context__)
         inject_helper!(binding_context, render_context)

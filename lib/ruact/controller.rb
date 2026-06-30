@@ -36,10 +36,16 @@ module Ruact
     # only ever invoked internally by `ruact_html_shell`).
     private :ruact_js_assets, :__ruact_component__
 
-    # Returns the boot-time cached manifest (set by Railtie#config.to_prepare).
-    # No per-request file I/O (AC#6).
+    # Resolves the manifest for this render. In PRODUCTION this is the boot-time
+    # cached +Ruact.manifest+ (set by Railtie#config.to_prepare) — no per-request
+    # I/O. In DEVELOPMENT it fetches the live manifest from the Vite dev server
+    # (falling back to the on-disk file, then a clear error), killing the
+    # boot-race where Rails read the missing file before Vite wrote it and every
+    # first request 500'd on +nil.reference_for+. Called once per render; the
+    # returned manifest is held by RenderPipeline for the whole render (not
+    # re-fetched per component). See {Ruact::ManifestResolver}.
     def ruact_manifest
-      Ruact.manifest
+      ManifestResolver.resolve
     end
 
     # Only activate RSC rendering when the matching .html.erb template exists AND
