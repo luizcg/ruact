@@ -1326,14 +1326,19 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
 
       it "passes the RAW field:type strings through, not reconstructed view-models (modifiers survive)" do
         # `title:string{80}` / `author:references{polymorphic}` carry modifiers
-        # ruact's ScaffoldAttribute view-models drop — the raw args must reach
-        # `resource` verbatim so Rails parses the correct migration columns.
-        gen = build(%w[Post title:string author:references])
+        # (column limit, polymorphic ref) that ruact's ScaffoldAttribute
+        # view-models DROP (`scaffold_attributes` strips everything after `{`).
+        # The seam must receive the args VERBATIM so Rails parses the correct
+        # migration columns — asserting the `{...}` payload reaches the seam is
+        # what makes this non-vacuous (a reconstruct-from-view-models regression
+        # would surface here as the bare `title:string` / `author:references`).
+        gen = build(%w[Post title:string{80} author:references{polymorphic}])
         allow(gen).to receive(:invoke_rails_resource)
 
         silently { gen.generate_rails_resource }
 
-        expect(gen).to have_received(:invoke_rails_resource).with("Post", "title:string", "author:references")
+        expect(gen).to have_received(:invoke_rails_resource)
+          .with("Post", "title:string{80}", "author:references{polymorphic}")
       end
 
       it "delegates through the PUBLIC resource generator surface (Thor invoke), no private API", :aggregate_failures do
