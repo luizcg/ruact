@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-06-30
+
 > **Server functions are route-driven.** A server **mutation** is a normal non-GET
 > controller action on a controller that does `include Ruact::Server` — the action
 > IS the function, reached at its real Rails route (`POST /posts`), visible in
@@ -160,5 +162,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI matrix** — GitHub Actions: RSpec across Ruby 3.2 × 3.3 × Rails 7.0 × 7.1 × 7.2 × 8.0; RuboCop; YARD docs; memory benchmark; E2E system tests against React 19.0.0 and 19.x (Capybara + Cuprite); non-blocking React@next job with auto-issue on failure.
 - **E2E test app** — `e2e/` Rails app (no DB, in-memory Post model) with full CRUD system tests validating the complete request cycle.
 
-[Unreleased]: https://github.com/luizcg/ruact/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/luizcg/ruact/releases/tag/v0.1.0
+[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.6...HEAD
+[0.0.6]: https://github.com/luizcg/ruact/releases/tag/v0.0.6
