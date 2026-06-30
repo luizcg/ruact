@@ -150,16 +150,20 @@ module Ruact
           return
         end
 
-        run_npm_install
-        @npm_outcome = :installed
+        # Thor's `run` returns false on a non-zero exit (Rails generators set
+        # exit_on_failure? = false, so a failed `npm install` does NOT raise) —
+        # branch on that so the post-install message never claims deps are
+        # installed when npm actually failed (AC#3).
+        if run_npm_install
+          @npm_outcome = :installed
+        else
+          @npm_outcome = :failed
+          warn_npm_install_failed
+        end
       end
 
       def show_post_install_message
-        say ""
-        say "=" * 60
-        say "  ruact installed successfully!"
-        say "=" * 60
-        say ""
+        say "\n#{'=' * 60}\n  ruact installed successfully!\n#{'=' * 60}\n"
 
         if @npm_outcome == :installed
           say "JavaScript dependencies are installed."
@@ -174,11 +178,9 @@ module Ruact
           say "  2. Start your app:           bin/dev"
         end
 
-        say ""
-        say "Then add <MyComponent /> to any ERB view."
-        say ""
-        say "Note: Re-run this generator after updating the ruact gem"
-        say "to refresh the bundled Vite plugin path in vite.config.js."
+        say "\nThen add <MyComponent /> to any ERB view.\n"
+        say "Note: re-run this generator after updating the ruact gem to refresh"
+        say "the bundled Vite plugin path in vite.config.js."
         say ""
       end
 
@@ -187,9 +189,13 @@ module Ruact
       # The stubbable seam (AC#6): the literal shell-out lives here, isolated
       # so the generator spec can assert/stub it without invoking real npm or
       # hitting the network. Runs in the app root (destination_root) so it
-      # picks up the app's package.json.
+      # picks up the app's package.json. Returns Thor's `run` result (truthy on
+      # success, false on a non-zero exit) — captured inside the block so the
+      # value is propagated regardless of `inside`'s return semantics.
       def run_npm_install
-        inside(destination_root) { run "npm install" }
+        result = nil
+        inside(destination_root) { result = run "npm install" }
+        result
       end
 
       # Cross-platform `npm`-on-PATH detection (AC#5). Honors PATHEXT on
@@ -222,6 +228,18 @@ module Ruact
         say "  Install Node >= 20 (https://nodejs.org), then run `npm install`,"
         say "  or re-run with `--skip-npm` and install JS deps with your own"
         say "  package manager. Then start your app with `bin/dev`."
+        say ""
+      end
+
+      # Reported when `npm install` ran but exited non-zero (AC#1/#3) — the
+      # written files are kept; the developer is told to resolve the npm error
+      # and re-run, and the post-install summary will NOT claim deps installed.
+      def warn_npm_install_failed
+        say_status "warn", "npm install did not complete successfully", :yellow
+        say ""
+        say "  ruact wrote all of its files, but `npm install` reported a failure."
+        say "  Re-run `npm install` in the app root and resolve the npm error,"
+        say "  then start your app with `bin/dev`."
         say ""
       end
     end

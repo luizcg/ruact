@@ -422,23 +422,23 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
     describe "default run installs JS deps (AC#1, AC#6a)" do
       it "invokes the run_npm_install seam exactly once" do
         gen = build_generator(app_root)
-        allow(gen).to receive(:npm_on_path?).and_return(true)
-        allow(gen).to receive(:run_npm_install)
+        allow(gen).to receive_messages(npm_on_path?: true, run_npm_install: true)
 
         silently { gen.install_javascript_dependencies }
 
         expect(gen).to have_received(:run_npm_install).once
+        expect(gen.instance_variable_get(:@npm_outcome)).to eq(:installed)
       end
 
       it "runs the npm step AFTER create_javascript_entry and BEFORE show_post_install_message",
          :aggregate_failures do
-        methods = Ruact::Generators::InstallGenerator.public_instance_methods(false).map(&:to_s)
-        entry_idx   = methods.index("create_javascript_entry")
-        npm_idx     = methods.index("install_javascript_dependencies")
-        message_idx = methods.index("show_post_install_message")
-        expect([entry_idx, npm_idx, message_idx]).to all(be_a(Integer))
-        expect(entry_idx).to be < npm_idx
-        expect(npm_idx).to be < message_idx
+        # Thor runs public action methods in SOURCE definition order, so assert
+        # on source line numbers (public_instance_methods order is not
+        # guaranteed to match definition order).
+        klass = Ruact::Generators::InstallGenerator
+        line = ->(name) { klass.instance_method(name).source_location.last }
+        expect(line.call(:create_javascript_entry)).to be < line.call(:install_javascript_dependencies)
+        expect(line.call(:install_javascript_dependencies)).to be < line.call(:show_post_install_message)
       end
     end
 
@@ -486,14 +486,29 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
     describe "post-install message reflects the outcome (AC#3)", :aggregate_failures do
       it "states deps are installed and next step is bin/dev when npm ran" do
         gen = build_generator(app_root)
-        allow(gen).to receive(:npm_on_path?).and_return(true)
-        allow(gen).to receive(:run_npm_install)
+        allow(gen).to receive_messages(npm_on_path?: true, run_npm_install: true)
         silently { gen.install_javascript_dependencies }
 
         output = capture_stdout { gen.show_post_install_message }
         expect(output).to include("are installed")
         expect(output).not_to include("not yet installed")
         expect(output).to include("bin/dev")
+      end
+
+      # AC#3 — Thor's `run` returns false on a non-zero exit (generators do not
+      # exit_on_failure?), so a FAILED `npm install` must NOT report success.
+      it "does NOT claim deps are installed when npm install fails (AC#3)" do
+        gen = build_generator(app_root)
+        allow(gen).to receive_messages(npm_on_path?: true, run_npm_install: false)
+
+        run_output = capture_stdout { gen.install_javascript_dependencies }
+        message    = capture_stdout { gen.show_post_install_message }
+
+        expect(gen.instance_variable_get(:@npm_outcome)).to eq(:failed)
+        expect(run_output).to match(/did not complete|failure/i)
+        expect(message).not_to include("are installed")
+        expect(message).to include("not yet installed")
+        expect(message).to include("bin/dev")
       end
 
       it "tells the developer to install manually then bin/dev when skipped" do
