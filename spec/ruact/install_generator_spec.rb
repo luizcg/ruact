@@ -430,14 +430,16 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(gen.instance_variable_get(:@npm_outcome)).to eq(:installed)
       end
 
-      it "runs the npm step AFTER create_javascript_entry and BEFORE show_post_install_message",
+      it "runs the npm step AFTER the file-producing actions and BEFORE show_post_install_message",
          :aggregate_failures do
         # Thor runs public action methods in SOURCE definition order, so assert
         # on source line numbers (public_instance_methods order is not
-        # guaranteed to match definition order).
+        # guaranteed to match definition order). Story 14.2 removed
+        # create_javascript_entry; create_vite_config is the last file-writing
+        # action before the npm step.
         klass = Ruact::Generators::InstallGenerator
         line = ->(name) { klass.instance_method(name).source_location.last }
-        expect(line.call(:create_javascript_entry)).to be < line.call(:install_javascript_dependencies)
+        expect(line.call(:create_vite_config)).to be < line.call(:install_javascript_dependencies)
         expect(line.call(:install_javascript_dependencies)).to be < line.call(:show_post_install_message)
       end
     end
@@ -533,6 +535,98 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(output).to include("not yet installed")
         expect(output).to include("npm install")
         expect(output).to include("bin/dev")
+      end
+    end
+  end
+
+  # Story 14.2 (FR104) — the generator no longer leaks ruact plumbing into the
+  # user's tree. After a fresh install, `app/javascript/` holds only the user's
+  # `components/` (+ the gitignored typed `.ruact/server-functions.ts`); the
+  # bootstrap entry is the virtual module `virtual:ruact/bootstrap`, and
+  # `flight-client.js` / `ruact-router.js` live inside the gem.
+  describe "install generator — hidden plumbing, no app/javascript leak (Story 14.2 — FR104)", :story_14_2 do
+    require "stringio"
+    require "generators/ruact/install/install_generator"
+
+    let(:app_root) { Dir.mktmpdir("ruact_install_1402") }
+
+    after { FileUtils.rm_rf(app_root) }
+
+    def build_generator(root, opts = {})
+      Ruact::Generators::InstallGenerator.new([], opts, destination_root: root)
+    end
+
+    def silently
+      original = $stdout
+      $stdout = StringIO.new
+      yield
+    ensure
+      $stdout = original
+    end
+
+    before do
+      FileUtils.mkdir_p(File.join(app_root, "app/controllers"))
+      File.write(File.join(app_root, "app/controllers/application_controller.rb"),
+                 "class ApplicationController < ActionController::Base\nend\n")
+      FileUtils.mkdir_p(File.join(app_root, "app/views/layouts"))
+      File.write(File.join(app_root, "app/views/layouts/application.html.erb"),
+                 "<!DOCTYPE html>\n<html>\n  <body>\n    <%= yield %>\n  </body>\n</html>\n")
+      File.write(File.join(app_root, ".gitignore"), "/log/*\n")
+    end
+
+    it "does NOT define a create_javascript_entry action (no application.jsx writer)" do
+      expect(Ruact::Generators::InstallGenerator.instance_methods).not_to include(:create_javascript_entry)
+    end
+
+    it "no longer ships the application.jsx template (its source moved into the gem runtime)" do
+      template = File.expand_path(
+        "../../lib/generators/ruact/install/templates/application.jsx.tt", __dir__
+      )
+      expect(File).not_to exist(template)
+    end
+
+    it "writes no application.jsx / flight-client.js / ruact-router.js into app/javascript", :aggregate_failures do
+      gen = build_generator(app_root)
+      silently do
+        gen.create_components_directory
+        gen.create_server_functions_directory
+        gen.append_gitignore_entries
+        gen.create_vite_config
+      end
+
+      expect(File).not_to exist(File.join(app_root, "app/javascript/application.jsx"))
+      expect(File).not_to exist(File.join(app_root, "app/javascript/flight-client.js"))
+      expect(File).not_to exist(File.join(app_root, "app/javascript/ruact-router.js"))
+      # The user's components dir + the typed registry scaffold still exist.
+      expect(File).to exist(File.join(app_root, "app/javascript/components/.keep"))
+      expect(File).to exist(File.join(app_root, "app/javascript/.ruact/.gitkeep"))
+    end
+
+    it "keeps the .ruact/server-functions.ts gitignore entry unchanged (server-functions.ts stays)" do
+      gen = build_generator(app_root)
+      silently { gen.append_gitignore_entries }
+      expect(File.read(File.join(app_root, ".gitignore")))
+        .to include("app/javascript/.ruact/server-functions.ts")
+    end
+
+    describe "vite.config input targets the virtual bootstrap (AC3 — single source of truth)" do
+      let(:template_path) do
+        File.expand_path("../../lib/generators/ruact/install/templates/vite.config.js.tt", __dir__)
+      end
+
+      it "renders the input from Ruact.bootstrap_virtual_id, not a hardcoded application.jsx", :aggregate_failures do
+        content = File.read(template_path)
+        expect(content).to include("Ruact.bootstrap_virtual_id")
+        # The `input:` line must NOT hardcode the old application.jsx entry
+        # (a prose mention in a comment is fine — only the directive matters).
+        expect(content).not_to match(%r{input:\s*['"]app/javascript/application\.jsx['"]})
+      end
+
+      it "the generated input equals the id the ViewHelper/prod manifest lookup uses (no drift)" do
+        gen = build_generator(app_root)
+        silently { gen.create_vite_config }
+        generated = File.read(File.join(app_root, "vite.config.js"))
+        expect(generated).to include("input: '#{described_class.bootstrap_virtual_id}'")
       end
     end
   end

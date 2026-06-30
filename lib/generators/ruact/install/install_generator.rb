@@ -14,9 +14,15 @@ module Ruact
     # 3. Injects the React root div into app/views/layouts/application.html.erb
     # 4. Creates app/javascript/components/.keep
     # 5. Creates vite.config.js (or shows manual instructions if one exists)
-    # 6. Creates app/javascript/application.jsx (or skips if one exists)
-    # 7. Runs `npm install` so JavaScript dependencies are ready (FR101);
+    # 6. Runs `npm install` so JavaScript dependencies are ready (FR101);
     #    skippable via --skip-npm.
+    #
+    # Story 14.2 (FR104) — the generator no longer writes a bootstrap entry into
+    # the user's tree. ruact's React entry is served as the virtual module
+    # `virtual:ruact/bootstrap` by the bundled Vite plugin (the generated
+    # `vite.config` input points at it), so a fresh install leaves
+    # `app/javascript/` with only the user's `components/` (plus the gitignored,
+    # typed `.ruact/server-functions.ts`).
     #
     # Run: rails generate ruact:install
     class InstallGenerator < Rails::Generators::Base
@@ -126,10 +132,6 @@ module Ruact
         else
           template "vite.config.js.tt", "vite.config.js"
         end
-      end
-
-      def create_javascript_entry
-        template "application.jsx.tt", "app/javascript/application.jsx"
       end
 
       # Story 14.1 (FR101) — install JavaScript dependencies so a fresh app is

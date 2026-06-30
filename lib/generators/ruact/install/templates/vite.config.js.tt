@@ -14,7 +14,9 @@ export default defineConfig({
     outDir: 'public/assets',
     manifest: true,
     rollupOptions: {
-      input: 'app/javascript/application.jsx',
+      // ruact's bootstrap entry is a virtual module served by the plugin above
+      // (Story 14.2) — there is no app/javascript/application.jsx to point at.
+      input: '<%= Ruact.bootstrap_virtual_id %>',
     },
   },
 
