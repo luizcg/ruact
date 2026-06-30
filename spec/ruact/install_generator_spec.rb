@@ -3,6 +3,7 @@
 require "spec_helper"
 require "tmpdir"
 require "fileutils"
+require "json"
 require "ruact"
 
 RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
@@ -676,6 +677,120 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         regenerated = File.read(File.join(app_root, "vite.config.js"))
         expect(regenerated).not_to include("hand-written")
         expect(regenerated).to include("input: '#{described_class.bootstrap_virtual_id}'")
+      end
+    end
+  end
+
+  # Story 14.6 (FR101, Epic 14 DoD) — `ruact:install` now emits the missing
+  # launch pieces so the literal `bin/dev` produces a working app: a
+  # `package.json` (so 14.1's `npm install` resolves React + Vite) and a
+  # `Procfile.dev` + foreman `bin/dev` that boot BOTH Rails and the Vite dev
+  # server. Each is guarded (non-clobbering, --force overwrites) and idempotent.
+  describe "install generator — launch files: package.json + Procfile.dev + bin/dev (Story 14.6)",
+           :story_14_6 do
+    require "stringio"
+    require "generators/ruact/install/install_generator"
+
+    let(:app_root) { Dir.mktmpdir("ruact_install_1406") }
+
+    after { FileUtils.rm_rf(app_root) }
+
+    def build_generator(root, opts = {})
+      Ruact::Generators::InstallGenerator.new([], opts, destination_root: root)
+    end
+
+    def silently
+      original = $stdout
+      $stdout = StringIO.new
+      yield
+    ensure
+      $stdout = original
+    end
+
+    describe "create_package_json (AC#1 — JS deps to install)", :aggregate_failures do
+      it "writes a package.json declaring React + Vite (and a `dev` script)" do
+        gen = build_generator(app_root)
+        silently { gen.create_package_json }
+
+        path = File.join(app_root, "package.json")
+        expect(File).to exist(path)
+        pkg = JSON.parse(File.read(path))
+        expect(pkg.dig("dependencies", "react")).to be_a(String)
+        expect(pkg.dig("dependencies", "react-dom")).to be_a(String)
+        expect(pkg.dig("devDependencies", "vite")).to be_a(String)
+        expect(pkg.dig("devDependencies", "@vitejs/plugin-react")).to be_a(String)
+        expect(pkg.dig("scripts", "dev")).to eq("vite")
+        expect(pkg["type"]).to eq("module")
+      end
+
+      it "does NOT list the bundled ruact Vite plugin as an npm dependency " \
+         "(vite.config imports it by absolute path)" do
+        gen = build_generator(app_root)
+        silently { gen.create_package_json }
+        expect(File.read(File.join(app_root, "package.json"))).not_to include("vite-plugin-ruact")
+      end
+
+      it "derives a valid lowercase npm name from the app directory" do
+        gen = build_generator(app_root)
+        silently { gen.create_package_json }
+        name = JSON.parse(File.read(File.join(app_root, "package.json")))["name"]
+        expect(name).to match(/\A[a-z0-9._-]+\z/)
+      end
+
+      it "leaves an existing package.json untouched without --force (non-clobbering)" do
+        File.write(File.join(app_root, "package.json"), %({ "name": "mine" }\n))
+        gen = build_generator(app_root)
+        silently { gen.create_package_json }
+        expect(File.read(File.join(app_root, "package.json"))).to eq(%({ "name": "mine" }\n))
+      end
+
+      it "overwrites an existing package.json under --force" do
+        File.write(File.join(app_root, "package.json"), %({ "name": "mine" }\n))
+        gen = build_generator(app_root, { force: true })
+        silently { gen.create_package_json }
+        expect(File.read(File.join(app_root, "package.json"))).to include("\"vite\"")
+      end
+    end
+
+    describe "create_launch_files (Epic DoD — bin/dev boots both processes)", :aggregate_failures do
+      it "writes Procfile.dev with BOTH a Rails web process and a Vite process" do
+        gen = build_generator(app_root)
+        silently { gen.create_launch_files }
+
+        procfile = File.read(File.join(app_root, "Procfile.dev"))
+        expect(procfile).to match(/^web:.*rails server/)
+        expect(procfile).to match(/^vite:.*npm run dev/)
+      end
+
+      it "writes an executable bin/dev that execs foreman against Procfile.dev" do
+        gen = build_generator(app_root)
+        silently { gen.create_launch_files }
+
+        dev = File.join(app_root, "bin/dev")
+        expect(File).to exist(dev)
+        expect(File).to be_executable(dev)
+        body = File.read(dev)
+        expect(body).to include("foreman start -f Procfile.dev")
+        expect(body).to include("gem install foreman")
+      end
+
+      it "is idempotent + non-clobbering — a second run does not overwrite a customized bin/dev" do
+        gen = build_generator(app_root)
+        silently { gen.create_launch_files }
+        File.write(File.join(app_root, "bin/dev"), "#!/usr/bin/env bash\n# customized\n")
+
+        gen2 = build_generator(app_root)
+        silently { gen2.create_launch_files }
+        expect(File.read(File.join(app_root, "bin/dev"))).to include("# customized")
+      end
+    end
+
+    describe "action ordering (npm install needs package.json on disk first)" do
+      it "defines create_package_json BEFORE install_javascript_dependencies", :aggregate_failures do
+        klass = Ruact::Generators::InstallGenerator
+        line = ->(name) { klass.instance_method(name).source_location.last }
+        expect(line.call(:create_package_json)).to be < line.call(:install_javascript_dependencies)
+        expect(line.call(:create_launch_files)).to be < line.call(:install_javascript_dependencies)
       end
     end
   end

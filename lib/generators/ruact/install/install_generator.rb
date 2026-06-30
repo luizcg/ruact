@@ -14,7 +14,12 @@ module Ruact
     # 3. Injects the React root div into app/views/layouts/application.html.erb
     # 4. Creates app/javascript/components/.keep
     # 5. Creates vite.config.js (or shows manual instructions if one exists)
-    # 6. Runs `npm install` so JavaScript dependencies are ready (FR101);
+    # 6. Creates package.json (react/react-dom/vite/@vitejs/plugin-react) so a
+    #    fresh app has JS deps to install (Story 14.6, FR101).
+    # 7. Creates Procfile.dev + bin/dev (foreman) so the single `bin/dev`
+    #    command boots BOTH Rails and the Vite dev server (Story 14.6, Epic 14
+    #    DoD — a ruact app needs both processes).
+    # 8. Runs `npm install` so JavaScript dependencies are ready (FR101);
     #    skippable via --skip-npm.
     #
     # Story 14.2 (FR104) — the generator no longer writes a bootstrap entry into
@@ -138,6 +143,42 @@ module Ruact
         end
       end
 
+      # Story 14.6 (FR101, Epic 14 DoD) — a fresh ruact app needs a package.json
+      # declaring its JavaScript dependencies (React + Vite + the React Vite
+      # plugin) so the `npm install` that Story 14.1 runs has something to
+      # resolve and `bin/dev`'s `npm run dev` (Vite) has a `dev` script. The
+      # bundled ruact Vite plugin is NOT a package.json dependency — vite.config
+      # imports it by the absolute `Ruact.vite_plugin_path` and it uses only
+      # `node:` builtins. Guarded like vite.config.js: an existing package.json
+      # is left untouched (the app may already have one) unless --force.
+      def create_package_json
+        package_json_file = Pathname(destination_root).join("package.json")
+
+        if package_json_file.exist? && !options[:force]
+          say_status "skip", "package.json already exists — ensure it has react, react-dom, " \
+                             "vite and @vitejs/plugin-react (re-run with --force to overwrite)", :yellow
+          return
+        end
+
+        template "package.json.tt", "package.json"
+      end
+
+      # Story 14.6 (Epic 14 DoD) — emit `Procfile.dev` + a foreman-based `bin/dev`
+      # so the literal `bin/dev` boots BOTH processes a ruact app needs: Rails
+      # (HTML shell + Flight + server functions) and the Vite dev server
+      # (React/HMR + the bundled ruact plugin). Without these, `bin/dev` would
+      # start only Rails and the React assets would never be served. Each file is
+      # guarded (skip if present unless --force) so re-running the generator — or
+      # running it in an app that already has a `bin/dev` (e.g. from jsbundling) —
+      # never clobbers the developer's launcher. `bin/dev` is made executable.
+      def create_launch_files
+        create_guarded_file "Procfile.dev", "Procfile.dev.tt"
+        create_guarded_file "bin/dev", "dev.tt"
+        # Ensure bin/dev is executable whether we just wrote it or it pre-existed
+        # (a skipped, customized launcher should still be runnable).
+        chmod "bin/dev", 0o755, verbose: false if Pathname(destination_root).join("bin/dev").exist?
+      end
+
       # Story 14.2 (FR104, AC7) — an app upgrading from the earlier layout still
       # has app/javascript/{application.jsx,flight-client.js,ruact-router.js} on
       # disk. The generator never deletes user files, so it prints the exact
@@ -217,6 +258,27 @@ module Ruact
       end
 
       private
+
+      # Story 14.6 — write a template only when the destination does not already
+      # exist (unless --force), printing a skip notice otherwise. Keeps
+      # create_launch_files idempotent and non-clobbering.
+      def create_guarded_file(destination, template_name)
+        if Pathname(destination_root).join(destination).exist? && !options[:force]
+          say_status "skip", "#{destination} already exists (re-run with --force to overwrite)", :yellow
+          return
+        end
+
+        template template_name, destination
+      end
+
+      # Story 14.6 — a valid, lowercase npm "name" for the generated package.json,
+      # derived from the app directory. npm names must be lowercase and contain
+      # only URL-safe characters; anything else collapses to a hyphen.
+      def app_package_name
+        base = File.basename(File.expand_path(destination_root))
+        sanitized = base.downcase.gsub(/[^a-z0-9._-]/, "-").squeeze("-").gsub(/\A-+|-+\z/, "")
+        sanitized.empty? ? "ruact-app" : sanitized
+      end
 
       # Story 14.2 (AC7) — the earlier-layout plumbing files that must be removed
       # from the user's tree (the bootstrap entry + the per-app runtime copies).
