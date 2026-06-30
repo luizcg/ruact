@@ -58,5 +58,20 @@ RSpec.configure do |config|
     # before every example so no leaked double survives — examples that need a
     # specific logger set their own in their own `before` (which runs after this).
     Rails.logger = Logger.new(IO::NULL) if defined?(Rails) && Rails.respond_to?(:logger=)
+
+    # Manifest-over-HTTP fix: the gem suite runs with `Rails.env == development`
+    # by default, where `Ruact::ManifestResolver` would otherwise fetch the live
+    # manifest from the Vite dev server (localhost:5173) on every ActionView
+    # render — making the suite hit the network and go flaky on a dev machine
+    # that happens to run a foreign Vite there. Pin the pre-fix behaviour (return
+    # the boot-loaded `Ruact.manifest`) so the whole suite is hermetic. The
+    # resolver's own spec re-stubs these `.and_call_original` to exercise the real
+    # HTTP/fallback paths with `Net::HTTP` mocked. (The programmatic
+    # `RenderPipeline#render({erb:})` path passes `registry: nil` and never
+    # touches the resolver, so the benchmark measures the real render cost.)
+    if defined?(Ruact::ManifestResolver)
+      allow(Ruact::ManifestResolver).to receive(:resolve) { Ruact.manifest }
+      allow(Ruact::ManifestResolver).to receive(:resolve_soft) { Ruact.manifest }
+    end
   end
 end

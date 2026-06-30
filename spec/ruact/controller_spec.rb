@@ -39,10 +39,15 @@ module Ruact
     let(:controller)   { test_class.new(fake_request) }
 
     describe "#ruact_manifest" do
-      it "reads from Ruact.manifest (AC#6)" do
+      # Opt OUT of spec_helper's suite-wide resolver stub here so this proves the
+      # actual delegation: `#ruact_manifest` resolves through ManifestResolver
+      # (prod returns the boot-loaded Ruact.manifest; dev fetches over HTTP).
+      it "delegates manifest resolution to ManifestResolver.resolve" do
         test_manifest = ClientManifest.from_hash({})
-        allow(Ruact).to receive(:manifest).and_return(test_manifest)
+        allow(ManifestResolver).to receive(:resolve).and_return(test_manifest)
+
         expect(controller.send(:ruact_manifest)).to be test_manifest
+        expect(ManifestResolver).to have_received(:resolve)
       end
     end
 

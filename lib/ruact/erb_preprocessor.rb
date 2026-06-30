@@ -74,7 +74,13 @@ module Ruact
         line           = result[0...match_start].count("\n") + 1
 
         begin
-          registry = Ruact.manifest if registry == :default # lazy — only when a tag exists
+          # lazy — only when a tag exists. `resolve_soft` returns the dev-fetched
+          # manifest (same source the render path uses, so the boot-race doesn't
+          # silence FR100 contract checks in dev) and FAILS OPEN to nil when the
+          # manifest is unresolvable (contract validation is opt-in/fail-open;
+          # the render path surfaces the clear error). In prod this is the
+          # boot-loaded Ruact.manifest, unchanged.
+          registry = ManifestResolver.resolve_soft if registry == :default
           pairs = parse_prop_pairs(attrs_string)
           validate_contract(registry, component_name, pairs.map(&:first),
                             at: { file: identifier, line: line, snippet: match.strip })

@@ -171,6 +171,26 @@ export default function ruact(options = {}) {
     configureServer(server) {
       const dir = path.resolve(root, componentsDir);
       server.watcher.add(dir);
+
+      // Serve the LIVE in-memory manifest over HTTP so the Rails gem can
+      // resolve components in dev without depending on the on-disk
+      // public/react-client-manifest.json — whose first write races Rails's
+      // boot-time read (Rails can boot, and config.to_prepare read the file,
+      // BEFORE Vite writes it → Ruact.manifest nil → 500 on the first request).
+      // This endpoint always reflects the current `manifest` (rebuilt by the
+      // watcher below + buildStart), and omits the internal `_sourceFile` field
+      // so the wire shape matches the file the gem already knows how to parse.
+      server.middlewares.use("/__ruact/manifest", (req, res, next) => {
+        if (req.method !== "GET") return next();
+        const out = {};
+        for (const [name, entry] of Object.entries(manifest)) {
+          const { _sourceFile, ...rest } = entry;
+          out[name] = rest;
+        }
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify(out));
+      });
+
       const rebuild = (file) => {
         if (!file.startsWith(dir)) return;
         manifest = buildManifest(dir);
