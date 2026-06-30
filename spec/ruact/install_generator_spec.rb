@@ -373,4 +373,138 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
       end
     end
   end
+
+  # Story 14.1 (FR101) — one-command install: `ruact:install` now runs
+  # `npm install` by default (behind a stubbable `run_npm_install` seam),
+  # skippable via `--skip-npm`, with an npm-on-PATH guard and outcome-aware
+  # post-install messaging. The shell-out is ALWAYS stubbed here — no real
+  # npm / network call is made in CI. Reuses the "real generator against a
+  # String destination_root" pattern (instantiate + call action methods).
+  describe "install generator — one-command npm install (Story 14.1 — FR101)", :story_14_1 do
+    require "stringio"
+    require "generators/ruact/install/install_generator"
+
+    let(:app_root) { Dir.mktmpdir("ruact_install_npm") }
+
+    after { FileUtils.rm_rf(app_root) }
+
+    def build_generator(root, opts = {})
+      Ruact::Generators::InstallGenerator.new([], opts, destination_root: root)
+    end
+
+    def silently
+      original = $stdout
+      $stdout = StringIO.new
+      yield
+    ensure
+      $stdout = original
+    end
+
+    # Captures and returns the generator's say/say_status stdout for text asserts.
+    def capture_stdout
+      original = $stdout
+      $stdout = StringIO.new
+      yield
+      $stdout.string
+    ensure
+      $stdout = original
+    end
+
+    describe "--skip-npm class option (AC#2)", :aggregate_failures do
+      it "is registered as a boolean class_option defaulting to false" do
+        option = Ruact::Generators::InstallGenerator.class_options[:skip_npm]
+        expect(option).not_to be_nil
+        expect(option.type).to eq(:boolean)
+        expect(option.default).to be false
+      end
+    end
+
+    describe "default run installs JS deps (AC#1, AC#6a)" do
+      it "invokes the run_npm_install seam exactly once" do
+        gen = build_generator(app_root)
+        allow(gen).to receive(:npm_on_path?).and_return(true)
+        allow(gen).to receive(:run_npm_install)
+
+        silently { gen.install_javascript_dependencies }
+
+        expect(gen).to have_received(:run_npm_install).once
+      end
+
+      it "runs the npm step AFTER create_javascript_entry and BEFORE show_post_install_message",
+         :aggregate_failures do
+        methods = Ruact::Generators::InstallGenerator.public_instance_methods(false).map(&:to_s)
+        entry_idx   = methods.index("create_javascript_entry")
+        npm_idx     = methods.index("install_javascript_dependencies")
+        message_idx = methods.index("show_post_install_message")
+        expect([entry_idx, npm_idx, message_idx]).to all(be_a(Integer))
+        expect(entry_idx).to be < npm_idx
+        expect(npm_idx).to be < message_idx
+      end
+    end
+
+    describe "run_npm_install seam (AC#6a)", :aggregate_failures do
+      it "shells out `npm install` inside the destination_root" do
+        gen = build_generator(app_root)
+        allow(gen).to receive(:inside).and_yield
+        allow(gen).to receive(:run)
+
+        silently { gen.send(:run_npm_install) }
+
+        expect(gen).to have_received(:inside).with(gen.destination_root)
+        expect(gen).to have_received(:run).with("npm install")
+      end
+    end
+
+    describe "--skip-npm opts out (AC#2, AC#6b)" do
+      it "does not invoke the run_npm_install seam and emits a skip notice" do
+        gen = build_generator(app_root, { skip_npm: true })
+        allow(gen).to receive(:run_npm_install)
+
+        output = capture_stdout { gen.install_javascript_dependencies }
+
+        expect(gen).not_to have_received(:run_npm_install)
+        expect(output).to match(/skip/i)
+      end
+    end
+
+    describe "npm not on PATH (AC#5)", :aggregate_failures do
+      it "does not raise, skips the seam, and prints an actionable message naming --skip-npm" do
+        gen = build_generator(app_root)
+        allow(gen).to receive(:npm_on_path?).and_return(false)
+        allow(gen).to receive(:run_npm_install)
+
+        output = nil
+        expect { output = capture_stdout { gen.install_javascript_dependencies } }
+          .not_to raise_error
+        expect(gen).not_to have_received(:run_npm_install)
+        expect(output).to include("--skip-npm")
+        expect(output).to match(/npm/i)
+        expect(output).to match(/node/i)
+      end
+    end
+
+    describe "post-install message reflects the outcome (AC#3)", :aggregate_failures do
+      it "states deps are installed and next step is bin/dev when npm ran" do
+        gen = build_generator(app_root)
+        allow(gen).to receive(:npm_on_path?).and_return(true)
+        allow(gen).to receive(:run_npm_install)
+        silently { gen.install_javascript_dependencies }
+
+        output = capture_stdout { gen.show_post_install_message }
+        expect(output).to include("are installed")
+        expect(output).not_to include("not yet installed")
+        expect(output).to include("bin/dev")
+      end
+
+      it "tells the developer to install manually then bin/dev when skipped" do
+        gen = build_generator(app_root, { skip_npm: true })
+        silently { gen.install_javascript_dependencies }
+
+        output = capture_stdout { gen.show_post_install_message }
+        expect(output).to include("not yet installed")
+        expect(output).to include("npm install")
+        expect(output).to include("bin/dev")
+      end
+    end
+  end
 end
