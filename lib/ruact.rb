@@ -44,6 +44,22 @@ module Ruact
       File.expand_path("../vendor/javascript/vite-plugin-ruact/index.js", __dir__)
     end
 
+    # Story 14.2 (FR104) — the SINGLE source of truth for the bootstrap entry id.
+    # ruact's React entry is served as the virtual module `virtual:ruact/bootstrap`
+    # (by the bundled Vite plugin) instead of a `app/javascript/application.jsx`
+    # file in the user's tree. Every reference point must agree on this id:
+    #   - the generated `vite.config` `rollupOptions.input`
+    #   - the dev `<script src>` (`/@id/__x00__virtual:ruact/bootstrap`)
+    #   - the production Vite-manifest lookup key
+    #   - the plugin's `resolveId`/`load` (`BOOTSTRAP_VIRTUAL_ID` in index.js)
+    # `Ruact::ViewHelper#ruact_js_assets` and `templates/vite.config.js.tt` both
+    # read this constant so they can never drift (the regression AC3 guards).
+    #
+    # @return [String] the bootstrap virtual-module id ("virtual:ruact/bootstrap")
+    def bootstrap_virtual_id
+      "virtual:ruact/bootstrap"
+    end
+
     # Yields a mutable Configuration draft for block-style setup. The draft is
     # frozen and atomically swapped into `Ruact.config` when the block returns.
     # Mutating `Ruact.config` outside this block raises

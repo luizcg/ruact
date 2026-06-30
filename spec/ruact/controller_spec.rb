@@ -204,8 +204,11 @@ module Ruact
     end
 
     describe "#ruact_html_shell" do
-      # vite_tags requires Rails.env — stub it so we can test the shell structure.
-      before { allow(controller).to receive(:vite_tags).and_return("") }
+      # Story 14.2 — the entry `<script>` tags are emitted by the mixed-in
+      # ViewHelper#ruact_vite_tags (which needs Rails.env / a live Vite probe).
+      # Stub it to "" so we test the shell structure + the __FLIGHT_DATA script
+      # (still emitted by ruact_js_assets) in isolation.
+      before { allow(controller).to receive(:ruact_vite_tags).and_return("") }
 
       let(:payload) { "0:[\"$\",\"div\",null,{}]\n" }
 
@@ -256,6 +259,12 @@ module Ruact
         end
         let(:csrf_controller) { csrf_test_class.new(fake_request) }
 
+        # Story 14.2 — csrf_controller is a separate instance from `controller`,
+        # so the outer `before` stub does not reach it. Stub its entry-tag
+        # emission too (the real path would hit Rails.root in a non-booted env),
+        # keeping these CSRF tests order-independent.
+        before { allow(csrf_controller).to receive(:ruact_vite_tags).and_return("") }
+
         it "embeds <meta name=\"csrf-token\" content=\"...\"> when the host exposes form_authenticity_token" do
           allow(csrf_controller).to receive(:form_authenticity_token).and_return("test-csrf-token-value")
           html = csrf_controller.send(:ruact_html_shell, payload)
@@ -289,6 +298,40 @@ module Ruact
           html = csrf_controller.send(:ruact_html_shell, payload)
           expect(html).not_to include('name="csrf-token"')
         end
+      end
+    end
+
+    # Story 14.2 (FR104) — the controller's HTML shell delegates its JS asset
+    # markup (entry tags + __FLIGHT_DATA) to the single
+    # Ruact::ViewHelper#ruact_js_assets implementation. No duplicated tag logic;
+    # controller output == a view helper's output (parity guards against drift).
+    describe "ruact_js_assets delegation + parity", :story_14_2 do
+      let(:payload) { "0:[\"$\",\"div\",null,{}]\n" }
+
+      it "delegates the JS block to ruact_js_assets (single implementation)" do
+        allow(controller).to receive(:ruact_js_assets).with(payload).and_return("<!--RUACT-JS-->".html_safe)
+        html = controller.send(:ruact_html_shell, payload)
+        expect(html).to include("<!--RUACT-JS-->")
+        expect(controller).to have_received(:ruact_js_assets).with(payload)
+      end
+
+      it "emits markup byte-identical to a standalone view helper (no drift)" do
+        allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new("production"))
+        manifest_entry = { "file" => "bootstrap-xyz789.js" }
+        allow(controller).to receive(:vite_manifest_entry).and_return(manifest_entry)
+
+        view = Object.new
+        view.extend(Ruact::ViewHelper)
+        allow(view).to receive(:vite_manifest_entry).and_return(manifest_entry)
+
+        expect(controller.send(:ruact_js_assets, payload)).to eq(view.ruact_js_assets(payload))
+      end
+
+      it "exposes ruact_js_assets as PRIVATE on the controller (never a routable action)", :aggregate_failures do
+        expect(controller.class.public_method_defined?(:ruact_js_assets)).to be false
+        expect(controller.class.private_method_defined?(:ruact_js_assets)).to be true
+        # __ruact_component__ is likewise demoted so it is not exposed as an action.
+        expect(controller.class.public_method_defined?(:__ruact_component__)).to be false
       end
     end
   end

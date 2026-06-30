@@ -14,12 +14,18 @@ module Ruact
     # 3. Injects the React root div into app/views/layouts/application.html.erb
     # 4. Creates app/javascript/components/.keep
     # 5. Creates vite.config.js (or shows manual instructions if one exists)
-    # 6. Creates app/javascript/application.jsx (or skips if one exists)
-    # 7. Runs `npm install` so JavaScript dependencies are ready (FR101);
+    # 6. Runs `npm install` so JavaScript dependencies are ready (FR101);
     #    skippable via --skip-npm.
     #
+    # Story 14.2 (FR104) — the generator no longer writes a bootstrap entry into
+    # the user's tree. ruact's React entry is served as the virtual module
+    # `virtual:ruact/bootstrap` by the bundled Vite plugin (the generated
+    # `vite.config` input points at it), so a fresh install leaves
+    # `app/javascript/` with only the user's `components/` (plus the gitignored,
+    # typed `.ruact/server-functions.ts`).
+    #
     # Run: rails generate ruact:install
-    class InstallGenerator < Rails::Generators::Base
+    class InstallGenerator < Rails::Generators::Base # rubocop:disable Metrics/ClassLength
       source_root File.expand_path("templates", __dir__)
 
       desc "Installs ruact into the current Rails application"
@@ -116,11 +122,15 @@ module Ruact
       def create_vite_config
         vite_config_file = Pathname(destination_root).join("vite.config.js")
 
-        if vite_config_file.exist?
+        # `--force` must actually regenerate (the message below promises it). The
+        # guard skips the template ONLY when the file exists AND force was not
+        # passed; with --force we fall through to `template`, which overwrites.
+        if vite_config_file.exist? && !options[:force]
           say_status "notice", "vite.config.js already exists — add the plugin manually:", :yellow
           say "  1. At the top of vite.config.js, add:"
           say "       import ruact from '#{Ruact.vite_plugin_path}';"
           say "  2. In the plugins array, add: ruact()"
+          say "  3. Set build.rollupOptions.input to '#{Ruact.bootstrap_virtual_id}'"
           say ""
           say "  Re-run `rails generate ruact:install --force` to overwrite vite.config.js."
         else
@@ -128,8 +138,28 @@ module Ruact
         end
       end
 
-      def create_javascript_entry
-        template "application.jsx.tt", "app/javascript/application.jsx"
+      # Story 14.2 (FR104, AC7) — an app upgrading from the earlier layout still
+      # has app/javascript/{application.jsx,flight-client.js,ruact-router.js} on
+      # disk. The generator never deletes user files, so it prints the exact
+      # manual steps to reach the hidden-plumbing layout — otherwise the app is
+      # left half-wired, with the stale entry shadowing the virtual bootstrap.
+      # No-op on a fresh install (none of those files exist).
+      def advise_plumbing_migration
+        stale = legacy_plumbing_files
+        return if stale.empty?
+
+        say_status "notice", "earlier ruact layout detected — finish the Story 14.2 migration:", :yellow
+        say ""
+        say "  ruact's bootstrap entry + Flight runtime are now hidden behind the"
+        say "  virtual module '#{Ruact.bootstrap_virtual_id}' (served from the gem)."
+        say "  Remove these now-obsolete files so they don't shadow the virtual entry:"
+        stale.each { |f| say "    - delete #{f}" }
+        say ""
+        say "  Then set your vite.config build input to '#{Ruact.bootstrap_virtual_id}'"
+        say "  (or re-run with --force to regenerate vite.config.js), and let the"
+        say "  controller's HTML shell — or the `ruact_js_assets` view helper in your"
+        say "  layout — emit the entry <script> tags."
+        say ""
       end
 
       # Story 14.1 (FR101) — install JavaScript dependencies so a fresh app is
@@ -187,6 +217,17 @@ module Ruact
       end
 
       private
+
+      # Story 14.2 (AC7) — the earlier-layout plumbing files that must be removed
+      # from the user's tree (the bootstrap entry + the per-app runtime copies).
+      # Returns the relative paths that currently exist under destination_root.
+      def legacy_plumbing_files
+        %w[
+          app/javascript/application.jsx
+          app/javascript/flight-client.js
+          app/javascript/ruact-router.js
+        ].select { |rel| File.exist?(Pathname(destination_root).join(rel)) }
+      end
 
       # The stubbable seam (AC#6): the literal shell-out lives here, isolated
       # so the generator spec can assert/stub it without invoking real npm or

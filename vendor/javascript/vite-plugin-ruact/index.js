@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { installServerFunctionsHooks } from "./server-functions-codegen.mjs";
 
 /**
@@ -45,6 +46,23 @@ import { installServerFunctionsHooks } from "./server-functions-codegen.mjs";
 export const REGISTRY_VIRTUAL_ID = "virtual:ruact/registry";
 const RESOLVED_REGISTRY_ID = "\0" + REGISTRY_VIRTUAL_ID;
 
+// Story 14.2 (FR104) — the bootstrap virtual module. The React entry that boots
+// the app used to be written into every app as `app/javascript/application.jsx`
+// (ruact plumbing interleaved with the user's components). It is now served as a
+// virtual module from gem-shipped source (`runtime/bootstrap.jsx`), so a fresh
+// install leaves `app/javascript/` with ONLY the user's `components/`. The
+// generated `vite.config` input is `virtual:ruact/bootstrap`; the gem's
+// `ruact_js_assets` view helper targets the same id (dev `<script src>` →
+// `/@id/__x00__virtual:ruact/bootstrap`; prod Vite-manifest key
+// `virtual:ruact/bootstrap`). Mirrors REGISTRY_VIRTUAL_ID exactly.
+export const BOOTSTRAP_VIRTUAL_ID = "virtual:ruact/bootstrap";
+const RESOLVED_BOOTSTRAP_ID = "\0" + BOOTSTRAP_VIRTUAL_ID;
+
+// The gem-shipped runtime sources the virtual bootstrap pulls in. Resolved
+// against THIS file so the absolute specifiers the bootstrap imports always
+// point at the gem copy, regardless of the app's cwd.
+const RUNTIME_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "runtime");
+
 export default function ruact(options = {}) {
   const {
     componentsDir = "app/javascript/components",
@@ -61,9 +79,10 @@ export default function ruact(options = {}) {
       root = config.root;
     },
 
-    // Story 10.1b — resolve the auto-registry virtual module id.
+    // Story 10.1b / 14.2 — resolve ruact's virtual module ids.
     resolveId(id) {
       if (id === REGISTRY_VIRTUAL_ID) return RESOLVED_REGISTRY_ID;
+      if (id === BOOTSTRAP_VIRTUAL_ID) return RESOLVED_BOOTSTRAP_ID;
       return null;
     },
 
@@ -74,6 +93,9 @@ export default function ruact(options = {}) {
     // (no re-normalization → zero drift with what the gem resolves).
     load(id) {
       if (id === RESOLVED_REGISTRY_ID) return generateRegistrySource(manifest);
+      // Story 14.2 — serve the gem-shipped bootstrap source, with its relative
+      // runtime imports rewritten to absolute fs specifiers (see below).
+      if (id === RESOLVED_BOOTSTRAP_ID) return generateBootstrapSource();
       return null;
     },
 
@@ -256,6 +278,33 @@ export function generateRegistrySource(manifest) {
   lines.push("const MODULE_REGISTRY = {", ...props, "};", "export default MODULE_REGISTRY;", "");
 
   return lines.join("\n");
+}
+
+// Story 14.2 (FR104) — render the virtual bootstrap source from the gem-shipped
+// `runtime/bootstrap.jsx`. A `load` hook returns module TEXT whose relative
+// imports resolve against the resolved id (`\0virtual:ruact/bootstrap`), which
+// is NOT a filesystem path — so `./flight-client.js` / `./ruact-router.js`
+// would fail. We rewrite those two specifiers to ABSOLUTE fs specifiers into the
+// gem `runtime/` dir (the same technique `generateRegistrySource` uses via
+// `toImportSpecifier`). The bare `react` / `react-dom/client` specifiers and the
+// `virtual:ruact/registry` id are left untouched — Vite resolves them from the
+// app root (so React comes from the USER's node_modules: one React instance).
+export function generateBootstrapSource(runtimeDir = RUNTIME_DIR) {
+  const src = fs.readFileSync(path.join(runtimeDir, "bootstrap.jsx"), "utf8");
+  const abs = (name) => toImportSpecifier(path.join(runtimeDir, name));
+  // Rewrite EVERY `from './<runtime>.js'` import specifier to its absolute fs
+  // path. Matching the quoted `from '...'` form (not the bare filename) avoids
+  // hitting prose mentions of the file in comments, and the global regex
+  // tolerates either quote style. The replacement is supplied as a function so a
+  // `$` in the absolute path is never treated as a replacement pattern.
+  const rewrite = (code, name) => {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return code.replace(
+      new RegExp(`from\\s+(['"])\\./${escaped}\\1`, "g"),
+      () => `from '${abs(name)}'`,
+    );
+  };
+  return rewrite(rewrite(src, "flight-client.js"), "ruact-router.js");
 }
 
 // A bundler import specifier for an absolute fs path. Vite/Rollup resolve
