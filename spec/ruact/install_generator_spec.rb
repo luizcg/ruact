@@ -467,6 +467,20 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
       end
     end
 
+    describe "--pretend dry run", :aggregate_failures do
+      # Thor's `run` returns nil under --pretend (the command is previewed, not
+      # executed) — that must NOT be misread as an npm failure.
+      it "treats a pretend run as a no-op, not an npm failure" do
+        gen = build_generator(app_root, { pretend: true })
+        allow(gen).to receive_messages(npm_on_path?: true, run_npm_install: nil)
+
+        run_output = capture_stdout { gen.install_javascript_dependencies }
+
+        expect(gen.instance_variable_get(:@npm_outcome)).to eq(:pretend)
+        expect(run_output).not_to match(/did not complete|reported a failure/i)
+      end
+    end
+
     describe "npm not on PATH (AC#5)", :aggregate_failures do
       it "does not raise, skips the seam, and prints an actionable message naming --skip-npm" do
         gen = build_generator(app_root)

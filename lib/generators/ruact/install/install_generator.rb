@@ -151,11 +151,13 @@ module Ruact
         end
 
         # Thor's `run` returns false on a non-zero exit (Rails generators set
-        # exit_on_failure? = false, so a failed `npm install` does NOT raise) —
-        # branch on that so the post-install message never claims deps are
-        # installed when npm actually failed (AC#3).
-        if run_npm_install
-          @npm_outcome = :installed
+        # exit_on_failure? = false, so a failed `npm install` does NOT raise),
+        # and nil under `--pretend` (the command is previewed, not executed).
+        # Branch so the post-install message never claims deps are installed
+        # when npm failed (AC#3) — and a `--pretend` dry run is NOT misreported
+        # as a failure (run_npm_install still prints the previewed command).
+        if run_npm_install || options[:pretend]
+          @npm_outcome = options[:pretend] ? :pretend : :installed
         else
           @npm_outcome = :failed
           warn_npm_install_failed
