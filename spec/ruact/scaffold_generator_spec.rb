@@ -174,7 +174,10 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(form).not_to include("useQuery")
     end
 
-    it "DeleteDialog: a controlled AlertDialog (onConfirm-driven), contract-carrying", :aggregate_failures do
+    # Story 14.4 (D4) — the DEFAULT DeleteDialog is now agnostic (native <dialog>,
+    # no shadcn AlertDialog import). Story 14.5 re-points this at the --shadcn path.
+    it "DeleteDialog: a controlled AlertDialog (onConfirm-driven), contract-carrying", :aggregate_failures,
+       skip: "Story 14.5 re-points this at the --shadcn path" do
       # Story 10.4 — the dialog no longer imports destroyPost (the List's
       # RowActions owns the destroy call + provides onConfirm); the dialog is a
       # controlled shadcn AlertDialog.
@@ -209,7 +212,11 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
   # client-side sort + a client-driven search query.
   # ---------------------------------------------------------------------------
 
-  describe "List is a shadcn table primitive (Story 10.2b AC1, AC2, AC3, AC4)" do
+  # Story 14.4 (D4) — the DEFAULT List is now design-system-agnostic (native
+  # <table>, no shadcn primitives). Story 14.5 re-points this whole block at the
+  # --shadcn path; the agnostic equivalents are covered in the :story_14_4 block.
+  describe "List is a shadcn table primitive (Story 10.2b AC1, AC2, AC3, AC4)",
+           skip: "Story 14.5 re-points this at the --shadcn path" do
     before { run_scaffold(%w[Post title:string body:text published:boolean views:integer published_at:datetime]) }
 
     let(:list) { read("app/javascript/components/PostList.tsx") }
@@ -426,7 +433,11 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
     end
   end
 
-  describe "--javascript List forfeits the TS-only markers (Story 10.2 AC6)" do
+  # Story 14.4 (D4) — asserts the shadcn `table` primitive in the default .jsx
+  # output; the default is now agnostic. Story 14.5 re-points this at --shadcn
+  # (the agnostic --javascript List is covered in the :story_14_4 block).
+  describe "--javascript List forfeits the TS-only markers (Story 10.2 AC6)",
+           skip: "Story 14.5 re-points this at the --shadcn path" do
     before { run_scaffold(%w[Post title:string published:boolean], javascript: true) }
 
     let(:list) { read("app/javascript/components/PostList.jsx") }
@@ -459,7 +470,12 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
   # `npm run typecheck` against the ambient shadcn stubs) MUST stay
   # byte-identical to the generator's live output, or the typecheck proves
   # nothing. This canonical model exercises every column kind.
-  describe "generated .tsx matches the isolated-typecheck fixture (Story 10.2 AC7)" do
+  # Story 14.4 (D4) — the shadcn PostList fixture is preserved on disk byte-for-
+  # byte but is no longer the default output; Story 14.5 re-points this byte-
+  # equality check at the --shadcn path. The agnostic fixture equality is in the
+  # :story_14_4 block.
+  describe "generated .tsx matches the isolated-typecheck fixture (Story 10.2 AC7)",
+           skip: "Story 14.5 re-points this at the --shadcn path" do
     let(:fixture_path) { "vendor/javascript/vite-plugin-ruact/type-tests/scaffold/PostList.tsx" }
 
     it "PostList.tsx render stays byte-identical to the committed type-test fixture" do
@@ -481,7 +497,11 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
   # Story 10.3 — shadcn Form with controls mapped by attribute type.
   # ---------------------------------------------------------------------------
 
-  describe "Form maps each attribute type to its shadcn control (Story 10.3 AC1, AC2)" do
+  # Story 14.4 (D4) — the DEFAULT Form now renders native controls, not shadcn.
+  # Story 14.5 re-points this at --shadcn; the agnostic control mapping is covered
+  # in the :story_14_4 block.
+  describe "Form maps each attribute type to its shadcn control (Story 10.3 AC1, AC2)",
+           skip: "Story 14.5 re-points this at the --shadcn path" do
     before do
       run_scaffold(%w[Post title:string body:text published:boolean views:integer
                       published_on:date published_at:datetime author:references])
@@ -581,14 +601,21 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(form).to include('authorOptions: "optional"')
     end
 
-    it "submits through a shadcn <Button type=\"submit\"> and a <Button> Cancel link", :aggregate_failures do
+    # Story 14.4 (D4) — the agnostic Form submits via a native <button>/<a>, not a
+    # shadcn <Button>. Story 14.5 re-points this at the --shadcn path.
+    it "submits through a shadcn <Button type=\"submit\"> and a <Button> Cancel link", :aggregate_failures,
+       skip: "Story 14.5 re-points this at the --shadcn path" do
       expect(form).to include('<Button type="submit" disabled={saving}>')
       expect(form).to include('<Button variant="outline" asChild>')
     end
   end
 
   describe "Form imports only the primitives the model's controls need (Story 10.3)" do
-    it "a string-only model imports Input but not Textarea/Switch/Select", :aggregate_failures do
+    # Story 14.4 (D4) — the agnostic Form imports no @/components/ui primitives at
+    # all; the conditional-import predicates are a shadcn concern. Story 14.5
+    # re-points this at the --shadcn path.
+    it "a string-only model imports Input but not Textarea/Switch/Select", :aggregate_failures,
+       skip: "Story 14.5 re-points this at the --shadcn path" do
       run_scaffold(%w[Tag name:string])
       form = read("app/javascript/components/TagForm.tsx")
       expect(form).to include('import { Input } from "@/components/ui/input"')
@@ -645,7 +672,11 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
     end
   end
 
-  describe "--javascript Form forfeits TS markers but keeps the shadcn controls (Story 10.3 AC7)" do
+  # Story 14.4 (D4) — the default --javascript Form keeps native controls, not
+  # shadcn. Story 14.5 re-points this at --shadcn; the agnostic --javascript Form
+  # is covered in the :story_14_4 block.
+  describe "--javascript Form forfeits TS markers but keeps the shadcn controls (Story 10.3 AC7)",
+           skip: "Story 14.5 re-points this at the --shadcn path" do
     before { run_scaffold(%w[Post title:string body:text published:boolean author:references], javascript: true) }
 
     let(:form) { read("app/javascript/components/PostForm.jsx") }
@@ -672,7 +703,11 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
   # AC8 — the committed Form fixture (type-checked by `npm run typecheck` against
   # the ambient shadcn stubs) MUST stay byte-identical to the generator's live
   # output. This canonical model exercises every shadcn control kind.
-  describe "generated Form .tsx matches the isolated-typecheck fixture (Story 10.3 AC8)" do
+  # Story 14.4 (D4) — the shadcn PostForm fixture is preserved on disk but is no
+  # longer the default output; Story 14.5 re-points this byte-equality check at
+  # the --shadcn path. The agnostic fixture equality is in the :story_14_4 block.
+  describe "generated Form .tsx matches the isolated-typecheck fixture (Story 10.3 AC8)",
+           skip: "Story 14.5 re-points this at the --shadcn path" do
     let(:fixture_path) { "vendor/javascript/vite-plugin-ruact/type-tests/scaffold/PostForm.tsx" }
 
     it "PostForm.tsx render stays byte-identical to the committed type-test fixture" do
@@ -694,7 +729,11 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
   # Story 10.4 — controlled shadcn AlertDialog delete + List rewiring.
   # ---------------------------------------------------------------------------
 
-  describe "DeleteDialog is a controlled shadcn AlertDialog (Story 10.4 AC1, AC3, AC4, AC6)" do
+  # Story 14.4 (D4) — the DEFAULT DeleteDialog is now agnostic (native <dialog>).
+  # Story 14.5 re-points this whole block at the --shadcn path; the agnostic
+  # dialog is covered in the :story_14_4 block.
+  describe "DeleteDialog is a controlled shadcn AlertDialog (Story 10.4 AC1, AC3, AC4, AC6)",
+           skip: "Story 14.5 re-points this at the --shadcn path" do
     before { run_scaffold(%w[Post title:string body:text published:boolean]) }
 
     let(:dialog) { read("app/javascript/components/PostDeleteDialog.tsx") }
@@ -816,7 +855,11 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(list).to include("function deleteErrorMessage(error: unknown): string | undefined")
     end
 
-    it "drives the trigger from BOTH layouts (inline ≥ md + overflow menu < md) (AC5)", :aggregate_failures do
+    # Story 14.4 (D4) — the agnostic List keeps a single inline actions cell (the
+    # responsive shadcn DropdownMenu overflow is deferred to the --shadcn path).
+    # Story 14.5 re-points this at --shadcn.
+    it "drives the trigger from BOTH layouts (inline ≥ md + overflow menu < md) (AC5)", :aggregate_failures,
+       skip: "Story 14.5 re-points this at the --shadcn path" do
       expect(list).to include("onClick={() => setOpen(true)}")
       expect(list).to include("md:flex")
       expect(list).to include("md:hidden")
@@ -870,7 +913,11 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
     end
   end
 
-  describe "--javascript DeleteDialog forfeits TS markers but keeps the AlertDialog (Story 10.4 AC6)" do
+  # Story 14.4 (D4) — the default --javascript DeleteDialog is now a native
+  # <dialog>, not a shadcn AlertDialog. Story 14.5 re-points this at --shadcn;
+  # the agnostic --javascript dialog is covered in the :story_14_4 block.
+  describe "--javascript DeleteDialog forfeits TS markers but keeps the AlertDialog (Story 10.4 AC6)",
+           skip: "Story 14.5 re-points this at the --shadcn path" do
     before { run_scaffold(%w[Post title:string published:boolean], javascript: true) }
 
     let(:dialog) { read("app/javascript/components/PostDeleteDialog.jsx") }
@@ -889,7 +936,11 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
   # against the ambient @/components/ui/alert-dialog stub) MUST stay byte-identical
   # to the generator's live output. Uses the SAME model as the PostList fixture so
   # their `PostRow` shapes line up when PostList imports ./PostDeleteDialog.
-  describe "generated DeleteDialog .tsx matches the isolated-typecheck fixture (Story 10.4 AC7)" do
+  # Story 14.4 (D4) — the shadcn PostDeleteDialog fixture is preserved on disk but
+  # is no longer the default output; Story 14.5 re-points this byte-equality check
+  # at the --shadcn path. The agnostic fixture equality is in the :story_14_4 block.
+  describe "generated DeleteDialog .tsx matches the isolated-typecheck fixture (Story 10.4 AC7)",
+           skip: "Story 14.5 re-points this at the --shadcn path" do
     let(:fixture_path) { "vendor/javascript/vite-plugin-ruact/type-tests/scaffold/PostDeleteDialog.tsx" }
 
     it "PostDeleteDialog.tsx render stays byte-identical to the committed type-test fixture" do
@@ -1015,6 +1066,16 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
   # validate the installed shadcn major against `shadcn_compatible_versions`.
   # Fixture-driven (no network — the real `npx shadcn` install is Story 10.7).
   # ---------------------------------------------------------------------------
+  # Story 14.4 (D3/D4) — the shadcn pre-flight is DE-REGISTERED as a Thor command
+  # (`remove_command :check_shadcn_setup`), so a fresh default run never invokes
+  # it and never aborts. But the method + the whole ShadcnPreflight machinery are
+  # preserved DORMANT (byte-unchanged) for Story 14.5's --shadcn opt-in — so this
+  # block STAYS GREEN, now proving the dormant machinery still works when invoked
+  # directly (detection / guidance messages / version-compat). Only the TWO
+  # examples that assert the in-file shadcn BANNER are neutralized: the banner
+  # lived in the shadcn templates, and `create_components` now renders the
+  # agnostic templates (no banner) on every path — Story 14.5 re-points the banner
+  # examples at the --shadcn templates.
   describe "shadcn dependency pre-flight (Story 10.5)", :story_10_5 do
     # The default model exercises input (string), textarea (text), switch
     # (boolean). The add-list is DERIVED from the generator, so these fixtures
@@ -1192,7 +1253,11 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
         expect(File).to exist(File.join(app_root, "app/controllers/posts_controller.rb"))
       end
 
-      it "emits a prominent banner in each component naming the unresolved imports + the fix", :aggregate_failures do
+      # Story 14.4 (D4) — the in-file shadcn banner lives in the shadcn templates;
+      # `create_components` now renders the AGNOSTIC templates (no banner) on every
+      # path. Story 14.5 re-points this at the --shadcn templates.
+      it "emits a prominent banner in each component naming the unresolved imports + the fix", :aggregate_failures,
+         skip: "Story 14.5 re-points this at the --shadcn path" do
         run_full_scaffold(default_args, skip_shadcn_check: true)
         %w[PostList PostForm PostDeleteDialog].each do |name|
           component = read("app/javascript/components/#{name}.tsx")
@@ -1209,7 +1274,10 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
         expect(read("app/javascript/components/PostList.tsx")).not_to include("--skip-shadcn-check")
       end
 
-      it "the banner never prints a bare add when ui/ files exist but components.json is absent" do
+      # Story 14.4 (D4) — banner-rendering example; the agnostic templates carry no
+      # banner. Story 14.5 re-points this at the --shadcn path.
+      it "the banner never prints a bare add when ui/ files exist but components.json is absent",
+         skip: "Story 14.5 re-points this at the --shadcn path" do
         # Regression (Codex R1): state is :missing (no config) → missing list is
         # empty → the banner falls back to the FULL required add-list.
         write_ui_components(full_required)
@@ -1378,7 +1446,12 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
         expect(order).to eq(%i[resource controller])
       end
 
-      it "is declared after check_shadcn_setup so a missing-shadcn abort prevents delegation (zero partial)" do
+      # Story 14.4 (D3) — `check_shadcn_setup` is no longer a command run before
+      # the delegation (it is relocated dormant into `no_tasks`); there is no
+      # missing-shadcn abort on the default path. Story 14.5 re-points this at the
+      # --shadcn-gated pre-flight ordering.
+      it "is declared after check_shadcn_setup so a missing-shadcn abort prevents delegation (zero partial)",
+         skip: "Story 14.5 re-points this at the --shadcn-gated pre-flight" do
         line = ->(name) { described_class.instance_method(name).source_location.last }
         expect(line.call(:check_shadcn_setup)).to be < line.call(:generate_rails_resource)
       end
@@ -1464,6 +1537,189 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
         spec_file = read("spec/requests/posts_spec.rb")
         expect(spec_file).to include(%("Accept" => "application/json"))
         expect(spec_file).not_to include("resource's empty stub")
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Story 14.4 (FR103) — the DEFAULT scaffold emits design-system-AGNOSTIC
+  # components (plain native HTML, Rails-default CSS, no shadcn/ui, no Tailwind)
+  # and the mandatory shadcn pre-flight no longer aborts the default path. The
+  # shadcn machinery (ShadcnPreflight, --skip-shadcn-check, the shadcn templates,
+  # the 10.x shadcn coverage) is preserved DORMANT for Story 14.5's --shadcn
+  # opt-in. These specs are the gem CI gate (AC5/AC7).
+  # ---------------------------------------------------------------------------
+  describe "agnostic default components + no mandatory pre-flight (Story 14.4 — FR103)", :story_14_4 do
+    # The canonical model exercises every control kind (text, textarea, checkbox,
+    # number, date, datetime, references → native <select>). It is also the model
+    # the committed agnostic type-test fixtures are generated from.
+    let(:canonical) do
+      %w[Post title:string body:text published:boolean views:integer
+         published_on:date published_at:datetime author:references]
+    end
+
+    describe "AC1/AC3 — fresh app, no shadcn → completes, no pre-flight command, no abort" do
+      it "does NOT register check_shadcn_setup as a generator command (relocated dormant, D3)", :aggregate_failures do
+        # `check_shadcn_setup` moved into `no_tasks`: it is no longer a Thor
+        # command (nothing runs it on the default path) but the method is
+        # preserved on the class so Story 14.5 can re-promote it behind --shadcn.
+        expect(described_class.commands).not_to have_key("check_shadcn_setup")
+        expect(described_class.commands).to have_key("create_components")
+        expect(described_class.commands).to have_key("generate_rails_resource")
+        expect(build(%w[Post title:string]).respond_to?(:check_shadcn_setup)).to be(true)
+      end
+
+      it "preserves the dormant ShadcnPreflight machinery + --skip-shadcn-check option (D3)", :aggregate_failures do
+        # The pre-flight helpers stay mixed in (read-only, never invoked); the
+        # bypass option stays declared. Story 14.5 re-gates them behind --shadcn.
+        gen = build(%w[Post title:string])
+        expect(gen).to respond_to(:run_shadcn_preflight!)
+        expect(gen).to respond_to(:required_shadcn_components)
+        expect(described_class.class_options).to have_key(:skip_shadcn_check)
+      end
+
+      it "scaffolds a fresh app with NO components.json / ui/* present — no abort, all three components written",
+         :aggregate_failures do
+        # The before-hook tmpdir has only config/routes.rb — no shadcn anywhere.
+        expect { run_scaffold(canonical) }.not_to raise_error
+        %w[PostList PostForm PostDeleteDialog].each do |name|
+          expect(File).to exist(File.join(app_root, "app/javascript/components/#{name}.tsx"))
+        end
+      end
+    end
+
+    describe "AC1/AC5 — the default output imports NO @/components/ui path (grep gate)" do
+      before { run_scaffold(canonical) }
+
+      it "none of the three rendered component bodies references @/components/ui or Tailwind utilities",
+         :aggregate_failures do
+        %w[PostList PostForm PostDeleteDialog].each do |name|
+          body = read("app/javascript/components/#{name}.tsx")
+          expect(body).not_to include("@/components/ui"),
+                              "#{name}.tsx still imports a shadcn @/components/ui path"
+          # no shadcn primitive elements leak into the agnostic markup
+          expect(body).not_to include("<Table>")
+          expect(body).not_to include("<Switch")
+          expect(body).not_to include("<AlertDialog")
+          expect(body).not_to include("<DropdownMenu")
+          # no Tailwind utility classes (Tailwind is absent in a bare rails new app)
+          expect(body).not_to include('className="')
+        end
+      end
+
+      it "List uses a native <table> + native search/sort/actions, keeping the data flow (AC2)",
+         :aggregate_failures do
+        list = read("app/javascript/components/PostList.tsx")
+        # native table primitives, not shadcn
+        expect(list).to include("<table>")
+        expect(list).to include("<thead>")
+        expect(list).to include("<tbody>")
+        # the data flow is preserved verbatim: server-functions imports + useQuery
+        expect(list).to include(
+          'import { search as searchPosts, destroyPost, useQuery } from "@/.ruact/server-functions"'
+        )
+        expect(list).to include("useQuery<PostRow[]>(searchPosts, { q: q.trim() })")
+        expect(list).to include("function compareRows(")
+        # per-row Edit link + native Delete button driving the controlled dialog
+        expect(list).to include("<a href={`/posts/${record.id}/edit`}>Edit</a>")
+        expect(list).to include('<button type="button" onClick={() => setOpen(true)}>')
+        expect(list).to include("<PostDeleteDialog")
+        # boolean cell → plain "Yes"/"No" text (no <Badge>)
+        expect(list).to include('<td>{row.published ? "Yes" : "No"}</td>')
+        expect(list).not_to include("<Badge")
+      end
+
+      it "Form binds every attribute type to a native control with inline FR98 errors (AC2)",
+         :aggregate_failures do
+        form = read("app/javascript/components/PostForm.tsx")
+        expect(form).to match(/<input\s+id="title"\s+type="text"/m)
+        expect(form).to match(/<textarea\s+id="body"/m)
+        expect(form).to include('type="checkbox"')
+        expect(form).to include("onChange={(e) => setPublished(e.target.checked)}")
+        expect(form).to match(/<input\s+id="views"\s+type="number"/m)
+        expect(form).to match(/<input\s+id="published_on"\s+type="date"/m)
+        expect(form).to match(/<input\s+id="published_at"\s+type="datetime-local"/m)
+        # references → native <select> over the controller-provided options prop
+        expect(form).to include("<select")
+        expect(form).to include("{authorOptions.map((option) => (")
+        expect(form).to include("<option key={option.id} value={String(option.id)}>")
+        # the FR98 keyed errors round-trip is preserved
+        expect(form).to include("const [errors, setErrors] = useState<Record<string, string[]>>({});")
+        %w[title body published views author_id].each do |col|
+          expect(form).to include(%(errorsFor("#{col}")))
+        end
+      end
+
+      it "DeleteDialog is a controlled native <dialog> preserving the { ok, error? } contract (AC2)",
+         :aggregate_failures do
+        dialog = read("app/javascript/components/PostDeleteDialog.tsx")
+        expect(dialog).to include("<dialog ref={dialogRef}")
+        expect(dialog).to include("node.showModal();")
+        expect(dialog).to include("node.close();")
+        # the controlled contract survives unchanged
+        expect(dialog).to include("open: boolean;")
+        expect(dialog).to include("onOpenChange: (open: boolean) => void;")
+        expect(dialog).to include("onConfirm: () => Promise<{ ok: boolean; error?: string }>;")
+        expect(dialog).to include("const res = await onConfirm();")
+        expect(dialog).to include('setError(res.error ?? "Could not delete this post")')
+        # the title copy + cannot-be-undone body, on native elements
+        expect(dialog).to include('<h2>Delete “{String(post.title ?? "")}”?</h2>')
+        expect(dialog).to include("This action cannot be undone.")
+        # no native <form method="dialog"> (would race onConfirm); buttons only
+        expect(dialog).not_to include("<form")
+        expect(dialog).not_to include('method="')
+      end
+    end
+
+    describe "AC4 — FR99/FR100 preserved in the agnostic .tsx; --javascript stays untyped .jsx" do
+      it "the typed .tsx carries type <Model>Row + __ruactContract on all three", :aggregate_failures do
+        run_scaffold(canonical)
+        %w[PostList PostForm PostDeleteDialog].each do |name|
+          body = read("app/javascript/components/#{name}.tsx")
+          expect(body).to start_with(%("use client";))
+          expect(body).to include("type PostRow = {")
+          expect(body).to include("export const __ruactContract")
+        end
+        # the contract prop sets, exactly as the shadcn variants declared
+        expect(read("app/javascript/components/PostList.tsx")).to include('posts: "required"')
+        expect(read("app/javascript/components/PostForm.tsx")).to include('initial: "optional"')
+        expect(read("app/javascript/components/PostDeleteDialog.tsx")).to include('post: "required"')
+      end
+
+      it "--javascript strips the FR99 type + FR100 contract and emits the forfeits banner", :aggregate_failures do
+        run_scaffold(%w[Post title:string body:text published:boolean author:references], javascript: true)
+        %w[PostList PostForm PostDeleteDialog].each do |name|
+          expect(File).to exist(File.join(app_root, "app/javascript/components/#{name}.jsx"))
+          expect(File).not_to exist(File.join(app_root, "app/javascript/components/#{name}.tsx"))
+          body = read("app/javascript/components/#{name}.jsx")
+          expect(body).not_to include("__ruactContract")
+          expect(body).not_to include("type PostRow")
+          expect(body).to include("forfeits")
+          # still agnostic — no shadcn even in .jsx
+          expect(body).not_to include("@/components/ui")
+        end
+      end
+    end
+
+    describe "AC5 — the agnostic fixtures stay byte-identical to the generator's live output" do
+      # The committed fixtures under type-tests/scaffold/agnostic/ are what
+      # `npm run typecheck` type-checks against the agnostic ambient stub (NO
+      # @/components/ui module). If the generator drifts, the typecheck would be
+      # proving stale code — so assert byte-equality, mirroring the 10.x pattern.
+      %w[PostList PostForm PostDeleteDialog].each do |name|
+        it "#{name}.tsx render stays byte-identical to the committed agnostic fixture" do
+          run_scaffold(canonical)
+          generated = read("app/javascript/components/#{name}.tsx")
+          fixture_path = "vendor/javascript/vite-plugin-ruact/type-tests/scaffold/agnostic/#{name}.tsx"
+          fixture = File.read(File.expand_path("../../#{fixture_path}", __dir__))
+
+          expect(generated).to eq(fixture),
+                               "Generated #{name}.tsx drifted from the agnostic type-test fixture. " \
+                               "Regenerate it: rails g ruact:scaffold Post title:string body:text " \
+                               "published:boolean views:integer published_on:date published_at:datetime " \
+                               "author:references → copy app/javascript/components/#{name}.tsx over " \
+                               "#{fixture_path}, then re-run `npm run typecheck`."
+        end
       end
     end
   end

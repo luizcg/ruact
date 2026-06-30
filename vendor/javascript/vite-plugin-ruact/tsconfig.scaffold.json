@@ -14,5 +14,7 @@
     "types": [],
     "baseUrl": "."
   },
-  "include": ["type-tests/scaffold/**/*.ts", "type-tests/scaffold/**/*.tsx"]
+  "include": ["type-tests/scaffold/**/*.ts", "type-tests/scaffold/**/*.tsx"],
+  "//exclude": "Story 14.4 — the agnostic fixtures live under type-tests/scaffold/agnostic/ with their OWN ambient stub (NO @/components/ui module). Exclude them here so the shadcn ambient (this config) and the agnostic ambient never merge into one compilation; they are type-checked separately via tsconfig.scaffold-agnostic.json.",
+  "exclude": ["type-tests/scaffold/agnostic/**"]
 }

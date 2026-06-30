@@ -1,0 +1,18 @@
+{
+  "//": "Story 14.4 (AC5) — type-check the GENERATED design-system-AGNOSTIC `<Model>{List,Form,DeleteDialog}.tsx` fixtures in ISOLATION against an ambient stub (type-tests/scaffold/agnostic/ambient.d.ts) that declares ONLY React + @/.ruact/server-functions and NO @/components/ui/* module. A stray shadcn import would fail to resolve → the typecheck goes red, proving the agnostic default needs zero design-system resolution. Mirrors tsconfig.scaffold.json (the shadcn isolated typecheck), but scoped to the agnostic subdir so the two ambient stubs never merge. Run via `npm run typecheck`.",
+  "//noImplicitAny": "Relaxed ONLY here: native-element event handler params (e.g. `onChange={(e) => …}`) get no contextual type from the permissive ambient `JSX.IntrinsicElements` (no @types/react / lib:dom). The load-bearing types — PostRow, the typed `search` accessor (FR99), the required `posts` prop, the controlled DeleteDialog contract — are all EXPLICITLY annotated and stay fully checked under `strict`.",
+  "compilerOptions": {
+    "strict": true,
+    "noImplicitAny": false,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "preserve",
+    "exactOptionalPropertyTypes": false,
+    "types": [],
+    "baseUrl": "."
+  },
+  "include": ["type-tests/scaffold/agnostic/**/*.ts", "type-tests/scaffold/agnostic/**/*.tsx"]
+}

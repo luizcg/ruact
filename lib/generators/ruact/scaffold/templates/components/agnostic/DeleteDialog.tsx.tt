@@ -1,0 +1,92 @@
+"use client";
+
+<% unless typescript? -%>
+// Generated with --javascript: this .jsx file forfeits the FR99 typed server
+// boundary and the FR100 call-site contract (both TS-only). Re-run without
+// --javascript for the typed .tsx variant.
+<% end -%>
+// <%= class_name %> delete confirmation — a CONTROLLED, DESIGN-SYSTEM-AGNOSTIC
+// dialog (Story 14.4 / FR103) built on the native HTML <dialog> element — NO
+// shadcn/ui, NO Radix, NO Tailwind. The PARENT owns `open` and provides
+// `onConfirm`; this component owns only its local submit/error state and drives
+// the native modal off the `open` prop (`showModal()`/`close()`). `onConfirm`
+// performs the destroy<%= class_name %> call (DELETE /<%= plural_name %>/:id) and reports `{ ok, error? }`:
+//
+//   - on success the parent closes the dialog (in-list removal of the row, or the
+//     server-driven `$redirect` the runtime follows) — no URL is built here;
+//   - on failure the dialog STAYS OPEN and shows the message inline (the gem's
+//     structured-error shape: the exception message in development, the generic
+//     server message in production).
+//
+// There is no Rails `method=delete` fallback — the destroy<%= class_name %> action is the
+// only path. Cancel closes via `onOpenChange(false)`; Escape fires the native
+// `close` event, which we forward to `onOpenChange(false)` to keep the parent
+// state in sync. (The shadcn AlertDialog styling is the opt-in `--shadcn` path —
+// Story 14.5.)
+import { useEffect, useRef, useState } from "react";
+<% if typescript? -%>
+
+type <%= class_name %>Row = { <%= ts_row_fields %> };
+
+// FR100 — opt-in call-site contract. INERT for this component: it is rendered
+// only from <%= class_name %>List.tsx (JSX), never from an ERB `<Component>` tag,
+// so the 13.5 preprocess validator never runs against it. Retained for uniformity
+// with the List/Form.
+export const __ruactContract = {
+  props: { <%= singular_name %>: "required" },
+};
+<% end -%>
+
+export function <%= class_name %>DeleteDialog({
+  open,
+  onOpenChange,
+  <%= singular_name %>,
+  onConfirm,
+}<% if typescript? %>: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  <%= singular_name %>: <%= class_name %>Row;
+  onConfirm: () => Promise<{ ok: boolean; error?: string }>;
+}<% end %>) {
+  const dialogRef = useRef<% if typescript? %><HTMLDialogElement | null><% end %>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<% if typescript? %><string | null><% end %>(null);
+
+  // Drive the native <dialog> modal state off the controlled `open` prop.
+  useEffect(() => {
+    const node = dialogRef.current;
+    if (!node) return;
+    if (open && !node.open) node.showModal();
+    if (!open && node.open) node.close();
+  }, [open]);
+
+  async function handleConfirm(event<% if typescript? %>: { preventDefault: () => void }<% end %>) {
+    // The PARENT closes the dialog (via onOpenChange) only after a successful
+    // delete; a failure leaves it open with the message.
+    event.preventDefault();
+    setError(null);
+    setSubmitting(true);
+    const res = await onConfirm();
+    setSubmitting(false);
+    if (!res.ok) {
+      setError(res.error ?? "Could not delete this <%= human_name.downcase %>");
+    }
+  }
+
+  return (
+    <dialog ref={dialogRef} onClose={() => onOpenChange(false)}>
+      <h2>Delete “{String(<%= singular_name %>.<%= display_attribute %> ?? "")}”?</h2>
+      <p>This action cannot be undone.</p>
+      {error && <p>{error}</p>}
+      <p>
+        <button type="button" onClick={() => onOpenChange(false)} disabled={submitting}>
+          Cancel
+        </button>
+        {" "}
+        <button type="button" onClick={handleConfirm} disabled={submitting}>
+          {submitting ? "Deleting…" : "Delete"}
+        </button>
+      </p>
+    </dialog>
+  );
+}
