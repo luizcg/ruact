@@ -609,6 +609,39 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         .to include("app/javascript/.ruact/server-functions.ts")
     end
 
+    describe "migration advisory for an earlier-layout app (AC7 — no half-wired state)" do
+      def capture_stdout
+        original = $stdout
+        $stdout = StringIO.new
+        yield
+        $stdout.string
+      ensure
+        $stdout = original
+      end
+
+      it "prints the exact delete steps + virtual entry when stale plumbing files exist", :aggregate_failures do
+        %w[application.jsx flight-client.js ruact-router.js].each do |f|
+          FileUtils.mkdir_p(File.join(app_root, "app/javascript"))
+          File.write(File.join(app_root, "app/javascript", f), "// stale\n")
+        end
+        gen = build_generator(app_root)
+        output = capture_stdout { gen.advise_plumbing_migration }
+
+        expect(output).to match(/earlier ruact layout detected/i)
+        expect(output).to include("delete app/javascript/application.jsx")
+        expect(output).to include("delete app/javascript/flight-client.js")
+        expect(output).to include("delete app/javascript/ruact-router.js")
+        expect(output).to include(described_class.bootstrap_virtual_id)
+        expect(output).to include("ruact_js_assets")
+      end
+
+      it "is a no-op on a fresh install (no stale files → no notice)" do
+        gen = build_generator(app_root)
+        output = capture_stdout { gen.advise_plumbing_migration }
+        expect(output).to be_empty
+      end
+    end
+
     describe "vite.config input targets the virtual bootstrap (AC3 — single source of truth)" do
       let(:template_path) do
         File.expand_path("../../lib/generators/ruact/install/templates/vite.config.js.tt", __dir__)

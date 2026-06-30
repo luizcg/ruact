@@ -25,7 +25,7 @@ module Ruact
     # typed `.ruact/server-functions.ts`).
     #
     # Run: rails generate ruact:install
-    class InstallGenerator < Rails::Generators::Base
+    class InstallGenerator < Rails::Generators::Base # rubocop:disable Metrics/ClassLength
       source_root File.expand_path("templates", __dir__)
 
       desc "Installs ruact into the current Rails application"
@@ -127,11 +127,36 @@ module Ruact
           say "  1. At the top of vite.config.js, add:"
           say "       import ruact from '#{Ruact.vite_plugin_path}';"
           say "  2. In the plugins array, add: ruact()"
+          say "  3. Set build.rollupOptions.input to '#{Ruact.bootstrap_virtual_id}'"
           say ""
           say "  Re-run `rails generate ruact:install --force` to overwrite vite.config.js."
         else
           template "vite.config.js.tt", "vite.config.js"
         end
+      end
+
+      # Story 14.2 (FR104, AC7) — an app upgrading from the earlier layout still
+      # has app/javascript/{application.jsx,flight-client.js,ruact-router.js} on
+      # disk. The generator never deletes user files, so it prints the exact
+      # manual steps to reach the hidden-plumbing layout — otherwise the app is
+      # left half-wired, with the stale entry shadowing the virtual bootstrap.
+      # No-op on a fresh install (none of those files exist).
+      def advise_plumbing_migration
+        stale = legacy_plumbing_files
+        return if stale.empty?
+
+        say_status "notice", "earlier ruact layout detected — finish the Story 14.2 migration:", :yellow
+        say ""
+        say "  ruact's bootstrap entry + Flight runtime are now hidden behind the"
+        say "  virtual module '#{Ruact.bootstrap_virtual_id}' (served from the gem)."
+        say "  Remove these now-obsolete files so they don't shadow the virtual entry:"
+        stale.each { |f| say "    - delete #{f}" }
+        say ""
+        say "  Then set your vite.config build input to '#{Ruact.bootstrap_virtual_id}'"
+        say "  (or re-run with --force to regenerate vite.config.js), and let the"
+        say "  controller's HTML shell — or the `ruact_js_assets` view helper in your"
+        say "  layout — emit the entry <script> tags."
+        say ""
       end
 
       # Story 14.1 (FR101) — install JavaScript dependencies so a fresh app is
@@ -189,6 +214,17 @@ module Ruact
       end
 
       private
+
+      # Story 14.2 (AC7) — the earlier-layout plumbing files that must be removed
+      # from the user's tree (the bootstrap entry + the per-app runtime copies).
+      # Returns the relative paths that currently exist under destination_root.
+      def legacy_plumbing_files
+        %w[
+          app/javascript/application.jsx
+          app/javascript/flight-client.js
+          app/javascript/ruact-router.js
+        ].select { |rel| File.exist?(Pathname(destination_root).join(rel)) }
+      end
 
       # The stubbable seam (AC#6): the literal shell-out lives here, isolated
       # so the generator spec can assert/stub it without invoking real npm or
