@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+# Boots the ruact development stack — both processes from Procfile.dev:
+#   web:  bin/rails server   (HTML shell + Flight stream + server functions)
+#   vite: npm run dev        (Vite dev server: React/HMR + the bundled ruact plugin)
+# A ruact app needs BOTH: Rails serves the HTML/Flight payload, Vite serves the
+# React client assets. `bin/dev` runs them together via foreman.
+
+if ! gem list foreman -i --silent; then
+  echo "Installing foreman..."
+  gem install foreman
+fi
+
+export PORT="${PORT:-3000}"
+
+exec foreman start -f Procfile.dev "$@"
