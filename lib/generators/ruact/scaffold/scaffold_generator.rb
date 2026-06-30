@@ -112,28 +112,39 @@ module Ruact
       # Documentation anchor referenced by the unknown-type error message (AC4).
       DOCS_POINTER = "https://github.com/luizcg/ruact/blob/main/website/docs/api/scaffold.md#attribute-types"
 
-      # Story 10.5 (AC1, AC2, AC4) — the shadcn/ui dependency PRE-FLIGHT, declared
-      # FIRST so it runs (and can abort) before any file-producing task writes.
-      # Detect the host's shadcn state (complete / missing / partial) and either
-      # proceed (complete), or print copy-pasteable `npx shadcn` guidance and
-      # ABORT before any write (missing / partial), unless `--skip-shadcn-check`
+      # Story 10.5 (AC1, AC2, AC4) — the shadcn/ui dependency PRE-FLIGHT: detect
+      # the host's shadcn state (complete / missing / partial) and either proceed
+      # (complete), or print copy-pasteable `npx shadcn` guidance and ABORT
+      # before any write (missing / partial), unless `--skip-shadcn-check`
       # bypasses the abort. The generator NEVER auto-runs `npx`/`npm` (AC4 — no
       # surprising network/install behavior, critical for CI). Aborting via
-      # `raise Thor::Error` mirrors `assert_supported_attribute_types!`: the CLI
-      # prints the message without a Ruby backtrace and exits non-zero, and
-      # because this is the FIRST task, no controller/route/view/component/spec
-      # is ever written (zero partial state).
+      # `raise Thor::Error` mirrors `assert_supported_attribute_types!`.
+      #
+      # Story 14.4 (FR103, D3) — DE-REGISTERED as a Thor command (see
+      # `remove_command` below) so NO path invokes it on the default run: a fresh
+      # app with no shadcn now scaffolds the design-system-agnostic components
+      # without aborting. The method (and the whole {ShadcnPreflight} machinery +
+      # the `--skip-shadcn-check` option) is preserved byte-near and DORMANT;
+      # Story 14.5 re-promotes it to a `--shadcn`-gated command via the matching
+      # `create_command`. Kept defined here (not deleted) so 14.5 reactivates it
+      # with a one-line change and zero reconstruction.
       def check_shadcn_setup
         run_shadcn_preflight! # {ShadcnPreflight} — detection / guidance / abort
       end
+      # Story 14.4 (D3) — drop the pre-flight from the default Thor task list
+      # while keeping the method defined above (dormant). Story 14.5 re-adds the
+      # `--shadcn`-gated command.
+      remove_command :check_shadcn_setup
 
       # Story 14.3 (FR102, AC1) — delegate model + migration + the `resources`
       # route + host-framework test stubs to Rails' own public `resource`
       # generator, THEN let the overlay tasks below win where they intersect
       # (the controller force-overwrites resource's bare one; the route guard
-      # no-ops on the already-drawn line). Declared right after the shadcn
-      # pre-flight so a missing-shadcn abort still prevents any delegation
-      # (zero partial state) AND so it runs BEFORE every overlay task. The real
+      # no-ops on the already-drawn line). Declared FIRST among the command
+      # tasks (Story 14.4 de-registered the shadcn pre-flight {#check_shadcn_setup}
+      # from the default path) so it runs BEFORE every overlay task. A bad input
+      # still fails loud at `parse_attributes!`, before any task runs (zero
+      # partial state). The real
       # sub-generator call lives behind the stubbable `invoke_rails_resource`
       # seam (mirroring Story 14.1's `run_npm_install`) — the unit specs stub it
       # (a bare `mktmpdir` is not a booted Rails app, so a real `invoke
@@ -203,12 +214,18 @@ module Ruact
         end
       end
 
+      # Story 14.4 (FR103) — the DEFAULT scaffold emits design-system-AGNOSTIC
+      # components (plain native HTML, Rails-default CSS, no shadcn/ui, no
+      # Tailwind) from the `components/agnostic/` templates. The shadcn-coupled
+      # `components/List.tsx.tt` / `Form.tsx.tt` / `DeleteDialog.tsx.tt` templates
+      # are preserved byte-unchanged but DORMANT — Story 14.5 re-points
+      # `create_components` at them behind an explicit `--shadcn` opt-in flag.
       def create_components
-        template "components/List.tsx.tt",
+        template "components/agnostic/List.tsx.tt",
                  File.join("app/javascript/components", "#{class_name}List.#{component_ext}")
-        template "components/Form.tsx.tt",
+        template "components/agnostic/Form.tsx.tt",
                  File.join("app/javascript/components", "#{class_name}Form.#{component_ext}")
-        template "components/DeleteDialog.tsx.tt",
+        template "components/agnostic/DeleteDialog.tsx.tt",
                  File.join("app/javascript/components", "#{class_name}DeleteDialog.#{component_ext}")
       end
 

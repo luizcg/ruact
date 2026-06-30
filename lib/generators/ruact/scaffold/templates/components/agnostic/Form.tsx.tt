@@ -1,0 +1,174 @@
+"use client";
+
+<% unless typescript? -%>
+// Generated with --javascript: this .jsx file forfeits the FR99 typed server
+// boundary and the FR100 call-site contract (both TS-only). Re-run without
+// --javascript for the typed .tsx variant.
+<% end -%>
+// <%= class_name %> form — shared by `new` (initial == null) and `edit` (initial
+// == the serialized record). DESIGN-SYSTEM-AGNOSTIC (Story 14.4 / FR103): every
+// field renders a plain, native HTML control mapped to its attribute type
+// (input / textarea / checkbox / select), labelled, with the FR98 server error
+// surfaced inline beneath it — NO shadcn/ui, NO Tailwind, browser-default styling.
+// Submits through the v2 action accessors: create<%= class_name %> (POST /<%= plural_name %>) or
+// update<%= class_name %> (PATCH /<%= plural_name %>/:id). On success the controller drives navigation
+// SERVER-SIDE via `redirect_to` (the `$redirect` the runtime follows) — there is
+// no client URL building here. On a validation failure the SAME response carries
+// the FR98 attribute-keyed `errors` map, surfaced inline per field (the client
+// stays on the form). (The richer shadcn controls are the opt-in `--shadcn` path
+// — Story 14.5.)
+//
+// Client-side validation is intentionally NOT here — it is server-only with a
+// full round-trip. The controlled `useState` keeps this dependency-free.
+import { useState<% if typescript? %>, type FormEvent<% end %> } from "react";
+import { create<%= class_name %>, update<%= class_name %> } from "@/.ruact/server-functions";
+<% if typescript? -%>
+
+type <%= class_name %>Row = { <%= ts_row_fields %> };
+
+// FR100 — opt-in call-site contract: `initial` is OPTIONAL (`new` omits it,
+// `edit` passes the serialized record); each `references` field adds an
+// optional `<name>Options` prop the new/edit views pass. A typo'd prop name
+// fails at preprocess time instead of silently arriving as `undefined`.
+export const __ruactContract = {
+  props: <%= form_contract_props %>,
+};
+<% end -%>
+
+export function <%= class_name %>Form({ <%= form_props_params.join(", ") %> }<% if typescript? %>: <%= form_props_type %><% end %>) {
+<% scaffold_attributes.each do |attr| -%>
+<% if attr.boolean? -%>
+  const [<%= attr.js_var %>, <%= attr.js_setter %>] = useState(Boolean(initial?.<%= attr.column_name %> ?? false));
+<% else -%>
+  // String-valued state: native controls bind `string` (numbers + refs arrive on
+  // the row as numbers, so coerce here). The controller re-coerces.
+  const [<%= attr.js_var %>, <%= attr.js_setter %>] = useState(String(initial?.<%= attr.column_name %> ?? ""));
+<% end -%>
+<% end -%>
+  // FR98 — keyed { [attr]: string[] }; `{}` means "no errors" (always present).
+  const [errors, setErrors] = useState<% if typescript? %><Record<string, string[]>><% end %>({});
+  const [saving, setSaving] = useState(false);
+
+  async function handleSubmit(event<% if typescript? %>: FormEvent<% end %>) {
+    event.preventDefault();
+    setSaving(true);
+    setErrors({});
+
+    const payload = {
+<% scaffold_attributes.each do |attr| -%>
+      <%= attr.column_name %>: <%= attr.js_var %>,
+<% end -%>
+    };
+
+    // On success the server returns a `$redirect` and the runtime navigates
+    // away (the code below does not run); on a validation failure we get the
+    // keyed `errors` map back instead.
+    const result = (initial != null
+      ? await update<%= class_name %>({ id: initial.id, ...payload })
+      : await create<%= class_name %>(payload))<% if typescript? %> as { errors?: Record<string, string[]> } | null<% end %>;
+
+    setSaving(false);
+    if (result && result.errors) {
+      setErrors(result.errors);
+    }
+  }
+
+  const errorsFor = (attr<% if typescript? %>: string<% end %>) => errors[attr] ?? [];
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <h1>{initial != null ? `Edit <%= human_name %> #${initial.id}` : "New <%= human_name %>"}</h1>
+
+      {errorsFor("base").length > 0 && (
+        <ul>
+          {errorsFor("base").map((message, i) => (
+            <li key={i}>{message}</li>
+          ))}
+        </ul>
+      )}
+<% scaffold_attributes.each do |attr| -%>
+<% if attr.reference? -%>
+
+      <p>
+        <label htmlFor="<%= attr.column_name %>"><%= attr.name.humanize %></label>
+        {/* Eager native <select> of controller-provided options (ivar → `<%= attr.options_prop %>`
+            prop). For a parent set larger than the generator's REFERENCE_OPTIONS_LIMIT,
+            swap this for a server-search combobox backed by a parent-options read
+            query (opt-in follow-up — that query is out of this scaffold's scope
+            since the parent model isn't scaffolded here). */}
+        <select
+          id="<%= attr.column_name %>"
+          value={<%= attr.js_var %>}
+          onChange={(e) => <%= attr.js_setter %>(e.target.value)}
+          disabled={saving}
+        >
+          <option value="">Select <%= attr.name.humanize.downcase %></option>
+          {<%= attr.options_prop %>.map((option) => (
+            <option key={option.id} value={String(option.id)}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        {errorsFor("<%= attr.column_name %>").map((message, i) => (
+          <span key={i}>{message}</span>
+        ))}
+      </p>
+<% elsif attr.control == :checkbox -%>
+
+      <p>
+        <label htmlFor="<%= attr.column_name %>">
+          <input
+            id="<%= attr.column_name %>"
+            type="checkbox"
+            checked={<%= attr.js_var %>}
+            onChange={(e) => <%= attr.js_setter %>(e.target.checked)}
+            disabled={saving}
+          />
+          {" "}<%= attr.column_name.humanize %>
+        </label>
+        {errorsFor("<%= attr.column_name %>").map((message, i) => (
+          <span key={i}>{message}</span>
+        ))}
+      </p>
+<% elsif attr.control == :textarea -%>
+
+      <p>
+        <label htmlFor="<%= attr.column_name %>"><%= attr.column_name.humanize %></label>
+        <textarea
+          id="<%= attr.column_name %>"
+          value={<%= attr.js_var %>}
+          onChange={(e) => <%= attr.js_setter %>(e.target.value)}
+          disabled={saving}
+        />
+        {errorsFor("<%= attr.column_name %>").map((message, i) => (
+          <span key={i}>{message}</span>
+        ))}
+      </p>
+<% else -%>
+
+      <p>
+        <label htmlFor="<%= attr.column_name %>"><%= attr.column_name.humanize %></label>
+        <input
+          id="<%= attr.column_name %>"
+          type="<%= native_input_type(attr) %>"
+          value={<%= attr.js_var %>}
+          onChange={(e) => <%= attr.js_setter %>(e.target.value)}
+          disabled={saving}
+        />
+        {errorsFor("<%= attr.column_name %>").map((message, i) => (
+          <span key={i}>{message}</span>
+        ))}
+      </p>
+<% end -%>
+<% end -%>
+
+      <p>
+        <button type="submit" disabled={saving}>
+          {saving ? "Saving…" : initial != null ? "Update <%= human_name.downcase %>" : "Create <%= human_name.downcase %>"}
+        </button>
+        {" "}
+        <a href={initial != null ? `/<%= plural_name %>/${initial.id}` : "/<%= plural_name %>"}>Cancel</a>
+      </p>
+    </form>
+  );
+}

@@ -94,6 +94,20 @@ module Ruact
           else "text"
           end
         end
+
+        # Story 14.4 (FR103) — the native `<input type>` for the agnostic Form's
+        # input-family controls, mapped off the agnostic `ScaffoldAttribute#control`
+        # (TYPE_MAP) rather than the shadcn `shadcn_control`. boolean (`:checkbox`)
+        # and `references` (a `<select>`) are dispatched separately in the agnostic
+        # template, so this only resolves the text/number/date/datetime inputs.
+        def native_input_type(attr)
+          case attr.control
+          when :number then "number"
+          when :date then "date"
+          when :datetime then "datetime-local"
+          else "text"
+          end
+        end
       end
     end
   end
