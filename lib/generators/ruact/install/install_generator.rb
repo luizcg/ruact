@@ -167,15 +167,17 @@ module Ruact
       # so the literal `bin/dev` boots BOTH processes a ruact app needs: Rails
       # (HTML shell + Flight + server functions) and the Vite dev server
       # (React/HMR + the bundled ruact plugin). Without these, `bin/dev` would
-      # start only Rails and the React assets would never be served. Each file is
-      # guarded (skip if present unless --force) so re-running the generator — or
-      # running it in an app that already has a `bin/dev` (e.g. from jsbundling) —
-      # never clobbers the developer's launcher. `bin/dev` is made executable.
+      # start only Rails and the React assets would never be served.
+      #
+      # `Procfile.dev` is guarded (skip if present unless --force) — the app may
+      # already drive its own processes through one. `bin/dev`, however, is
+      # OWNED by ruact: see `install_foreman_launcher`. `bin/dev` is made
+      # executable.
       def create_launch_files
         create_guarded_file "Procfile.dev", "Procfile.dev.tt"
-        create_guarded_file "bin/dev", "dev.tt"
+        install_foreman_launcher
         # Ensure bin/dev is executable whether we just wrote it or it pre-existed
-        # (a skipped, customized launcher should still be runnable).
+        # (a skipped, already-foreman launcher should still be runnable).
         chmod "bin/dev", 0o755, verbose: false if Pathname(destination_root).join("bin/dev").exist?
       end
 
@@ -258,6 +260,80 @@ module Ruact
       end
 
       private
+
+      # Story 14.6 (live clean-room fix) — ruact OWNS `bin/dev`. The foreman
+      # launcher is load-bearing: it boots BOTH Rails AND the Vite dev server,
+      # and Vite is what writes `public/react-client-manifest.json`. Rails'
+      # own `rails new` writes a `bin/dev` that starts ONLY `rails server` (no
+      # Vite) — leaving that default in place makes a freshly-installed ruact
+      # app 500 on its first render: Vite never runs, the manifest is never
+      # written, and the boot-time manifest load leaves `Ruact.manifest` nil.
+      # So unlike `Procfile.dev` (guarded), `bin/dev` is OVERWRITTEN to take
+      # ownership — the same posture Story 14.3's scaffold takes over the
+      # controller.
+      #
+      # The overwrite is skipped only when the existing `bin/dev` already drives
+      # `Procfile.dev` through a process manager (our foreman launcher from a
+      # prior install, or the developer's own foreman/overmind/hivemind setup).
+      # That keeps re-running the generator idempotent (invariant 14.1 — no
+      # churn on the second run) and never clobbers a deliberate launcher, while
+      # still replacing the inert Rails default. Detection is content-based but
+      # deliberately STRICTER than a bare `include?("Procfile.dev")` (Codex R1/R2):
+      # neither a comment nor an `echo`/`printf` that merely names a foreman
+      # command may suppress the overwrite, or the Rails-default-only-
+      # `rails server` failure mode could survive. See {#foreman_launcher?}.
+      def install_foreman_launcher
+        bin_dev = Pathname(destination_root).join("bin/dev")
+
+        if bin_dev.exist? && foreman_launcher?(bin_dev.read) && !options[:force]
+          say_status "skip", "bin/dev already drives Procfile.dev (foreman launcher present)", :yellow
+          return
+        end
+
+        template "dev.tt", "bin/dev", force: true
+      end
+
+      # Procfile process managers a foreman-style `bin/dev` may exec. A launcher
+      # that INVOKES one of these against `Procfile.dev` already boots Vite (via
+      # the same Procfile.dev ruact writes), so it is ruact-compatible.
+      PROCFILE_RUNNERS = %w[foreman overmind hivemind node-foreman invoker].freeze
+      private_constant :PROCFILE_RUNNERS
+
+      # A line that INVOKES a known runner as its COMMAND — the runner is the
+      # command word, after an optional leading `exec` / `bundle exec`. Anchoring
+      # to command position (Codex R3) is what distinguishes a real launcher from
+      # a mere mention: an `echo`/`printf`, an assignment like
+      # `MSG="… foreman …"`, or a `command -v foreman` test never has the runner
+      # in command position, and the trailing shell-token boundary `(?=\s|$)`
+      # requires the runner to be a COMPLETE command word — so neither
+      # `beforeman` nor `foreman-old`/`foreman.bak` is mistaken for the real
+      # `foreman` (Codex R5). (A launcher prefixed with bare env assignments —
+      # e.g. `PORT=3000 foreman …` — does NOT match and is simply re-owned by
+      # ruact's equivalent foreman launcher; harmless, and far safer than the
+      # inverse false-positive that would let the Rails-only `bin/dev` survive.)
+      RUNNER_INVOCATION = Regexp.new(
+        '\A\s*(?:exec\s+|bundle\s+exec\s+)*' \
+        "(?:#{Regexp.union(PROCFILE_RUNNERS).source})" \
+        '(?=\s|$)'
+      )
+      private_constant :RUNNER_INVOCATION
+
+      # True when `content` actually invokes a Procfile runner against
+      # `Procfile.dev` — some non-comment line both invokes a known runner
+      # ({RUNNER_INVOCATION}) AND references `Procfile.dev`. The Rails-default
+      # `bin/dev` runs only `rails server`, invokes no runner, and is correctly
+      # taken over.
+      def foreman_launcher?(content)
+        content.each_line.any? do |line|
+          # Drop any inline shell comment (` #…`) before inspecting the line, so
+          # `Procfile.dev` named only in a trailing comment is not mistaken for a
+          # real argument (Codex R4) — e.g. `foreman --version # …Procfile.dev`.
+          code = line.strip.split(/\s+#/, 2).first.to_s
+          next false if code.empty? || code.start_with?("#")
+
+          code.match?(RUNNER_INVOCATION) && code.include?("Procfile.dev")
+        end
+      end
 
       # Story 14.6 — write a template only when the destination does not already
       # exist (unless --force), printing a skip notice otherwise. Keeps

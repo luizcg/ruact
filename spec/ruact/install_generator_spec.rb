@@ -774,14 +774,109 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(body).to include("gem install foreman")
       end
 
-      it "is idempotent + non-clobbering — a second run does not overwrite a customized bin/dev" do
+      # Live clean-room fix — ruact OWNS bin/dev. `rails new` (Rails 8.x) writes a
+      # bin/dev that starts ONLY `rails server`; left in place, Vite never runs,
+      # the client manifest is never written, and the first render 500s. So the
+      # foreman launcher must TAKE OVER that default rather than skip it.
+      it "takes ownership of the Rails-default bin/dev (one that only runs rails server)" do
+        FileUtils.mkdir_p(File.join(app_root, "bin"))
+        File.write(File.join(app_root, "bin/dev"),
+                   %(#!/usr/bin/env ruby\nexec "./bin/rails", "server", *ARGV\n))
+
         gen = build_generator(app_root)
         silently { gen.create_launch_files }
-        File.write(File.join(app_root, "bin/dev"), "#!/usr/bin/env bash\n# customized\n")
+
+        body = File.read(File.join(app_root, "bin/dev"))
+        expect(body).to include("foreman start -f Procfile.dev")
+        expect(body).not_to include('exec "./bin/rails", "server"')
+        expect(File).to be_executable(File.join(app_root, "bin/dev"))
+      end
+
+      # Idempotency (invariant 14.1) — re-running the generator must not churn:
+      # the bin/dev we wrote already drives Procfile.dev, so the second run skips
+      # it. (Detection is content-based: our launcher execs foreman against
+      # Procfile.dev, so a marker comment proves the file was NOT rewritten.)
+      it "is idempotent — a second run does not rewrite the foreman bin/dev it already wrote" do
+        gen = build_generator(app_root)
+        silently { gen.create_launch_files }
+
+        marked = "#{File.read(File.join(app_root, 'bin/dev'))}# ruact-idempotency-marker\n"
+        File.write(File.join(app_root, "bin/dev"), marked)
 
         gen2 = build_generator(app_root)
         silently { gen2.create_launch_files }
-        expect(File.read(File.join(app_root, "bin/dev"))).to include("# customized")
+        expect(File.read(File.join(app_root, "bin/dev"))).to include("# ruact-idempotency-marker")
+      end
+
+      # Codex R1 — detection must be stricter than a bare `include?("Procfile.dev")`:
+      # a bin/dev that only NAMES Procfile.dev in a comment (but still runs only
+      # `rails server`) must be taken over, not skipped — else the 500 survives.
+      it "takes ownership when Procfile.dev appears only in a comment (runs only rails server)" do
+        FileUtils.mkdir_p(File.join(app_root, "bin"))
+        File.write(File.join(app_root, "bin/dev"),
+                   %(#!/usr/bin/env ruby\n# TODO: switch to Procfile.dev + foreman one day\n) +
+                   %(exec "./bin/rails", "server", *ARGV\n))
+
+        gen = build_generator(app_root)
+        silently { gen.create_launch_files }
+
+        body = File.read(File.join(app_root, "bin/dev"))
+        expect(body).to include("foreman start -f Procfile.dev")
+        expect(body).not_to include('exec "./bin/rails", "server"')
+      end
+
+      # Codex R2/R3 — a runner name that is only MENTIONED (not invoked as the
+      # command) must not count as a real launcher. Each of these bin/dev files
+      # names "foreman"/"Procfile.dev" somewhere but actually runs `rails server`,
+      # so each must be taken over (else the original 500 survives).
+      [
+        ["echoed in a string",
+         %(echo "switch to: foreman start -f Procfile.dev"\nexec ./bin/rails server\n)],
+        ["assigned to a variable",
+         %(MSG="switch to: foreman start -f Procfile.dev"\nexec ./bin/rails server\n)],
+        ["named inside a command -v test",
+         %(if command -v foreman; then echo Procfile.dev; fi\nexec ./bin/rails server\n)],
+        ["referenced only in an inline comment on a runner diagnostic line",
+         %(foreman --version # TODO: switch to Procfile.dev\nexec ./bin/rails server\n)],
+        ["a runner look-alike command (not the real runner)",
+         %(foreman-old start -f Procfile.dev\nexec ./bin/rails server\n)]
+      ].each do |(label, contents)|
+        it "takes ownership when a foreman command is only #{label} (still runs rails server)" do
+          FileUtils.mkdir_p(File.join(app_root, "bin"))
+          File.write(File.join(app_root, "bin/dev"), "#!/usr/bin/env bash\n#{contents}")
+
+          gen = build_generator(app_root)
+          silently { gen.create_launch_files }
+
+          body = File.read(File.join(app_root, "bin/dev"))
+          expect(body).to include("gem install foreman")
+          expect(body).not_to include("exec ./bin/rails server")
+        end
+      end
+
+      # Non-clobbering of a DELIBERATE foreman launcher — a developer's own
+      # bin/dev that already drives Procfile.dev is ruact-compatible and is left
+      # untouched (it boots Vite via the same Procfile.dev ruact writes).
+      it "leaves a developer's existing foreman launcher (driving Procfile.dev) untouched" do
+        FileUtils.mkdir_p(File.join(app_root, "bin"))
+        File.write(File.join(app_root, "bin/dev"),
+                   "#!/usr/bin/env bash\n# my custom launcher\nexec foreman start -f Procfile.dev\n")
+
+        gen = build_generator(app_root)
+        silently { gen.create_launch_files }
+        expect(File.read(File.join(app_root, "bin/dev"))).to include("# my custom launcher")
+      end
+
+      it "overwrites even a Procfile.dev-driving launcher under --force" do
+        FileUtils.mkdir_p(File.join(app_root, "bin"))
+        File.write(File.join(app_root, "bin/dev"),
+                   "#!/usr/bin/env bash\n# my custom launcher\nexec foreman start -f Procfile.dev\n")
+
+        gen = build_generator(app_root, { force: true })
+        silently { gen.create_launch_files }
+        body = File.read(File.join(app_root, "bin/dev"))
+        expect(body).to include("gem install foreman")
+        expect(body).not_to include("# my custom launcher")
       end
     end
 
