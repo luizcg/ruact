@@ -122,7 +122,10 @@ module Ruact
       def create_vite_config
         vite_config_file = Pathname(destination_root).join("vite.config.js")
 
-        if vite_config_file.exist?
+        # `--force` must actually regenerate (the message below promises it). The
+        # guard skips the template ONLY when the file exists AND force was not
+        # passed; with --force we fall through to `template`, which overwrites.
+        if vite_config_file.exist? && !options[:force]
           say_status "notice", "vite.config.js already exists — add the plugin manually:", :yellow
           say "  1. At the top of vite.config.js, add:"
           say "       import ruact from '#{Ruact.vite_plugin_path}';"

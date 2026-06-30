@@ -661,6 +661,22 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         generated = File.read(File.join(app_root, "vite.config.js"))
         expect(generated).to include("input: '#{described_class.bootstrap_virtual_id}'")
       end
+
+      it "leaves an existing vite.config.js untouched when --force is not passed" do
+        File.write(File.join(app_root, "vite.config.js"), "// hand-written\n")
+        gen = build_generator(app_root)
+        silently { gen.create_vite_config }
+        expect(File.read(File.join(app_root, "vite.config.js"))).to eq("// hand-written\n")
+      end
+
+      it "actually regenerates an existing vite.config.js under --force (the message's promise)", :aggregate_failures do
+        File.write(File.join(app_root, "vite.config.js"), "// hand-written\n")
+        gen = build_generator(app_root, { force: true })
+        silently { gen.create_vite_config }
+        regenerated = File.read(File.join(app_root, "vite.config.js"))
+        expect(regenerated).not_to include("hand-written")
+        expect(regenerated).to include("input: '#{described_class.bootstrap_virtual_id}'")
+      end
     end
   end
 end
