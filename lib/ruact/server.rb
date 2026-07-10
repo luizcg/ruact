@@ -104,6 +104,16 @@ module Ruact
       before_action :__ruact_set_vary_on_accept!
       after_action  :__ruact_set_vary_on_accept!
 
+      # Story 15.0 (F6) — dev-only legibility warning: an action that registers
+      # validation errors (`ruact_errors(record)`) and then performs an EXPLICIT
+      # render on a function-call request bypasses `default_render`, so the
+      # registered errors silently vanish from the JSON body. The warning names
+      # the opt-out; it never fires on the documented-correct patterns (Bucket-1
+      # page render, redirect on either bucket, the fall-through itself, or an
+      # action that never touches the collector). Log-only — bodies and statuses
+      # are byte-identical in every environment.
+      after_action :__ruact_warn_errors_injection_opt_out!
+
       # Story 8.4 salvage — same registration order as v1 (Pitfall #1): the
       # generic StandardError entry first, the explicit
       # InvalidAuthenticityToken entry second so it wins Rails'
@@ -201,6 +211,12 @@ module Ruact
       # one (see {Ruact::ValidationErrorsCollector::RESERVED_ASSIGN_KEYS}).
       assigns = view_assigns.except(*ValidationErrorsCollector::RESERVED_ASSIGN_KEYS)
 
+      # Story 15.0 (F6) — reaching this branch means ruact itself is producing
+      # the function-call response (fall-through: injection, plain JSON, or
+      # 204), so the opt-out warning must stay silent. Set AFTER `view_assigns`
+      # is captured above so the flag ivar never leaks into the serialized body.
+      @__ruact_function_response_owned = true
+
       # Story 13.3 (FR98, AC3) — when the host opted into the validation-error
       # round-trip (`ruact_errors(@record)` was called this request), inject the
       # collected errors under the reserved JSON key `"errors"` alongside the
@@ -249,6 +265,9 @@ module Ruact
       _ensure_url_is_http_header_safe(location)
       location = _enforce_open_redirect_protection(location, allow_other_host: allow_other_host)
 
+      # Story 15.0 (F6) — a Bucket-2 `redirect_to` is a ruact-owned response
+      # (`$redirect`; registered errors ride flash), not an injection opt-out.
+      @__ruact_function_response_owned = true
       render json: { "$redirect" => __ruact_redirect_path(location) }
     end
 
@@ -288,6 +307,46 @@ module Ruact
       path
     rescue ::URI::InvalidURIError
       url
+    end
+
+    # Story 15.0 (F6) — the dev-only opt-out warning. Fires when ALL hold:
+    # development environment, the request is a function call
+    # ({#__ruact_function_call?}), the collector was touched
+    # (`ruact_errors(record)` ran this request), and the response was produced
+    # by an EXPLICIT host render — i.e. neither {#default_render}'s
+    # function-call branch nor the Bucket-2 {#redirect_to} set
+    # `@__ruact_function_response_owned`. In that shape the registered errors
+    # were silently dropped from the JSON body (the F6 finding).
+    #
+    # The four MUST-NOT-warn guardrails fall out of the predicate:
+    #   (a) Bucket-1 `render :new` — not a function call;
+    #   (b) `redirect_to` on either bucket — Bucket-2 sets the owned flag,
+    #       Bucket-1 is not a function call;
+    #   (c) the fall-through — `default_render` sets the owned flag;
+    #   (d) an untouched collector — `__ruact_errors_touched?` is false.
+    # The exception path never reaches here either: a raise aborts the
+    # after_action chain before this hook runs (`rescue_from` renders outside
+    # it), so a structured error payload is not misread as an opt-out.
+    def __ruact_warn_errors_injection_opt_out!
+      return unless __ruact_development?
+      return unless __ruact_function_call?
+      return unless __ruact_errors_touched?
+      return if @__ruact_function_response_owned
+
+      Rails.logger&.warn(
+        "[ruact] #{self.class.name}##{action_name} called `ruact_errors` and then rendered " \
+        "explicitly on a function-call request — the registered validation errors were NOT " \
+        "injected into the JSON response. Remove the explicit render and let the action fall " \
+        "through (ruact injects `errors` into the body), or surface them on a page render with " \
+        "`errors={ruact_errors}` / carry them through a `redirect_to` (flash)."
+      )
+    end
+
+    # @return [Boolean] true only in a real Rails development environment
+    #   (mirrors {Ruact::ManifestResolver.development?}).
+    def __ruact_development?
+      defined?(Rails) && Rails.respond_to?(:env) && Rails.env.respond_to?(:development?) &&
+        Rails.env.development?
     end
 
     # Raw discriminator — does the request's `Accept` header equal

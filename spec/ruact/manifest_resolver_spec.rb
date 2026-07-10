@@ -107,6 +107,21 @@ module Ruact
         expect { described_class.resolve }.to raise_error(ManifestError, %r{Vite dev server.*bin/dev}m)
       end
 
+      # Story 15.0 (F8) — an error message is a prompt: agents (and humans)
+      # regex-match error text, so the ENGLISH wording and its stable tokens
+      # (`Vite dev server`, `react-client-manifest.json`, `bin/dev`) are pinned.
+      it "raises the ENGLISH message naming the dev-server URL, the manifest path and the bin/dev fix " \
+         "(Story 15.0)", :story_15_0 do
+        allow(Net::HTTP).to receive(:start).and_raise(Errno::ECONNREFUSED)
+        allow(described_class).to receive(:file_path).and_return("/no/such/manifest.json")
+
+        expect { described_class.resolve }.to raise_error(ManifestError) do |error|
+          expect(error.message).to include("[ruact] Vite dev server unreachable at http://localhost:5173")
+          expect(error.message).to include("no react-client-manifest.json found at /no/such/manifest.json")
+          expect(error.message).to include("run `bin/dev`")
+        end
+      end
+
       it "ignores a non-2xx dev-server response and falls back" do
         allow(Net::HTTP).to receive(:start).and_return(Net::HTTPNotFound.new("1.1", "404", "Not Found"))
         allow(described_class).to receive(:file_path).and_return("/no/such/manifest.json")

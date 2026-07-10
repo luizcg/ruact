@@ -79,8 +79,8 @@ module Ruact
       return nil if soft
 
       raise ManifestError, <<~MSG.strip
-        [ruact] Vite dev server inacessível em #{base_url} e nenhum \
-        react-client-manifest.json encontrado em #{file_path} — rode `bin/dev`.
+        [ruact] Vite dev server unreachable at #{base_url} and no \
+        react-client-manifest.json found at #{file_path} — run `bin/dev`.
       MSG
     end
 
