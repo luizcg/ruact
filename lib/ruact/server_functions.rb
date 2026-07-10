@@ -29,6 +29,7 @@ module Ruact
     autoload :ValidationErrors,   "ruact/server_functions/validation_errors"
     autoload :QueryContext, "ruact/server_functions/query_context"
     autoload :QueryDispatch, "ruact/server_functions/query_dispatch"
+    autoload :Introspection, "ruact/server_functions/introspection"
 
     # Story 9.3 / 9.9 — orchestrates the route-driven (v2) codegen. Reads the
     # route table via {RouteSource} + {QuerySource}, writes the version-2 bridge
@@ -55,10 +56,7 @@ module Ruact
     #   `Rails.logger` when Rails is loaded, else nil.
     # @return [Array<Hash>] the exposed v2 entries (actions + queries).
     def self.write_v2_snapshot!(route_set:, root:, logger: default_logger)
-      actions = RouteSource.collect(route_set)
-      queries = QuerySource.collect(route_set)
-      entries = (actions + queries).sort_by { |entry| entry["js_identifier"] }
-      detect_merged_namespace_collisions!(entries)
+      entries = introspect(route_set: route_set)
 
       json_path = root.join("tmp/cache/ruact/server-functions.json")
       ts_path   = root.join("app/javascript/.ruact/server-functions.ts")
@@ -72,6 +70,30 @@ module Ruact
       # action never becomes a callable server function silently.
       names = entries.empty? ? "(none)" : entries.map { |e| e["js_identifier"] }.join(", ")
       logger&.info "[ruact] codegen: exposing #{names}"
+      entries
+    end
+
+    # Story 15.3 (FR107) — the read-only, side-effect-free combine point:
+    # collect mutation actions ({RouteSource}) + read queries ({QuerySource}),
+    # sort by `js_identifier`, and run the merged-namespace collision check —
+    # WITHOUT writing the bridge/TS. Both {.write_v2_snapshot!} (codegen) and
+    # {Ruact::ServerFunctions::Introspection} (`ruact:routes --json`) call THIS,
+    # so what an agent verifies against can never drift from what codegen emits
+    # (single source of truth), and a CI gate can introspect without mutating the
+    # tree. The resolver callables default to real constant resolution; specs
+    # inject lambdas to exercise the derivation without booting controllers.
+    #
+    # @param route_set [#routes] the Rails route set.
+    # @param host_predicate [#call, nil] forwarded to {RouteSource.collect}.
+    # @param overrides_for [#call, nil] forwarded to {RouteSource.collect}.
+    # @param query_class_for [#call, nil] forwarded to {QuerySource.collect}.
+    # @return [Array<Hash>] merged action + query entries (string keys), sorted.
+    # @raise [Ruact::ConfigurationError] on any naming collision.
+    def self.introspect(route_set:, host_predicate: nil, overrides_for: nil, query_class_for: nil)
+      actions = RouteSource.collect(route_set, host_predicate: host_predicate, overrides_for: overrides_for)
+      queries = QuerySource.collect(route_set, query_class_for: query_class_for)
+      entries = (actions + queries).sort_by { |entry| entry["js_identifier"] }
+      detect_merged_namespace_collisions!(entries)
       entries
     end
 

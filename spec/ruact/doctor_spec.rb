@@ -511,6 +511,141 @@ RSpec.describe Ruact::Doctor do
     end
   end
 
+  # --- JSON introspection (Story 15.3, FR107, AC1 + AC3 + AC4) ---
+
+  describe "#as_json (machine-readable report)", :story_15_3 do
+    subject(:doctor) { described_class.new }
+
+    context "when all checks pass" do
+      before do
+        make_manifest
+        make_controller(with_include: true)
+        make_layout(with_sentinel: true)
+        allow(TCPSocket).to receive(:new).and_return(instance_double(TCPSocket, close: nil))
+      end
+
+      it "returns a document that round-trips through JSON.parse", :aggregate_failures do
+        report = doctor.as_json
+        reparsed = JSON.parse(JSON.generate(report))
+        expect(reparsed).to eq(report)
+      end
+
+      it "gates the document with the EXPERIMENTAL schema_version (0)" do
+        expect(doctor.as_json["schema_version"]).to eq(0)
+        expect(doctor.as_json["schema_version"]).to eq(Ruact::Doctor::SCHEMA_VERSION)
+      end
+
+      it "carries every check with name/status/message/remediation keys", :aggregate_failures do
+        checks = doctor.as_json["checks"]
+        expect(checks.map { |c| c["name"] }).to eq(described_class::CHECKS.map(&:to_s))
+        checks.each do |check|
+          expect(check.keys).to contain_exactly("name", "status", "message", "remediation")
+          expect(check["status"]).to be_a(String)
+          expect(check["message"]).to be_a(String)
+        end
+      end
+
+      it "reports top-level status 'pass' and exits-zero semantics" do
+        expect(doctor.as_json["status"]).to eq("pass")
+      end
+
+      it "emits NO prose to stdout (JSON mode is the document only)" do
+        expect { doctor.as_json }.not_to output.to_stdout
+      end
+    end
+
+    context "when a check fails" do
+      before do
+        make_controller(with_include: true)
+        make_layout(with_sentinel: true)
+        allow(TCPSocket).to receive(:new).and_return(instance_double(TCPSocket, close: nil))
+        # manifest is missing → check_manifest fails
+      end
+
+      it "reports top-level status 'fail' (non-zero exit semantics)" do
+        expect(doctor.as_json["status"]).to eq("fail")
+      end
+
+      it "carries the separate machine-readable remediation for the failing check" do
+        manifest = doctor.as_json["checks"].find { |c| c["name"] == "manifest" }
+        expect(manifest["status"]).to eq("fail")
+        expect(manifest["remediation"]).to eq("Run vite build (or bin/dev) to generate the client manifest.")
+      end
+    end
+
+    context "when a check warns (Rack::Deflater mounted)" do
+      before do
+        make_manifest
+        make_controller(with_include: true)
+        make_layout(with_sentinel: true)
+        allow(TCPSocket).to receive(:new).and_return(instance_double(TCPSocket, close: nil))
+        app = Struct.new(:middleware).new([Struct.new(:name).new("Rack::Deflater")])
+        allow(Rails).to receive(:application).and_return(app)
+      end
+
+      it "keeps status 'pass' — a :warn does not fail — but exposes the warn check" do
+        report = doctor.as_json
+        expect(report["status"]).to eq("pass")
+        flight = report["checks"].find { |c| c["name"] == "flight_middleware" }
+        expect(flight["status"]).to eq("warn")
+        expect(flight["remediation"]).to include("Exclude text/x-component from compression")
+      end
+    end
+
+    it "keeps the message byte-identical to the human tuple (remediation is separate)" do
+      _status, human_message = doctor.send(:check_manifest)
+      json_message = doctor.as_json["checks"].find { |c| c["name"] == "manifest" }["message"]
+      expect(json_message).to eq(human_message)
+    end
+  end
+
+  describe "#results / #passed? (shared compute, Story 15.3)", :story_15_3 do
+    subject(:doctor) { described_class.new }
+
+    before do
+      make_manifest
+      make_controller(with_include: true)
+      make_layout(with_sentinel: true)
+      allow(TCPSocket).to receive(:new).and_return(instance_double(TCPSocket, close: nil))
+    end
+
+    it "returns one tuple per check, index-aligned with CHECKS" do
+      expect(doctor.results.length).to eq(described_class::CHECKS.length)
+    end
+
+    it "passed? is true when all checks pass/warn" do
+      expect(doctor.passed?).to be true
+    end
+
+    it "runs each check exactly once (as_json does not double-run check_vite's socket)" do
+      # check_vite opens a socket via TCPSocket.new; a single as_json must open it
+      # exactly once — proving #results is computed once, not per consumer.
+      doctor.as_json
+      expect(TCPSocket).to have_received(:new).once
+    end
+  end
+
+  describe "#run stays byte-identical after the #results refactor (Story 15.3, AC4a)", :story_15_3 do
+    subject(:doctor) { described_class.new }
+
+    before do
+      make_manifest
+      make_controller(with_include: true)
+      make_layout(with_sentinel: true)
+      allow(TCPSocket).to receive(:new).and_return(instance_double(TCPSocket, close: nil))
+    end
+
+    it "prints exactly the header + one format_result line per check (no JSON/prose leak), returns true" do
+      # Reconstruct the expected output from the SAME format_result the human
+      # path uses — proves #run still emits header + one glyph line per check
+      # (the optional 3rd remediation element is ignored) and nothing else.
+      lines = doctor.results.map { |status, message| doctor.send(:format_result, status, message) }.join("\n")
+      expected = "[ruact] Health check\n#{lines}\n"
+
+      expect { expect(doctor.run).to be true }.to output(expected).to_stdout
+    end
+  end
+
   describe "Rake task definition (Story 5.12)", :story_5_12 do
     # Loads gem/lib/tasks/ruact.rake into a fresh Rake::Application so the
     # task table is isolated from any other spec that may have loaded tasks.
@@ -547,6 +682,12 @@ RSpec.describe Ruact::Doctor do
       task = rake_app.lookup("ruact:doctor")
       expect(task).not_to be_nil
       # actions is a list of Procs; just assert at least one is attached
+      expect(task.actions).not_to be_empty
+    end
+
+    it "defines Rake::Task['ruact:routes'] with an action (Story 15.3)", :story_15_3 do
+      task = rake_app.lookup("ruact:routes")
+      expect(task).not_to be_nil
       expect(task.actions).not_to be_empty
     end
   end

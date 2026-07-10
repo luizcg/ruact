@@ -137,6 +137,12 @@ duration, or a deliberate `expires_in: nil` for a non-expiring token.
 ## Verify your work
 
 - `bin/rails ruact:doctor` — checks install/config health; exits 1 on failure.
+  Append `-- --json` for the same checks as a machine-readable report.
+- `bin/rails ruact:routes -- --json` — the accessor/route table (each accessor's
+  name, kind, verb, path, params) as JSON, from the same route table codegen
+  reads; bare `ruact:routes` prints a compact human table.
+- Both `--json` outputs are EXPERIMENTAL — the shape may change; gate on their
+  `schema_version` field (currently `0`), do not treat it as a stable contract.
 - `bin/rails ruact:server_functions:generate` — regenerates the TS module;
   exits 1 on a naming collision or an invalid name.
 - `bin/dev` — boots Rails AND Vite (both are required: Vite serves the client
