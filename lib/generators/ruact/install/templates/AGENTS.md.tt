@@ -100,8 +100,9 @@ Regenerate it after changing routes or queries:
 5. **Accessor names are derived, not declared.** `posts#create` → `createPost`,
    `posts#publish_all` → `publishAllPosts`; query methods camelCase the same
    way (`search_users` → `searchUsers`). Collisions fail loudly at boot;
-   rename with `ruact_function_name :action, as: "otherName"`. Never guess a
-   name — read `app/javascript/.ruact/server-functions.ts`.
+   break an action tie with `ruact_function_name :action, as: "otherName"` —
+   a query tie by renaming the query method. Never guess a name — read
+   `app/javascript/.ruact/server-functions.ts`.
 
 ## Serialization is an allowlist
 
