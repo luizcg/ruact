@@ -28,6 +28,29 @@ module Ruact
     SUSPENSE_OPEN_RE  = /<Suspense\b([^>]*?)>/m
     SUSPENSE_CLOSE_RE = %r{</Suspense>}
 
+    # Story 15.2 (FR106) — matches ANY PascalCase component tag: opening
+    # (`<Card>`), self-closing (`<Card />`), or closing (`</Card>`). Capture 1 is
+    # the leading slash (present only on a closing tag); capture 2 is the name.
+    # The loud-children detection scans these left-to-right with a stack: an
+    # opening pushes, a self-closing (`/>`) is ignored, and a closing that pops a
+    # matching opening means that opening had children (paired usage) → loud
+    # error. A single linear pass (no backreference/lazy backtracking) keeps the
+    # component-dense fast path linear regardless of how many tags go unclosed.
+    COMPONENT_ANY_TAG_RE = %r{<(/)?([A-Z][A-Za-z0-9]*)(?:\s[^>]*)?>}
+
+    # Cheap allocation-free probe (`String#match?`) for "is there ANY PascalCase
+    # closing tag at all?". The loud-children scan only matters when one exists,
+    # so this gates the (copy-heavy) mask/scan work off the common all-self-
+    # closing fast path. `</Suspense>` matches too — harmless, it gets masked.
+    CLOSING_TAG_PROBE_RE = %r{</[A-Z][A-Za-z0-9]*>}
+
+    # Newline-preserving mask for ERB islands (`<% … %>`, `<%= … %>`, `<%# … %>`).
+    # The loud-children scan blanks these first so a `</Card>` that lives inside
+    # Ruby/ERB string or comment text can never be mistaken for a real component
+    # closing tag (a valid bare `<Dialog>` opening must not error because some
+    # unrelated `<% "</Dialog>" %>` appears later).
+    ERB_ISLAND_RE = /<%.*?%>/m
+
     # Matches a +{ruby_expr}+ attribute value — captures everything between the braces.
     # We use a simple bracket-depth counter approach during scanning instead of regex
     # because expressions can contain nested braces: {foo.bar({ a: 1 })}.
@@ -66,6 +89,16 @@ module Ruact
                end
         .gsub(SUSPENSE_CLOSE_RE, "</ruact-suspense>")
 
+      # Step 1.5 (Story 15.2 / FR106): before the general component pass, fail
+      # loudly if any PascalCase component tag is used with children (a matching
+      # closing tag). Silent degradation of `<Card>Hello</Card>` — the #1
+      # predictable JSX-habit mistake — becomes a self-contained, re-raised-as-is
+      # PreprocessorError naming the fix. It scans the ORIGINAL +source+ (so
+      # file:line is exact) and masks Suspense (the one legitimate paired
+      # PascalCase tag) newline-for-newline, so `<Suspense>...</Suspense>` can
+      # never trip and every reported line matches the template verbatim.
+      detect_children!(source, identifier)
+
       # Step 2: transform remaining PascalCase self-closing / opening component tags.
       result.gsub(COMPONENT_TAG_RE) do |match|
         component_name = ::Regexp.last_match(1)
@@ -98,6 +131,86 @@ module Ruact
     end
 
     private
+
+    # Story 15.2 (FR106) — raise a loud, self-contained {ChildrenNotSupportedError}
+    # on the FIRST PascalCase component tag used with children (a matching closing
+    # tag). +source+ is the ORIGINAL template text; +identifier+ is the template
+    # path (from {ErbPreprocessorHook}). Suspense — the one legitimate paired
+    # PascalCase tag — is masked newline-for-newline first, so it never trips AND
+    # every byte position (hence every reported line) still lines up with the raw
+    # template. The line uses the same idiom as Step 2 (`count("\n") + 1`) on the
+    # OPENING tag's offset. Message mirrors {ComponentContract.raise_error} shape
+    # so both loud preprocess errors read identically. A no-op when no pair is
+    # present — the fast path stays byte-identical.
+    def detect_children!(source, identifier)
+      # Fast path: a children pair REQUIRES a literal PascalCase closing tag, so
+      # a source without one (the common all-self-closing case) can never trip —
+      # bail before allocating anything. `match?` builds no MatchData, and this
+      # skips the mask/scan copies entirely, keeping the hot render/preprocess
+      # path's allocation profile flat (the benchmark renders only self-closing
+      # components, so it must stay at baseline).
+      return unless source.match?(CLOSING_TAG_PROBE_RE)
+
+      # ERB islands first, then Suspense — both blank their text newline-for-
+      # newline so byte offsets (hence reported lines) still match the raw
+      # template, while neither ERB string text nor the legitimate Suspense pair
+      # can be seen by the tag scan.
+      scan = mask_suspense(mask_erb(source))
+      # PER-NAME open stacks (name → [offsets]) so a closing tag checks for a
+      # matching open in O(1) via `open_ats[name].last`, keeping the whole scan
+      # linear even under thousands of stray/unmatched PascalCase closing tags
+      # (a global stack + `rindex` was quadratic — Codex Round 3).
+      open_ats = Hash.new { |h, k| h[k] = [] }
+
+      scan.scan(COMPONENT_ANY_TAG_RE) do
+        m    = ::Regexp.last_match
+        name = m[2]
+
+        if m[1] # a closing tag `</Name>`
+          at = open_ats[name].last
+          next unless at # stray close with no open → literal text, ignore
+
+          raise_children_error(name, identifier, scan, at)
+        elsif m[0].end_with?("/>") # self-closing → carries no children
+          next
+        else # an opening tag `<Name ...>` — record the NEAREST open of this name
+          open_ats[name] << m.begin(0)
+        end
+      end
+
+      nil
+    end
+
+    # Raise the self-contained {ChildrenNotSupportedError}. +at+ is the OPENING
+    # tag's byte offset in +scan+ (position-faithful to the raw source), so the
+    # line uses the same idiom as Step 2. Message mirrors
+    # {ComponentContract.raise_error} so both loud preprocess errors read alike.
+    def raise_children_error(component, identifier, scan, at)
+      line     = scan[0...at].count("\n") + 1
+      location = [identifier, line].compact.join(":")
+      location = "(unknown location)" if location.empty?
+      raise ChildrenNotSupportedError,
+            "ruact: <#{component}> at #{location} children are not supported " \
+            "— pass content as a prop, e.g. `<#{component} content={...} />`."
+    end
+
+    # Blank out Suspense open/close tags (the one legitimate paired PascalCase
+    # tag) while preserving EVERY newline and byte offset, so the loud-children
+    # scan neither trips on `<Suspense>...</Suspense>` nor mis-reports a line when
+    # a multi-line Suspense opening precedes the offending tag. Non-newline chars
+    # → spaces (same length); newlines kept verbatim.
+    def mask_suspense(source)
+      source
+        .gsub(SUSPENSE_OPEN_RE)  { |m| m.gsub(/[^\n]/, " ") }
+        .gsub(SUSPENSE_CLOSE_RE) { |m| m.gsub(/[^\n]/, " ") }
+    end
+
+    # Blank ERB islands (position-faithful, see {mask_suspense}) so component
+    # tags that appear only inside Ruby/ERB string or comment text are invisible
+    # to the loud-children tag scan.
+    def mask_erb(source)
+      source.gsub(ERB_ISLAND_RE) { |m| m.gsub(/[^\n]/, " ") }
+    end
 
     # Extract a string attribute value (double or single quoted) from an attrs string.
     def extract_string_attr(attrs, name)

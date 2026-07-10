@@ -22,6 +22,22 @@ module Ruact
   # re-wrapping it with the generic "at line N: snippet" tail.
   class ComponentContractError < PreprocessorError; end
 
+  # Story 15.2 (FR106) — raised by {Ruact::ErbPreprocessor} at preprocess time
+  # when a PascalCase component tag is used with children (a matching closing
+  # tag, e.g. `<Card>Hello</Card>`). ruact component tags are self-closing only:
+  # a component receives a props Hash, never a children element tree. This is the
+  # #1 predictable JSX-habit mistake, and it used to degrade silently (the
+  # children leaked into the surrounding HTML while the component rendered with
+  # none). Subclasses {PreprocessorError} so it flows through the same dev error
+  # overlay (NFR30 lineage) and the hook treats it uniformly — but the distinct
+  # class (mirroring {ComponentContractError}) lets the preprocessor re-raise it
+  # AS-IS (its message already carries the component name + file:line + the exact
+  # fix) and lets the 15.7 capstone assert this trap fails loudly by class. The
+  # sole legitimate paired PascalCase tag, `<Suspense>...</Suspense>`, is
+  # normalized to `<ruact-suspense>` in Step 1 before this detection runs, so it
+  # never trips.
+  class ChildrenNotSupportedError < PreprocessorError; end
+
   # Raised when application code attempts to mutate Ruact::Configuration outside
   # of a Ruact.configure block. The configuration is frozen after initialization
   # to prevent runtime drift; see Story 7.3 for the rationale and the decision

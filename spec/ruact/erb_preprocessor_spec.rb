@@ -116,6 +116,151 @@ module Ruact
       end
     end
 
+    # Story 15.2 (FR106) — children inside a PascalCase component tag (a matching
+    # closing tag) fail LOUDLY at preprocess time instead of degrading silently.
+    describe "loud children error (FR106)", :story_15_2 do
+      def run(source, identifier: nil)
+        described_class.transform(source, identifier: identifier)
+      end
+
+      it "raises on `<Card>Hello</Card>` naming component + fix (AC#1)" do
+        expect { run("<Card>Hello</Card>") }
+          .to raise_error(ChildrenNotSupportedError) do |e|
+            expect(e.message).to include("Card")
+            expect(e.message).to include("children are not supported")
+            expect(e.message).to include("pass content as a prop")
+            expect(e.message).to include("<Card content={...} />")
+          end
+      end
+
+      it "is a Ruact::PreprocessorError (AC#1 — subclass IS-A base)" do
+        expect { run("<Card>Hello</Card>") }.to raise_error(Ruact::PreprocessorError)
+      end
+
+      it "raises on an empty pair `<Card></Card>` (AC#1)" do
+        expect { run("<Card></Card>") }.to raise_error(ChildrenNotSupportedError, /Card/)
+      end
+
+      it "raises on multi-line children (AC#1)" do
+        source = "<Card>\n  <p>hi</p>\n</Card>"
+        expect { run(source) }.to raise_error(ChildrenNotSupportedError, /children are not supported/)
+      end
+
+      it "raises on a paired tag that also holds a nested component" do
+        expect { run("<Card><Button /></Card>") }
+          .to raise_error(ChildrenNotSupportedError, /<Card>/)
+      end
+
+      it "names the supplied identifier and the correct line for a non-first-line pair (AC#4)" do
+        source = "line1\nline2\n<Card>Hello</Card>"
+        expect { run(source, identifier: "app/views/posts/show.html.erb") }
+          .to raise_error(ChildrenNotSupportedError) do |e|
+            expect(e.message).to include("app/views/posts/show.html.erb:3")
+          end
+      end
+
+      it "reports the opening tag's line, honoring attributes on the opening tag" do
+        expect { run("<Card variant={:wide}>x</Card>", identifier: "t.erb") }
+          .to raise_error(ChildrenNotSupportedError, /t\.erb:1/)
+      end
+
+      # Regression (Codex Round 1, Patch 1): a MULTI-LINE Suspense opening tag
+      # must not shift the reported line — the `<Card>` below is physically on
+      # line 5 and must report :5 (Suspense is masked newline-for-newline).
+      it "reports the exact source line even after a multi-line Suspense opening" do
+        source = <<~ERB
+          <Suspense
+            fallback="loading"
+            delay="2.5">
+          </Suspense>
+          <Card>Hello</Card>
+        ERB
+        expect { run(source, identifier: "t.erb") }
+          .to raise_error(ChildrenNotSupportedError, /t\.erb:5/)
+      end
+
+      # Regression (Codex Round 2, Patch 1): a `</Dialog>` living inside an ERB
+      # island (Ruby string/comment) must NOT be mistaken for a real component
+      # closing tag — a valid bare `<Dialog open={true}>` stays valid.
+      it "does not false-pair a bare opening with a `</Tag>` inside an ERB island" do
+        source = %(<Dialog open={true}>\n<% x = "</Dialog>" %>)
+        expect { run(source) }.not_to raise_error
+      end
+
+      it "still fires when the closing tag is real ERB body, not inside `<% %>`" do
+        expect { run("<Card><%= @body %></Card>") }
+          .to raise_error(ChildrenNotSupportedError, /Card/)
+      end
+
+      # Regression (Codex Round 2, Patch 2): many bare non-self-closing openings
+      # with no close must stay linear (single-pass stack scan) and silent (D3).
+      it "stays silent and does not blow up on many bare unclosed openings" do
+        source = "<Dialog open={true}>\n" * 5000
+        expect { run(source) }.not_to raise_error
+      end
+
+      # Regression (Codex Round 3, Patch 1): stray/unmatched PascalCase closing
+      # tags (no preceding matching open) are literal text — never an error — and
+      # must stay linear (per-name O(1) lookup, no `rindex`). Correctness pin;
+      # perf verified live, not timed here (avoids a flaky benchmark spec).
+      it "does not raise on stray closing tags with no matching opening" do
+        source = "</Card>\n" * 5000
+        expect { run(source) }.not_to raise_error
+      end
+
+      it "still raises when a real opening precedes the stray closes" do
+        source = "<Card>x</Card>\n#{'</Card>' * 100}"
+        expect { run(source) }.to raise_error(ChildrenNotSupportedError, /Card/)
+      end
+
+      # AC#2 regression — the loud error must NOT fire on any valid pattern.
+      describe "does NOT fire on valid patterns (AC#2 byte-identical)" do
+        it "self-closing tag, no props" do
+          expect { run("<Button />") }.not_to raise_error
+        end
+
+        it "self-closing tag with props" do
+          expect { run("<LikeButton postId={@post.id} />") }.not_to raise_error
+        end
+
+        it "bare non-self-closing opening tag with NO closing tag (`<Dialog open={true}>`)" do
+          expect { run("<Dialog open={true}>") }.not_to raise_error
+        end
+
+        it "nested-brace prop value" do
+          expect { run("<Select options={Category.all.map { |c| c.id }} />") }.not_to raise_error
+        end
+
+        it "multiple self-closing components" do
+          expect { run('<Button /> and <Badge label={"hello"} />') }.not_to raise_error
+        end
+
+        it "mixed HTML around a self-closing component" do
+          source = %(<div class="container">\n  <h1>Hi</h1>\n  <LikeButton postId={1} />\n</div>)
+          expect { run(source) }.not_to raise_error
+        end
+
+        it "emits byte-identical output for `<Dialog open={true}>`" do
+          expect(run("<Dialog open={true}>"))
+            .to eq(%(<%= __ruact_component__("Dialog", { "open" => true }) %>))
+        end
+      end
+
+      # AC#3 — Suspense children are the ONE legitimate paired PascalCase tag and
+      # must never trip the error (normalized to <ruact-suspense> in Step 1).
+      describe "Suspense children never trip the error (AC#3)" do
+        it "does not raise for `<Suspense><Spinner /></Suspense>`" do
+          expect { run(%(<Suspense fallback="loading"><Spinner /></Suspense>)) }.not_to raise_error
+        end
+
+        it "normalizes Suspense to <ruact-suspense> exactly as today" do
+          result = run(%(<Suspense fallback="loading"><Spinner /></Suspense>))
+          expect(result).to include(%(data-ruact-fallback="loading"))
+          expect(result).to include("</ruact-suspense>")
+        end
+      end
+    end
+
     # Story 13.5 (FR100) — preprocess-time component-contract validation, wired
     # through an injectable registry seam (a stub responding to +contract_for+).
     describe "component contract validation", :story_13_5 do

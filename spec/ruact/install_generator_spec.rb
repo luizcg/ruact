@@ -997,15 +997,27 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         silently { build_generator(app_root).create_agents_md }
         content = File.read(agents_md_path)
 
-        # --json introspection is Story 15.3's; the loud children error is 15.2's;
-        # test helpers are 15.4's — none may be referenced as existing.
+        # --json introspection is Story 15.3's; test helpers are 15.4's — none
+        # may be referenced as existing. (The loud children `PreprocessorError`
+        # is Story 15.2's shipped artifact, so trap #1 may now claim it — see the
+        # `:story_15_2` guard below that PINS the claim's presence.)
         expect(content).not_to include("--json")
-        expect(content).not_to include("PreprocessorError")
         # tsc does not run in a fresh install (no typescript devDep / tsconfig) —
         # it may only appear conditionally phrased (D1).
         expect(content).to match(/if your app has typescript tooling/i) if content.include?("tsc")
         # Volatile strings must not be quoted: no gem version pins.
         expect(content).not_to match(/\b0\.0\.\d+\b/)
+      end
+
+      # Story 15.2 (D2) — now that the loud children error is a shipped artifact,
+      # trap #1 truthfully claims it fails LOUDLY (was "fails silently" in 15.1).
+      it "trap #1 claims the loud PreprocessorError (Story 15.2 D2)", :aggregate_failures, :story_15_2 do
+        silently { build_generator(app_root).create_agents_md }
+        content = File.read(agents_md_path)
+
+        expect(content).to include("PreprocessorError")
+        expect(content).to match(/fail LOUDLY/i)
+        expect(content).not_to match(/fail silently/i)
       end
     end
 
