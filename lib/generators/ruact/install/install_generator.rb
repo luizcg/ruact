@@ -234,7 +234,7 @@ module Ruact
         return template("AGENTS.md.tt", "AGENTS.md") unless destination.exist?
 
         content = destination.read
-        if AGENTS_MD_SECTION_RE.match?(content)
+        if agents_md_markers_well_formed?(content)
           refresh_or_skip_agents_md_section
         elsif agents_md_markers_broken?(content)
           warn_agents_md_broken_markers
@@ -346,12 +346,23 @@ module Ruact
         gsub_file("AGENTS.md", AGENTS_MD_SECTION_RE) { agents_md_section.chomp }
       end
 
-      # Story 15.1 (Codex R1) — an INCOMPLETE marker state: one marker without
-      # its pair, or an end marker preceding the begin marker. Either way the
-      # section boundary is ambiguous in BOTH directions — appending would
-      # duplicate content next to a stray marker, and replacing would have to
-      # guess the range — so the only byte-safe move is to warn and leave every
-      # byte alone.
+      # Story 15.1 (Codex R1/R2) — the ONLY marker state the action manages:
+      # exactly one begin marker, exactly one end marker, begin before end.
+      # Anything else — a lone marker, end-before-begin, a stray extra marker
+      # alongside a valid pair, multiple pairs — makes the section boundary
+      # ambiguous, so it is handled as broken (warn + no-op) rather than
+      # guessed at.
+      def agents_md_markers_well_formed?(content)
+        content.scan(AGENTS_MD_BEGIN_MARKER).length == 1 &&
+          content.scan(AGENTS_MD_END_MARKER).length == 1 &&
+          AGENTS_MD_SECTION_RE.match?(content)
+      end
+
+      # Story 15.1 (Codex R1) — SOME marker text is present but not in the one
+      # well-formed shape above. The boundary is ambiguous in BOTH directions —
+      # appending would duplicate content next to stray markers, and replacing
+      # would have to guess the range — so the only byte-safe move is to warn
+      # and leave every byte alone.
       def agents_md_markers_broken?(content)
         content.include?(AGENTS_MD_BEGIN_MARKER) || content.include?(AGENTS_MD_END_MARKER)
       end

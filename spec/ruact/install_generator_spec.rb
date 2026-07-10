@@ -1089,7 +1089,15 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         ["an end marker without its begin marker",
          "# mine\n\nstray tail of a ruact section\n<!-- ruact:end -->\n"],
         ["an end marker preceding the begin marker",
-         "# mine\n\n<!-- ruact:end -->\nreversed\n<!-- ruact:begin -->\n"]
+         "# mine\n\n<!-- ruact:end -->\nreversed\n<!-- ruact:begin -->\n"],
+        # Codex R2 — a VALID pair plus stray extra markers is still ambiguous:
+        # skip/refresh would leave (or eat past) the unmatched marker.
+        ["a stray end marker before a valid pair",
+         "<!-- ruact:end -->\nstray\n\n<!-- ruact:begin -->\nsection\n<!-- ruact:end -->\n"],
+        ["a stray begin marker after a valid pair",
+         "<!-- ruact:begin -->\nsection\n<!-- ruact:end -->\n\nstray\n<!-- ruact:begin -->\n"],
+        ["two complete marker pairs",
+         "<!-- ruact:begin -->\none\n<!-- ruact:end -->\n\n<!-- ruact:begin -->\ntwo\n<!-- ruact:end -->\n"]
       ].each do |(label, broken)|
         it "warns and leaves the file untouched with #{label} (no --force)", :aggregate_failures do
           File.write(agents_md_path, broken)
