@@ -141,23 +141,26 @@ module Ruact
       # newline so byte offsets (hence reported lines) still match the raw
       # template, while neither ERB string text nor the legitimate Suspense pair
       # can be seen by the tag scan.
-      scan  = mask_suspense(mask_erb(source))
-      stack = []
+      scan = mask_suspense(mask_erb(source))
+      # PER-NAME open stacks (name → [offsets]) so a closing tag checks for a
+      # matching open in O(1) via `open_ats[name].last`, keeping the whole scan
+      # linear even under thousands of stray/unmatched PascalCase closing tags
+      # (a global stack + `rindex` was quadratic — Codex Round 3).
+      open_ats = Hash.new { |h, k| h[k] = [] }
 
       scan.scan(COMPONENT_ANY_TAG_RE) do
         m    = ::Regexp.last_match
         name = m[2]
 
         if m[1] # a closing tag `</Name>`
-          idx = stack.rindex { |e| e[:name] == name }
-          next unless idx # stray close with no open → literal text, ignore
+          at = open_ats[name].last
+          next unless at # stray close with no open → literal text, ignore
 
-          open = stack[idx]
-          raise_children_error(name, identifier, scan, open[:at])
+          raise_children_error(name, identifier, scan, at)
         elsif m[0].end_with?("/>") # self-closing → carries no children
           next
-        else # an opening tag `<Name ...>`
-          stack.push(name: name, at: m.begin(0))
+        else # an opening tag `<Name ...>` — record the NEAREST open of this name
+          open_ats[name] << m.begin(0)
         end
       end
 

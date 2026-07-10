@@ -199,6 +199,20 @@ module Ruact
         expect { run(source) }.not_to raise_error
       end
 
+      # Regression (Codex Round 3, Patch 1): stray/unmatched PascalCase closing
+      # tags (no preceding matching open) are literal text — never an error — and
+      # must stay linear (per-name O(1) lookup, no `rindex`). Correctness pin;
+      # perf verified live, not timed here (avoids a flaky benchmark spec).
+      it "does not raise on stray closing tags with no matching opening" do
+        source = "</Card>\n" * 5000
+        expect { run(source) }.not_to raise_error
+      end
+
+      it "still raises when a real opening precedes the stray closes" do
+        source = "<Card>x</Card>\n#{'</Card>' * 100}"
+        expect { run(source) }.to raise_error(ChildrenNotSupportedError, /Card/)
+      end
+
       # AC#2 regression — the loud error must NOT fire on any valid pattern.
       describe "does NOT fire on valid patterns (AC#2 byte-identical)" do
         it "self-closing tag, no props" do
