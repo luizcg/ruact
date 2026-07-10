@@ -119,6 +119,15 @@ module Ruact
         expect(html).to have_ruact_component("LikeButton").with_props(a_hash_including("postId" => 5))
       end
 
+      it "ignores an unrelated earlier .push and anchors to __FLIGHT_DATA" do
+        wire = render_wire("<LikeButton postId={5} />")
+        shell = html_shell(wire)
+        # A realistic layout has other scripts BEFORE the ruact bootstrap.
+        noise = %(<script>window.dataLayer=window.dataLayer||[];dataLayer.push("not flight");</script>)
+        html = shell.sub("<div id=\"root\"></div>", "<div id=\"root\"></div>#{noise}")
+        expect(html).to have_ruact_component("LikeButton").with_props(a_hash_including("postId" => 5))
+      end
+
       it "extracts Flight from an HTML-response object (content_type text/html)" do
         wire = render_wire("<LikeButton postId={5} />")
         response = response_double(html_shell(wire), content_type: "text/html; charset=utf-8")

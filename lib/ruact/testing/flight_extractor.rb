@@ -21,12 +21,20 @@ module Ruact
     # feeding it here raises {NotAFlightResponseError} pointing at `JSON.parse`,
     # rather than silently failing to parse. Pure: no I/O, no global state.
     module FlightExtractor
-      # Matches the `d.push("<ruby-inspected literal>")` line the
+      # Matches the `<local>.push("<ruby-inspected literal>")` line the
       # `__FLIGHT_DATA` bootstrap script emits (see
-      # `Ruact::ViewHelper#ruact_flight_data_script`). The captured group is the
-      # full double-quoted Ruby string literal (quotes included), honoring
-      # escaped quotes so a `\"` inside the payload does not end the match.
-      FLIGHT_DATA_PUSH = /\.push\((?<literal>"(?:\\.|[^"\\])*")\);/m
+      # `Ruact::ViewHelper#ruact_flight_data_script`). ANCHORED to the queue
+      # assignment (`self.__FLIGHT_DATA = self.__FLIGHT_DATA || [])`) so an
+      # unrelated earlier script on the page (analytics `dataLayer.push(…)`,
+      # etc.) can never be mistaken for the Flight payload. The captured group
+      # is the full double-quoted Ruby string literal (quotes included),
+      # honoring escaped quotes so a `\"` inside the payload does not end it.
+      FLIGHT_DATA_PUSH = /
+        self\.__FLIGHT_DATA\s*=\s*self\.__FLIGHT_DATA\s*\|\|\s*\[\]\)\s*;   # queue assignment
+        \s*[A-Za-z_$][\w$]*\.push\(                                        # <local>.push(
+        (?<literal>"(?:\\.|[^"\\])*")
+        \)\s*;
+      /mx
 
       # A Flight wire body always starts with a row header: `<hex>:` (id + colon)
       # or a hint row `:H`. JSON bodies start with `{`/`[`/`"`; HTML with `<`.
