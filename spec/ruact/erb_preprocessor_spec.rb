@@ -179,6 +179,26 @@ module Ruact
           .to raise_error(ChildrenNotSupportedError, /t\.erb:5/)
       end
 
+      # Regression (Codex Round 2, Patch 1): a `</Dialog>` living inside an ERB
+      # island (Ruby string/comment) must NOT be mistaken for a real component
+      # closing tag — a valid bare `<Dialog open={true}>` stays valid.
+      it "does not false-pair a bare opening with a `</Tag>` inside an ERB island" do
+        source = %(<Dialog open={true}>\n<% x = "</Dialog>" %>)
+        expect { run(source) }.not_to raise_error
+      end
+
+      it "still fires when the closing tag is real ERB body, not inside `<% %>`" do
+        expect { run("<Card><%= @body %></Card>") }
+          .to raise_error(ChildrenNotSupportedError, /Card/)
+      end
+
+      # Regression (Codex Round 2, Patch 2): many bare non-self-closing openings
+      # with no close must stay linear (single-pass stack scan) and silent (D3).
+      it "stays silent and does not blow up on many bare unclosed openings" do
+        source = "<Dialog open={true}>\n" * 5000
+        expect { run(source) }.not_to raise_error
+      end
+
       # AC#2 regression — the loud error must NOT fire on any valid pattern.
       describe "does NOT fire on valid patterns (AC#2 byte-identical)" do
         it "self-closing tag, no props" do

@@ -28,15 +28,22 @@ module Ruact
     SUSPENSE_OPEN_RE  = /<Suspense\b([^>]*?)>/m
     SUSPENSE_CLOSE_RE = %r{</Suspense>}
 
-    # Story 15.2 (FR106) — matches a PascalCase component OPENING tag (self-closing
-    # or not). The loud-children detection scans these left-to-right and flags the
-    # first NON-self-closing opening that has a later MATCHING closing tag
-    # `</Name>` — i.e. children / paired usage. It keys on the matching close, NOT
-    # on "opening lacks `/>`", so a bare non-self-closing opening with no closing
-    # tag (a `<Dialog>` opening) stays a valid call (D3). A linear `String#index`
-    # locates the literal close, avoiding the quadratic backtracking of a
-    # backreferenced lazy regex on component-dense templates.
-    CHILDREN_OPEN_RE = /<([A-Z][A-Za-z0-9]*)(?:\s[^>]*)?>/
+    # Story 15.2 (FR106) — matches ANY PascalCase component tag: opening
+    # (`<Card>`), self-closing (`<Card />`), or closing (`</Card>`). Capture 1 is
+    # the leading slash (present only on a closing tag); capture 2 is the name.
+    # The loud-children detection scans these left-to-right with a stack: an
+    # opening pushes, a self-closing (`/>`) is ignored, and a closing that pops a
+    # matching opening means that opening had children (paired usage) → loud
+    # error. A single linear pass (no backreference/lazy backtracking) keeps the
+    # component-dense fast path linear regardless of how many tags go unclosed.
+    COMPONENT_ANY_TAG_RE = %r{<(/)?([A-Z][A-Za-z0-9]*)(?:\s[^>]*)?>}
+
+    # Newline-preserving mask for ERB islands (`<% … %>`, `<%= … %>`, `<%# … %>`).
+    # The loud-children scan blanks these first so a `</Card>` that lives inside
+    # Ruby/ERB string or comment text can never be mistaken for a real component
+    # closing tag (a valid bare `<Dialog>` opening must not error because some
+    # unrelated `<% "</Dialog>" %>` appears later).
+    ERB_ISLAND_RE = /<%.*?%>/m
 
     # Matches a +{ruby_expr}+ attribute value — captures everything between the braces.
     # We use a simple bracket-depth counter approach during scanning instead of regex
@@ -130,27 +137,44 @@ module Ruact
     # so both loud preprocess errors read identically. A no-op when no pair is
     # present — the fast path stays byte-identical.
     def detect_children!(source, identifier)
-      scan = mask_suspense(source)
+      # ERB islands first, then Suspense — both blank their text newline-for-
+      # newline so byte offsets (hence reported lines) still match the raw
+      # template, while neither ERB string text nor the legitimate Suspense pair
+      # can be seen by the tag scan.
+      scan  = mask_suspense(mask_erb(source))
+      stack = []
 
-      scan.scan(CHILDREN_OPEN_RE) do
-        m   = ::Regexp.last_match
-        tag = m[0]
-        next if tag.end_with?("/>") # self-closing tag can carry no children
+      scan.scan(COMPONENT_ANY_TAG_RE) do
+        m    = ::Regexp.last_match
+        name = m[2]
 
-        component = m[1]
-        # Linear literal search for the matching close; nil (no close) ⇒ a bare
-        # opening like `<Dialog open={true}>` — valid, stays silent (D3).
-        next unless scan.index("</#{component}>", m.end(0))
+        if m[1] # a closing tag `</Name>`
+          idx = stack.rindex { |e| e[:name] == name }
+          next unless idx # stray close with no open → literal text, ignore
 
-        line     = scan[0...m.begin(0)].count("\n") + 1
-        location = [identifier, line].compact.join(":")
-        location = "(unknown location)" if location.empty?
-        raise ChildrenNotSupportedError,
-              "ruact: <#{component}> at #{location} children are not supported " \
-              "— pass content as a prop, e.g. `<#{component} content={...} />`."
+          open = stack[idx]
+          raise_children_error(name, identifier, scan, open[:at])
+        elsif m[0].end_with?("/>") # self-closing → carries no children
+          next
+        else # an opening tag `<Name ...>`
+          stack.push(name: name, at: m.begin(0))
+        end
       end
 
       nil
+    end
+
+    # Raise the self-contained {ChildrenNotSupportedError}. +at+ is the OPENING
+    # tag's byte offset in +scan+ (position-faithful to the raw source), so the
+    # line uses the same idiom as Step 2. Message mirrors
+    # {ComponentContract.raise_error} so both loud preprocess errors read alike.
+    def raise_children_error(component, identifier, scan, at)
+      line     = scan[0...at].count("\n") + 1
+      location = [identifier, line].compact.join(":")
+      location = "(unknown location)" if location.empty?
+      raise ChildrenNotSupportedError,
+            "ruact: <#{component}> at #{location} children are not supported " \
+            "— pass content as a prop, e.g. `<#{component} content={...} />`."
     end
 
     # Blank out Suspense open/close tags (the one legitimate paired PascalCase
@@ -162,6 +186,13 @@ module Ruact
       source
         .gsub(SUSPENSE_OPEN_RE)  { |m| m.gsub(/[^\n]/, " ") }
         .gsub(SUSPENSE_CLOSE_RE) { |m| m.gsub(/[^\n]/, " ") }
+    end
+
+    # Blank ERB islands (position-faithful, see {mask_suspense}) so component
+    # tags that appear only inside Ruby/ERB string or comment text are invisible
+    # to the loud-children tag scan.
+    def mask_erb(source)
+      source.gsub(ERB_ISLAND_RE) { |m| m.gsub(/[^\n]/, " ") }
     end
 
     # Extract a string attribute value (double or single quoted) from an attrs string.
