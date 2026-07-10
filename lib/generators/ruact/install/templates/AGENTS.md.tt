@@ -1,0 +1,148 @@
+<!-- ruact:begin -->
+<!-- Managed by `rails generate ruact:install`. Re-run it with --force after a
+     gem upgrade to refresh ONLY this marked section; everything you write
+     outside the markers is preserved. Kept in sync manually with the online
+     copy at https://ruact.dev/llms.txt -->
+
+# ruact — conventions for coding agents
+
+ruact renders React Server Components from Rails. ERB templates ARE the server
+components (serialized to the React Flight wire format), Rails routes are the
+single source of truth, and there is no Node server — Vite only bundles the
+client components. ruact is NOT Inertia, react-rails, or Next.js: do not
+transplant their patterns. When unsure, read the generated code (see "Ground
+truth" below) instead of guessing.
+
+## Mental model
+
+- A page is a normal Rails controller action rendering a normal `.html.erb`.
+- Interactive components live in `app/javascript/components/` as `"use client"`
+  files, mounted from ERB with a PascalCase self-closing tag:
+  `<LikeButton postId={@post.id} />`.
+- Mutations are ordinary non-GET controller actions on a controller that does
+  `include Ruact::Server`. Reads are `Ruact::Query` classes in `app/queries/`.
+- ruact generates a typed TypeScript module from the route table; React imports
+  server functions from `@/.ruact/server-functions`.
+
+## Server functions — the verb rule
+
+`include Ruact::Server` makes a controller's routed non-GET actions
+(`POST`/`PATCH`/`PUT`/`DELETE`) callable from React. GET page actions are
+untouched. There is no per-action DSL and no synthetic endpoint: the action IS
+the function, reached at its real route, visible in `bin/rails routes`. The JS
+runtime forwards the CSRF token automatically; keep `include Ruact::Server`
+AFTER `protect_from_forgery` in the ancestor chain.
+
+```ruby
+class PostsController < ApplicationController
+  include Ruact::Server
+
+  def create
+    @post = Post.create!(post_params) # ivars become the JSON result
+  end
+end
+```
+
+```tsx
+import { createPost } from "@/.ruact/server-functions";
+const { post } = await createPost({ post: { title: "Hi" } });
+```
+
+## Reads — queries and useQuery
+
+Reads are public methods on `Ruact::Query` subclasses in `app/queries/`,
+mounted in `config/routes.rb` with `ruact_queries CatalogQuery` (one named GET
+route per public method, default prefix `/q`). Call them with `useQuery`:
+
+```tsx
+import { categories, useQuery } from "@/.ruact/server-functions";
+const { data, loading, error } = useQuery(categories);
+```
+
+Query params come from the method's keyword arguments and accept ONLY
+`string | number | boolean | null` (arrays/objects are rejected). Queries run
+the host controller's callback chain (authentication etc.) before the query
+object is instantiated.
+
+## Ground truth — read the generated file
+
+`app/javascript/.ruact/server-functions.ts` is regenerated from the route
+table (it is gitignored). It is the authoritative list of every accessor and
+its typed params — READ THAT FILE instead of simulating the name generation.
+Regenerate it after changing routes or queries:
+
+    bin/rails ruact:server_functions:generate
+
+## Five traps
+
+1. **Component tags take no children.** Client component tags are self-closing
+   ONLY: `<Card content={@body} />`, never `<Card>...</Card>`. Today children
+   fail silently (they never reach the component) — pass content as a prop.
+   Sole exception: the built-in `<Suspense fallback="...">...</Suspense>` pair.
+2. **`{}` props are Ruby, not JavaScript.** `<Badge label={@post.title} />`
+   evaluates `@post.title` as a Ruby expression in the ERB. No JS ternaries,
+   no `{...spread}`, no JSX children. Plain unbraced string props are not
+   supported either — always use braces.
+3. **One action, two response shapes.** A `Ruact::Server` non-GET action
+   answers JSON — its instance variables, or `204`, or `{"$redirect": path}` —
+   when the request's `Accept` header is exactly `application/json`, which is
+   what every generated-accessor call sends (including
+   `<form action={createPost}>`). Any other request shape renders normally
+   (a Flight stream for client-side navigation, an HTML page otherwise). You
+   cannot infer the response shape from the controller body alone — the
+   caller picks it.
+4. **`ruact_errors` requires fall-through.** On the `if @post.save ... else`
+   path, call `ruact_errors(@post)` and let the action END there — ruact's
+   implicit render injects `errors: { attribute: [messages] }` into the JSON.
+   An explicit `render` on that branch opts out of the injection. In the
+   redirect-back flow, `ruact_errors(@post)` then `redirect_to` carries the
+   errors through flash to the next render.
+5. **Accessor names are derived, not declared.** `posts#create` → `createPost`,
+   `posts#publish_all` → `publishAllPosts`; query methods camelCase the same
+   way (`search_users` → `searchUsers`). Collisions fail loudly at boot;
+   break an action tie with `ruact_function_name :action, as: "otherName"` —
+   a query tie by renaming the query method. Never guess a name — read
+   `app/javascript/.ruact/server-functions.ts`.
+
+## Serialization is an allowlist
+
+Objects crossing to the client expose only what `ruact_props` allowlists:
+
+```ruby
+class Post < ApplicationRecord
+  include Ruact::Serializable
+  ruact_props :id, :title # :secret_token is never serialized
+end
+```
+
+Without `ruact_props`, development logs a `[ruact] WARNING` and falls back to
+`as_json`; in production `strict_serialization` defaults to on and raises
+instead. An `as_json` that returns `self` always raises. Do not route around
+the allowlist by hand-building hashes with sensitive fields.
+
+## Record references — signed and explicit
+
+Do not put raw record ids in props and trust them later. Mint a scoped signed
+token and resolve it back:
+
+```ruby
+token = Ruact.signed_global_id(@post, for: :editing, expires_in: 1.hour)
+post  = Ruact.locate_signed(params[:token], for: :editing) # tampered → 400
+```
+
+The purpose (`for:`) is always required; the expiry must be explicit — a
+duration, or a deliberate `expires_in: nil` for a non-expiring token.
+
+## Verify your work
+
+- `bin/rails ruact:doctor` — checks install/config health; exits 1 on failure.
+- `bin/rails ruact:server_functions:generate` — regenerates the TS module;
+  exits 1 on a naming collision or an invalid name.
+- `bin/dev` — boots Rails AND Vite (both are required: Vite serves the client
+  components and writes the client manifest).
+- If your app has TypeScript tooling configured, `npx tsc --noEmit`
+  type-checks call sites against the generated accessor types (a fresh
+  install does not ship a tsconfig).
+
+Docs: https://ruact.dev — compact agent reference at https://ruact.dev/llms.txt
+<!-- ruact:end -->
