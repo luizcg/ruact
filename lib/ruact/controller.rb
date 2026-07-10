@@ -157,6 +157,12 @@ module Ruact
     # (matching the legacy `#from_html` ordering) before any streaming
     # response headers are mutated.
     def emit_ruact_response(pipeline, html, render_context, streaming:)
+      # Story 15.5 (FR109) — record which page shape ruact rendered so the
+      # `Ruact::Server` dev log (`__ruact_log_response_shape!`) can name it and,
+      # crucially, stay SILENT on a plain Rails render (this flag is never set
+      # there). `@__`-prefixed → never leaks into `view_assigns`.
+      @__ruact_negotiated_page = ruact_request? ? :flight : :html_shell
+
       if ruact_request? && streaming
         enumerator = pipeline.render({ html: html, render_context: render_context }, mode: :stream)
         response.headers["Content-Type"]      = "text/x-component; charset=utf-8"
@@ -208,6 +214,9 @@ module Ruact
       # stash any `ruact_errors`-registered errors in flash so they survive this
       # Flight redirect and re-render as an `errors` prop (no-op when untouched).
       __ruact_stash_errors_in_flash
+
+      # Story 15.5 (FR109) — mark the Flight-redirect sub-shape for the dev log.
+      @__ruact_negotiated_page = :flight_redirect
 
       render plain: "0:#{JSON.generate({ 'redirectUrl' => redirect_url, 'redirectType' => 'push' })}\n",
              content_type: "text/x-component"

@@ -172,6 +172,13 @@ module ServerBucketSpecSupport
     def untouched_explicit_render
       render json: { "ok" => true }
     end
+
+    # Story 15.5 (FR109) — a plain Rails action on a `Ruact::Server` controller:
+    # a GET that renders plain text, so it is neither a function call nor a ruact
+    # page render. The dev shape-log must stay SILENT on it (non-negotiated).
+    def plain_rails
+      render plain: "just rails"
+    end
   end
 
   # Review round 2 — an auth-style before_action that redirects on a Bucket-2
@@ -277,6 +284,8 @@ if defined?(ControllerRequestSpecSupport) &&
     post "/bucket/failed_with_redirect", to: "server_bucket_spec_support/bucket_server#failed_with_redirect"
     post "/bucket/untouched_explicit_render",
          to: "server_bucket_spec_support/bucket_server#untouched_explicit_render"
+    # Story 15.5 (FR109) — a plain Rails GET on a Server controller (non-negotiated).
+    get  "/bucket/plain_rails", to: "server_bucket_spec_support/bucket_server#plain_rails"
     post "/bucket/dual_redirecting", to: "server_bucket_spec_support/bucket_dual#redirecting"
     post "/bucket/protected", to: "server_bucket_spec_support/bucket_forgery#create_protected"
     get  "/bucket/csrf_token", to: "server_bucket_spec_support/bucket_forgery#csrf_token"
@@ -657,6 +666,120 @@ RSpec.describe "Story 9.2: Ruact::Server dual-bucket response negotiation", :sto
       get "/server-implicit/show", {}, { "HTTP_ACCEPT" => "text/x-component" }
       expect(last_response.status).to eq(200)
       expect(last_response.headers["Content-Type"]).to include("text/x-component")
+    end
+  end
+
+  # Story 15.5 (FR109) — the dev-mode response-shape legibility log. One
+  # `[ruact]` line per ruact-NEGOTIATED request naming the chosen bucket + the
+  # deciding signal. Log-only (byte-identical), dev-gated, SILENT on
+  # non-negotiated (plain Rails) responses. Mirrors the F6 warning test shape.
+  describe "Story 15.5: dev-mode response-shape log (FR109)", :story_15_5 do
+    # The distinctive fragment of the 15.5 log — deliberately distinct from the
+    # F6 warning line (which matches `called \`ruact_errors\` and then rendered`).
+    let(:shape_log_re) { /\[ruact\] .* — .* → / }
+    let(:flight_headers)   { { "HTTP_ACCEPT" => "text/x-component" } }
+    let(:html_get_headers) { { "HTTP_ACCEPT" => "*/*" } }
+
+    before do
+      # The suite default env is development (RAILS_ENV unset); dev examples
+      # still stub it explicitly so they never depend on the suite default.
+      allow(Rails.logger).to receive(:info)
+    end
+
+    def stub_env(name)
+      allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new(name))
+    end
+
+    def stub_development_env
+      stub_env("development")
+    end
+
+    it "logs the function-call JSON bucket once with the deciding signal (AC2)" do
+      stub_development_env
+      post "/bucket/with_ivars", "{}", json_headers
+
+      expect(Rails.logger).to have_received(:info).with(
+        "[ruact] ServerBucketSpecSupport::BucketServerController#with_ivars — " \
+        "Accept: application/json + POST → function-call JSON"
+      ).once
+    end
+
+    it "names the 204 (no ivars) sub-shape" do
+      stub_development_env
+      post "/bucket/empty", "{}", json_headers
+
+      expect(last_response.status).to eq(204)
+      expect(Rails.logger).to have_received(:info).with(
+        a_string_matching(%r{#empty_action — Accept: application/json \+ POST → function-call JSON \(204, no ivars\)})
+      ).once
+    end
+
+    it "names the $redirect sub-shape" do
+      stub_development_env
+      post "/bucket/redirecting", "{}", json_headers
+
+      expect(JSON.parse(last_response.body)).to eq("$redirect" => "/posts/1")
+      expect(Rails.logger).to have_received(:info).with(
+        a_string_matching(%r{#redirecting — Accept: application/json \+ POST → function-call \$redirect})
+      ).once
+    end
+
+    it "logs the Flight-page bucket on a text/x-component page render (AC2)" do
+      stub_development_env
+      get "/server-implicit/show", {}, flight_headers
+
+      expect(last_response.headers["Content-Type"]).to include("text/x-component")
+      expect(Rails.logger).to have_received(:info).with(
+        "[ruact] ServerBucketSpecSupport::ServerImplicitController#show — " \
+        "Accept: text/x-component → Flight page"
+      ).once
+    end
+
+    it "logs the HTML-shell bucket on an HTML-acceptable page GET (AC2)" do
+      stub_development_env
+      get "/server-implicit/show", {}, html_get_headers
+
+      expect(last_response.headers["Content-Type"]).to include("text/html")
+      expect(Rails.logger).to have_received(:info).with(
+        "[ruact] ServerBucketSpecSupport::ServerImplicitController#show — " \
+        "HTML-acceptable Accept, no Flight header → HTML shell"
+      ).once
+    end
+
+    it "is SILENT on a plain Rails action on the same controller (non-negotiated, AC2)" do
+      stub_development_env
+      get "/bucket/plain_rails"
+
+      expect(last_response.status).to eq(200)
+      expect(last_response.body).to eq("just rails")
+      expect(Rails.logger).not_to have_received(:info).with(a_string_matching(shape_log_re))
+    end
+
+    it "is SILENT outside development and byte-identical to the dev response (log-only, AC2)",
+       :aggregate_failures do
+      stub_env("production")
+      post "/bucket/with_ivars", "{}", json_headers
+      prod_status = last_response.status
+      prod_body   = last_response.body
+      prod_ctype  = last_response.headers["Content-Type"]
+      prod_vary   = last_response.headers["Vary"]
+      expect(Rails.logger).not_to have_received(:info).with(a_string_matching(shape_log_re))
+
+      stub_development_env
+      post "/bucket/with_ivars", "{}", json_headers
+      expect(Rails.logger).to have_received(:info).with(a_string_matching(shape_log_re))
+      expect(last_response.status).to eq(prod_status)
+      expect(last_response.body).to eq(prod_body)
+      expect(last_response.headers["Content-Type"]).to eq(prod_ctype)
+      expect(last_response.headers["Vary"]).to eq(prod_vary)
+    end
+
+    it "never logs in the test environment either" do
+      stub_env("test")
+      post "/bucket/with_ivars", "{}", json_headers
+
+      expect(last_response.status).to eq(200)
+      expect(Rails.logger).not_to have_received(:info).with(a_string_matching(shape_log_re))
     end
   end
 end
