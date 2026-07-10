@@ -359,6 +359,7 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
             gen.create_server_functions_directory
             gen.append_gitignore_entries
             gen.create_vite_config
+            gen.create_agents_md
           end.not_to raise_error
         end
 
@@ -371,6 +372,7 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(File.read(File.join(app_root, ".gitignore")))
           .to include("app/javascript/.ruact/server-functions.ts")
         expect(File).to exist(File.join(app_root, "vite.config.js"))
+        expect(File).to exist(File.join(app_root, "AGENTS.md"))
       end
     end
   end
@@ -886,6 +888,218 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         line = ->(name) { klass.instance_method(name).source_location.last }
         expect(line.call(:create_package_json)).to be < line.call(:install_javascript_dependencies)
         expect(line.call(:create_launch_files)).to be < line.call(:install_javascript_dependencies)
+      end
+    end
+  end
+
+  # Story 15.1 (FR105) — `ruact:install` emits an AGENTS.md teaching coding
+  # agents the ruact conventions, traps, and verification commands. The ruact
+  # content is delimited by explicit markers so re-runs are idempotent, a
+  # user-authored AGENTS.md is appended to (never clobbered), and --force
+  # refreshes ONLY the marked section. Content assertions grep stable tokens
+  # (commands, file paths, API names) — never full-file snapshots, since later
+  # stories (15.2/15.3/15.4) deliberately evolve the prose.
+  describe "install generator — AGENTS.md emission (Story 15.1 — FR105)", :story_15_1 do
+    require "stringio"
+    require "generators/ruact/install/install_generator"
+
+    let(:app_root) { Dir.mktmpdir("ruact_install_1501") }
+    let(:agents_md_path) { File.join(app_root, "AGENTS.md") }
+    let(:begin_marker) { "<!-- ruact:begin -->" }
+    let(:end_marker) { "<!-- ruact:end -->" }
+    let(:template_path) do
+      File.expand_path("../../lib/generators/ruact/install/templates/AGENTS.md.tt", __dir__)
+    end
+
+    after { FileUtils.rm_rf(app_root) }
+
+    def build_generator(root, opts = {})
+      Ruact::Generators::InstallGenerator.new([], opts, destination_root: root)
+    end
+
+    def silently
+      original = $stdout
+      $stdout = StringIO.new
+      yield
+    ensure
+      $stdout = original
+    end
+
+    # Captures and returns the generator's say/say_status stdout for text asserts.
+    def capture_stdout
+      original = $stdout
+      $stdout = StringIO.new
+      yield
+      $stdout.string
+    ensure
+      $stdout = original
+    end
+
+    describe "fresh emission (AC#1)" do
+      it "creates AGENTS.md delimited by the ruact markers", :aggregate_failures do
+        silently { build_generator(app_root).create_agents_md }
+
+        expect(File).to exist(agents_md_path)
+        content = File.read(agents_md_path)
+        expect(content).to start_with(begin_marker)
+        expect(content.rstrip).to end_with(end_marker)
+      end
+
+      it "covers the model, codegen, queries and verification areas", :aggregate_failures do
+        silently { build_generator(app_root).create_agents_md }
+        content = File.read(agents_md_path)
+
+        # The verb rule (mutations = non-GET routed actions on Ruact::Server)
+        expect(content).to include("Ruact::Server")
+        expect(content).to include("non-GET")
+        # Route-driven codegen: ground-truth file + regenerate command
+        expect(content).to include("app/javascript/.ruact/server-functions.ts")
+        expect(content).to include("bin/rails ruact:server_functions:generate")
+        # Queries (reads)
+        expect(content).to include("Ruact::Query")
+        expect(content).to include("app/queries/")
+        expect(content).to include("ruact_queries")
+        expect(content).to include("useQuery")
+        # Verification commands (the only two that exist today)
+        expect(content).to include("bin/rails ruact:doctor")
+        # Docs pointers
+        expect(content).to include("https://ruact.dev")
+        expect(content).to include("llms.txt")
+      end
+
+      it "covers the five traps and the safety areas", :aggregate_failures do
+        silently { build_generator(app_root).create_agents_md }
+        content = File.read(agents_md_path)
+
+        # Trap 1 — children unsupported / self-closing only
+        expect(content).to include("self-closing")
+        expect(content).to include("children")
+        # Trap 2 — Ruby (not JS) inside {} props
+        expect(content).to include("Ruby, not JavaScript")
+        # Trap 3 — Accept-header dual shape (exact application/json)
+        expect(content).to include("Accept")
+        expect(content).to include("application/json")
+        # Trap 4 — ruact_errors fall-through
+        expect(content).to include("ruact_errors")
+        expect(content).to include("fall-through")
+        # Trap 5 — name derivation from routes
+        expect(content).to include("createPost")
+        expect(content).to include("ruact_function_name")
+        # Serialization allowlist
+        expect(content).to include("ruact_props")
+        expect(content).to include("strict_serialization")
+        # SGID helpers (purpose + expiry required grain)
+        expect(content).to include("Ruact.signed_global_id")
+        expect(content).to include("Ruact.locate_signed")
+      end
+
+      it "makes no claim before its artifact (AC#4 — content honesty)", :aggregate_failures do
+        silently { build_generator(app_root).create_agents_md }
+        content = File.read(agents_md_path)
+
+        # --json introspection is Story 15.3's; the loud children error is 15.2's;
+        # test helpers are 15.4's — none may be referenced as existing.
+        expect(content).not_to include("--json")
+        expect(content).not_to include("PreprocessorError")
+        # tsc does not run in a fresh install (no typescript devDep / tsconfig) —
+        # it may only appear conditionally phrased (D1).
+        expect(content).to match(/if your app has typescript tooling/i) if content.include?("tsc")
+        # Volatile strings must not be quoted: no gem version pins.
+        expect(content).not_to match(/\b0\.0\.\d+\b/)
+      end
+    end
+
+    describe "idempotency (AC#2 — double-run zero diff)" do
+      it "leaves the file byte-identical on a second run and reports a skip", :aggregate_failures do
+        silently { build_generator(app_root).create_agents_md }
+        first = File.read(agents_md_path)
+
+        output = capture_stdout { build_generator(app_root).create_agents_md }
+
+        expect(File.read(agents_md_path)).to eq(first)
+        expect(output).to include("skip")
+      end
+    end
+
+    describe "append mode (AC#2 — user-authored AGENTS.md)" do
+      let(:user_content) { "# My app\n\nUse pnpm here. Never touch config/secrets.yml.\n" }
+
+      it "appends the marked section preserving every pre-existing user byte", :aggregate_failures do
+        File.write(agents_md_path, user_content)
+
+        silently { build_generator(app_root).create_agents_md }
+        content = File.read(agents_md_path)
+
+        expect(content).to start_with(user_content)
+        expect(content.scan(begin_marker).count).to eq(1)
+        expect(content.scan(end_marker).count).to eq(1)
+        expect(content).to include("\n\n#{begin_marker}")
+      end
+
+      it "blank-line separates the section when the user file lacks a trailing newline" do
+        File.write(agents_md_path, "# My app — no trailing newline")
+
+        silently { build_generator(app_root).create_agents_md }
+
+        expect(File.read(agents_md_path))
+          .to include("# My app — no trailing newline\n\n#{begin_marker}")
+      end
+
+      it "appending then re-running is idempotent (skip, zero diff)" do
+        File.write(agents_md_path, user_content)
+        silently { build_generator(app_root).create_agents_md }
+        appended = File.read(agents_md_path)
+
+        silently { build_generator(app_root).create_agents_md }
+
+        expect(File.read(agents_md_path)).to eq(appended)
+      end
+    end
+
+    describe "--force refresh (AC#2 — marked-block-only)" do
+      it "replaces ONLY the between-marker content, never user bytes outside", :aggregate_failures do
+        silently { build_generator(app_root).create_agents_md }
+        section = File.read(agents_md_path)
+        stale = section.sub("## Five traps", "## STALE CONTENT FROM AN OLDER GEM")
+        File.write(agents_md_path, "# mine, above\n\n#{stale}\n# mine, below\n")
+
+        silently { build_generator(app_root, { force: true }).create_agents_md }
+        content = File.read(agents_md_path)
+
+        expect(content).to start_with("# mine, above\n")
+        expect(content).to end_with("# mine, below\n")
+        expect(content).to include("## Five traps")
+        expect(content).not_to include("STALE CONTENT FROM AN OLDER GEM")
+        expect(content.scan(begin_marker).count).to eq(1)
+      end
+
+      it "warns and leaves the file untouched when the end marker is missing", :aggregate_failures do
+        broken = "# mine\n\n#{begin_marker}\ntruncated ruact section, no end marker\n"
+        File.write(agents_md_path, broken)
+
+        output = capture_stdout { build_generator(app_root, { force: true }).create_agents_md }
+
+        expect(File.read(agents_md_path)).to eq(broken)
+        expect(output).to include("warn")
+      end
+
+      it "creates the file under --force when none exists" do
+        silently { build_generator(app_root, { force: true }).create_agents_md }
+        expect(File.read(agents_md_path)).to include(begin_marker)
+      end
+    end
+
+    describe "action ordering + template budget" do
+      it "defines create_agents_md BEFORE install_javascript_dependencies" do
+        klass = Ruact::Generators::InstallGenerator
+        line = ->(name) { klass.instance_method(name).source_location.last }
+        expect(line.call(:create_agents_md)).to be < line.call(:install_javascript_dependencies)
+      end
+
+      # AC#3 tripwire — the ~150-line budget is the epic's scope probe; the
+      # tripwire's tolerance is 160 (the tripwire's, not the product contract's).
+      it "keeps the template body at or under 160 lines" do
+        expect(File.read(template_path).lines.count).to be <= 160
       end
     end
   end

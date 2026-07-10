@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`rails generate ruact:install` now emits an `AGENTS.md` teaching coding agents the ruact conventions, traps, and verification commands (FR105)** ([Story 15.1](../_bmad-output/implementation-artifacts/15-1-agents-md-install-emission-and-llms-txt.md)). ruact is out-of-distribution for every LLM, so a fresh app now ships the agent context in-repo: the mental model (Rails routes as the single source of truth; ERB as the server component; PascalCase self-closing tags), the verb rule, queries/`useQuery`, the codegen ground truth (`app/javascript/.ruact/server-functions.ts` + `bin/rails ruact:server_functions:generate`), the five traps (children, Ruby-in-braces, Accept-header dual shape, `ruact_errors` fall-through, name derivation), the `ruact_props`/`strict_serialization` allowlist, the SGID helpers, and the verification loop (`bin/rails ruact:doctor`). The emitted content is delimited by `<!-- ruact:begin -->`/`<!-- ruact:end -->` markers and the new `create_agents_md` action is **idempotent and append-aware**: no file → create; a user-authored `AGENTS.md` without markers → the marked section is appended with every pre-existing byte preserved; markers present → skip (re-running install is zero-diff); `--force` refreshes **only** the between-marker content, never user bytes outside it. The same compact reference is served by the docs site at `https://ruact.dev/llms.txt` (kept in sync editorially). New `templates/AGENTS.md.tt` + `:story_15_1` specs (including a ≤160-line template-budget tripwire).
+
 ## [0.0.7] - 2026-06-30
 
 ### Fixed

@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "erb"
 require "pathname"
 require "rails/generators"
 require "ruact"
@@ -19,7 +20,10 @@ module Ruact
     # 7. Creates Procfile.dev + bin/dev (foreman) so the single `bin/dev`
     #    command boots BOTH Rails and the Vite dev server (Story 14.6, Epic 14
     #    DoD — a ruact app needs both processes).
-    # 8. Runs `npm install` so JavaScript dependencies are ready (FR101);
+    # 8. Emits AGENTS.md (marker-delimited, append-aware, idempotent) so coding
+    #    agents working in the app have ruact's conventions, traps, and
+    #    verification commands in context by default (Story 15.1, FR105).
+    # 9. Runs `npm install` so JavaScript dependencies are ready (FR101);
     #    skippable via --skip-npm.
     #
     # Story 14.2 (FR104) — the generator no longer writes a bootstrap entry into
@@ -205,6 +209,38 @@ module Ruact
         say ""
       end
 
+      # Story 15.1 (FR105) — emit AGENTS.md so coding agents working in the app
+      # have ruact's conventions, traps, and verification commands in context
+      # by default. The ruact content is delimited by explicit markers
+      # (`<!-- ruact:begin -->` / `<!-- ruact:end -->`) so the action can be
+      # append-aware and idempotent:
+      #
+      #   no file                  → create it (the template IS the section)
+      #   file without markers     → APPEND the marked section, every
+      #                              pre-existing user byte preserved
+      #   markers present          → skip (re-running install is zero-diff)
+      #   markers present + --force → refresh ONLY the between-marker content —
+      #                              deliberately narrower than the vite.config
+      #                              full-overwrite posture, because a user's
+      #                              AGENTS.md may carry their own project
+      #                              instructions above/below ruact's section.
+      #
+      # Later stories (15.2 loud children error, 15.3 --json introspection,
+      # 15.4 test helpers) evolve the template; `--force` after a gem upgrade
+      # is the designed refresh path.
+      def create_agents_md
+        destination = Pathname(destination_root).join("AGENTS.md")
+
+        return template("AGENTS.md.tt", "AGENTS.md") unless destination.exist?
+
+        content = destination.read
+        if content.include?(AGENTS_MD_BEGIN_MARKER)
+          refresh_or_skip_agents_md_section(content)
+        else
+          append_agents_md_section(content)
+        end
+      end
+
       # Story 14.1 (FR101) — install JavaScript dependencies so a fresh app is
       # runnable in one command. Runs LAST among the file-producing actions
       # (after every file is written) so a failure here leaves the generated
@@ -260,6 +296,61 @@ module Ruact
       end
 
       private
+
+      # Story 15.1 — the exact marker tokens delimiting the ruact-managed
+      # section of AGENTS.md. For a prose file the only safe idempotency key is
+      # an explicit marker pair (`append_gitignore_entries`-style exact-line
+      # dedup would misfire on edited prose).
+      AGENTS_MD_BEGIN_MARKER = "<!-- ruact:begin -->"
+      AGENTS_MD_END_MARKER   = "<!-- ruact:end -->"
+
+      # The full marked section, non-greedy so nothing outside the marker pair
+      # is ever captured (--force replaces exactly this range).
+      AGENTS_MD_SECTION_RE = /#{Regexp.escape(AGENTS_MD_BEGIN_MARKER)}.*?#{Regexp.escape(AGENTS_MD_END_MARKER)}/m
+      private_constant :AGENTS_MD_BEGIN_MARKER, :AGENTS_MD_END_MARKER, :AGENTS_MD_SECTION_RE
+
+      # The rendered ruact section — the full AGENTS.md.tt body, begin marker
+      # first line through end marker last line (the template IS the section).
+      # Rendered through ERB in the generator's context so the template may
+      # interpolate like any other Thor template (today it is fully static).
+      def agents_md_section
+        @agents_md_section ||= ERB.new(
+          File.read(File.expand_path("templates/AGENTS.md.tt", __dir__)),
+          trim_mode: "-"
+        ).result(binding)
+      end
+
+      # Story 15.1 — append the marked ruact section to a user-authored
+      # AGENTS.md, separated by exactly one blank line, preserving every
+      # pre-existing byte.
+      def append_agents_md_section(existing_content)
+        separator = existing_content.end_with?("\n") ? "\n" : "\n\n"
+        append_to_file "AGENTS.md", "#{separator}#{agents_md_section}"
+      end
+
+      # Story 15.1 — markers already present: skip (idempotent re-run) unless
+      # --force, which replaces ONLY the content between (and including) the
+      # marker pair. Bytes outside the markers are never touched. A begin
+      # marker without its end marker is ambiguous — warn and leave the file
+      # alone rather than guess at the section boundary.
+      def refresh_or_skip_agents_md_section(content)
+        unless options[:force]
+          say_status "skip", "AGENTS.md already carries the ruact section " \
+                             "(re-run with --force to refresh it)", :yellow
+          return
+        end
+
+        unless content.include?(AGENTS_MD_END_MARKER)
+          say_status "warn", "AGENTS.md has #{AGENTS_MD_BEGIN_MARKER} but no matching " \
+                             "#{AGENTS_MD_END_MARKER} — leaving the file untouched; " \
+                             "restore the end marker and re-run with --force", :yellow
+          return
+        end
+
+        # Block form so `\`/`\1` sequences in the section are never treated as
+        # backreferences by String#gsub.
+        gsub_file("AGENTS.md", AGENTS_MD_SECTION_RE) { agents_md_section.chomp }
+      end
 
       # Story 14.6 (live clean-room fix) — ruact OWNS `bin/dev`. The foreman
       # launcher is load-bearing: it boots BOTH Rails AND the Vite dev server,
