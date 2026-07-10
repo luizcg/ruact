@@ -1000,8 +1000,8 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         # (The loud children `PreprocessorError` is Story 15.2's shipped
         # artifact, and the `--json` introspection commands are Story 15.3's —
         # both may now be claimed; see the `:story_15_2` / `:story_15_3` guards
-        # below that PIN each claim's presence. Story 15.4's test helpers are not
-        # yet shipped, so nothing may reference them as existing.)
+        # below that PIN each claim's presence. Story 15.4's public render
+        # helpers are now shipped too — see the `:story_15_4` guard below.)
         #
         # tsc does not run in a fresh install (no typescript devDep / tsconfig) —
         # it may only appear conditionally phrased (D1).
@@ -1034,6 +1034,19 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(content).to include("Append `-- --json`")
         expect(content).to match(/EXPERIMENTAL/)
         expect(content).to include("schema_version")
+      end
+
+      # Story 15.4 (D6) — now that the public render-assertion helpers are a
+      # shipped artifact (FR108), the "Verify your work" section references them.
+      # This PINS the claim (name + explicit require + the JSON-vs-Flight rule)
+      # so it stays consistent with `website/public/llms.txt`.
+      it "references the ruact/testing render helpers (15.4 D6)", :aggregate_failures, :story_15_4 do
+        silently { build_generator(app_root).create_agents_md }
+        content = File.read(agents_md_path)
+
+        expect(content).to include(%(require "ruact/testing"))
+        expect(content).to include("have_ruact_component")
+        expect(content).to include("JSON.parse(response.body)")
       end
     end
 
