@@ -28,6 +28,17 @@ module Ruact
     SUSPENSE_OPEN_RE  = /<Suspense\b([^>]*?)>/m
     SUSPENSE_CLOSE_RE = %r{</Suspense>}
 
+    # Story 15.2 (FR106) — matches a PascalCase component tag USED WITH CHILDREN:
+    # a non-self-closing opening tag `<Name ...>` followed by any content and a
+    # MATCHING closing tag `</Name>` (backreference \1). Keys on the matching
+    # closing tag, NOT on "opening tag lacks `/>`", so a bare non-self-closing
+    # opening with no closing tag (a `<Dialog>` opening) stays a valid call.
+    # `/m` lets children span multiple lines; the lazy `.*?` stops at the first
+    # matching close. Runs AFTER Suspense normalization (Step 1), by which point
+    # `<Suspense>...</Suspense>` is already lowercase `<ruact-suspense>` and can
+    # never match this PascalCase pattern — its legitimate children never trip.
+    CHILDREN_TAG_RE = %r{<([A-Z][A-Za-z0-9]*)(?:\s[^>]*)?>.*?</\1>}m
+
     # Matches a +{ruby_expr}+ attribute value — captures everything between the braces.
     # We use a simple bracket-depth counter approach during scanning instead of regex
     # because expressions can contain nested braces: {foo.bar({ a: 1 })}.
@@ -66,6 +77,14 @@ module Ruact
                end
         .gsub(SUSPENSE_CLOSE_RE, "</ruact-suspense>")
 
+      # Step 1.5 (Story 15.2 / FR106): AFTER Suspense normalization (so Suspense's
+      # legitimate children are already `<ruact-suspense>` and excluded) and
+      # BEFORE the general component pass, fail loudly if any PascalCase component
+      # tag is used with children (a matching closing tag). Silent degradation of
+      # `<Card>Hello</Card>` — the #1 predictable JSX-habit mistake — becomes a
+      # self-contained, re-raised-as-is PreprocessorError naming the fix.
+      detect_children!(result, identifier)
+
       # Step 2: transform remaining PascalCase self-closing / opening component tags.
       result.gsub(COMPONENT_TAG_RE) do |match|
         component_name = ::Regexp.last_match(1)
@@ -98,6 +117,27 @@ module Ruact
     end
 
     private
+
+    # Story 15.2 (FR106) — raise a loud, self-contained {ChildrenNotSupportedError}
+    # on the FIRST PascalCase component tag used with children (a matching closing
+    # tag). +result+ is the post-Suspense-normalization source; +identifier+ is
+    # the template path (from {ErbPreprocessorHook}). The line uses the same idiom
+    # as Step 2 (`count("\n") + 1`) on the OPENING tag's offset, so multi-line
+    # children report the opening line. Message mirrors {ComponentContract.raise_error}
+    # shape so both loud preprocess errors read identically. A no-op when no pair
+    # is present — the fast path stays byte-identical.
+    def detect_children!(result, identifier)
+      m = CHILDREN_TAG_RE.match(result)
+      return unless m
+
+      component = m[1]
+      line      = result[0...m.begin(0)].count("\n") + 1
+      location  = [identifier, line].compact.join(":")
+      location  = "(unknown location)" if location.empty?
+      message = "ruact: <#{component}> at #{location} children are not supported " \
+                "— pass content as a prop, e.g. `<#{component} content={...} />`."
+      raise ChildrenNotSupportedError, message
+    end
 
     # Extract a string attribute value (double or single quoted) from an attrs string.
     def extract_string_attr(attrs, name)

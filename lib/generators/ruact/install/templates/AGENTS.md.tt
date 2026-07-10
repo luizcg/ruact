@@ -76,9 +76,10 @@ Regenerate it after changing routes or queries:
 ## Five traps
 
 1. **Component tags take no children.** Client component tags are self-closing
-   ONLY: `<Card content={@body} />`, never `<Card>...</Card>`. Today children
-   fail silently (they never reach the component) — pass content as a prop.
-   Sole exception: the built-in `<Suspense fallback="...">...</Suspense>` pair.
+   ONLY: `<Card content={@body} />`, never `<Card>...</Card>`. Children (a
+   matching closing tag) fail LOUDLY with a `PreprocessorError` at preprocess
+   time — pass content as a prop instead. Sole exception: the built-in
+   `<Suspense fallback="...">...</Suspense>` pair.
 2. **`{}` props are Ruby, not JavaScript.** `<Badge label={@post.title} />`
    evaluates `@post.title` as a Ruby expression in the ERB. No JS ternaries,
    no `{...spread}`, no JSX children. Plain unbraced string props are not
