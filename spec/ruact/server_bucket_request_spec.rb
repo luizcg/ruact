@@ -138,6 +138,40 @@ module ServerBucketSpecSupport
       post.valid?
       ruact_errors(post)
     end
+
+    # Story 15.0 (F6) — the injection-BYPASS case the dev warning targets:
+    # registers errors, then renders explicitly on the same branch, so
+    # `default_render` never runs and the errors vanish from the JSON body.
+    def opt_out_render
+      post = ServerBucketSpecSupport::ValidatedPost.new(title: nil)
+      post.valid?
+      ruact_errors(post)
+      render json: { "ok" => false }
+    end
+
+    # Story 15.0 (F6 guardrail a) — the documented-correct Bucket-1 pattern:
+    # register errors, render the form page again (the template binds the
+    # `ruact_errors` reader). Requested WITHOUT the function-call Accept.
+    def failed_with_page_render
+      post = ServerBucketSpecSupport::ValidatedPost.new(title: nil)
+      post.valid?
+      ruact_errors(post)
+      render :new_form
+    end
+
+    # Story 15.0 (F6 guardrail b) — register errors, then redirect (the
+    # redirect-back round-trip). Correct on BOTH buckets, must never warn.
+    def failed_with_redirect
+      post = ServerBucketSpecSupport::ValidatedPost.new(title: nil)
+      post.valid?
+      ruact_errors(post)
+      redirect_to "/posts/new"
+    end
+
+    # Story 15.0 (F6 guardrail d) — explicit render with an UNTOUCHED collector.
+    def untouched_explicit_render
+      render json: { "ok" => true }
+    end
   end
 
   # Review round 2 — an auth-style before_action that redirects on a Bucket-2
@@ -211,6 +245,15 @@ ControllerRequestSpecSupport.write_view(
   ERB
 )
 
+# Story 15.0 (F6 guardrail a) — the re-rendered form page for the documented
+# Bucket-1 `ruact_errors(record); render :new_form` pattern. No component tags
+# on purpose (the guardrail is about the warn predicate, not the pipeline).
+ControllerRequestSpecSupport.write_view(
+  "server_bucket_spec_support/bucket_server", "new_form", <<~ERB
+    <div>the form again</div>
+  ERB
+)
+
 if defined?(ControllerRequestSpecSupport) &&
    !ControllerRequestSpecSupport.instance_variable_get(:@__ruact_server_bucket_routes_appended)
   ControllerRequestSpecSupport.instance_variable_set(:@__ruact_server_bucket_routes_appended, true)
@@ -227,6 +270,13 @@ if defined?(ControllerRequestSpecSupport) &&
     post "/bucket/validated_create_invalid", to: "server_bucket_spec_support/bucket_server#validated_create_invalid"
     post "/bucket/validated_create_valid",   to: "server_bucket_spec_support/bucket_server#validated_create_valid"
     post "/bucket/stray_errors_ivar", to: "server_bucket_spec_support/bucket_server#stray_errors_ivar"
+    # Story 15.0 (F6) — the warning truth-table routes.
+    post "/bucket/opt_out_render", to: "server_bucket_spec_support/bucket_server#opt_out_render"
+    post "/bucket/failed_with_page_render",
+         to: "server_bucket_spec_support/bucket_server#failed_with_page_render"
+    post "/bucket/failed_with_redirect", to: "server_bucket_spec_support/bucket_server#failed_with_redirect"
+    post "/bucket/untouched_explicit_render",
+         to: "server_bucket_spec_support/bucket_server#untouched_explicit_render"
     post "/bucket/dual_redirecting", to: "server_bucket_spec_support/bucket_dual#redirecting"
     post "/bucket/protected", to: "server_bucket_spec_support/bucket_forgery#create_protected"
     get  "/bucket/csrf_token", to: "server_bucket_spec_support/bucket_forgery#csrf_token"
@@ -470,6 +520,124 @@ RSpec.describe "Story 9.2: Ruact::Server dual-bucket response negotiation", :sto
     # renders the structured 422 error payload — proven (unchanged) by
     # server_rescue_request_spec.rb's `record_invalid` example. 13.3 is the
     # NON-raised 200 path above; the two contracts stay distinct.
+  end
+
+  # Story 15.0 (F6) — the dev-mode injection opt-out warning truth table.
+  # Fires ONLY on: development + function-call request + touched collector +
+  # explicit host render. Silent on every documented-correct pattern.
+  describe "Story 15.0: dev-mode ruact_errors injection opt-out warning (F6)", :story_15_0 do
+    # The distinctive fragment of the F6 message (deliberately distinct from
+    # any other `[ruact]` log line, incl. the future 15.5 bucket log).
+    let(:warning_re) { /\[ruact\] .*called `ruact_errors` and then rendered explicitly/ }
+    let(:html_form_headers) do
+      { "CONTENT_TYPE" => "application/x-www-form-urlencoded", "HTTP_ACCEPT" => "text/html" }
+    end
+
+    before do
+      allow(Rails.logger).to receive(:warn)
+    end
+
+    # NOTE: the suite's default Rails.env is "development" (RAILS_ENV unset),
+    # so the dev examples stub it EXPLICITLY anyway (they must not depend on
+    # the suite default) and the non-dev example stubs a non-dev env.
+    def stub_env(name)
+      allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new(name))
+    end
+
+    def stub_development_env
+      stub_env("development")
+    end
+
+    it "warns exactly once on an explicit render after ruact_errors on a function-call request" do
+      stub_development_env
+      post "/bucket/opt_out_render", "{}", json_headers
+
+      expect(Rails.logger).to have_received(:warn).with(
+        a_string_matching(/\[ruact\] .*BucketServerController#opt_out_render.*ruact_errors.*NOT.*injected/m)
+      ).once
+    end
+
+    it "names the fix in the message (fall through, page-render binding, or redirect)" do
+      stub_development_env
+      post "/bucket/opt_out_render", "{}", json_headers
+
+      expect(Rails.logger).to have_received(:warn).with(
+        a_string_matching(/fall.*through.*errors=\{ruact_errors\}.*redirect_to/m)
+      )
+    end
+
+    it "keeps the response byte-identical whether the warning fires or not (log-only)" do
+      stub_env("production")
+      post "/bucket/opt_out_render", "{}", json_headers
+      silent_status = last_response.status
+      silent_body   = last_response.body
+      expect(Rails.logger).not_to have_received(:warn).with(a_string_matching(warning_re))
+
+      stub_development_env
+      post "/bucket/opt_out_render", "{}", json_headers
+
+      expect(Rails.logger).to have_received(:warn).with(a_string_matching(warning_re))
+      expect(last_response.status).to eq(silent_status)
+      expect(last_response.body).to eq(silent_body)
+      expect(JSON.parse(last_response.body)).to eq("ok" => false)
+    end
+
+    it "guardrail (a): silent on the documented Bucket-1 `ruact_errors(record); render :new` pattern" do
+      stub_development_env
+      post "/bucket/failed_with_page_render", "post[title]=", html_form_headers
+
+      expect(last_response.status).to eq(200)
+      expect(last_response.body).to include("the form again")
+      expect(Rails.logger).not_to have_received(:warn).with(a_string_matching(warning_re))
+    end
+
+    it "guardrail (b): silent on `ruact_errors(record); redirect_to` on a function-call request" do
+      stub_development_env
+      post "/bucket/failed_with_redirect", "{}", json_headers
+
+      expect(JSON.parse(last_response.body)).to eq("$redirect" => "/posts/new")
+      expect(Rails.logger).not_to have_received(:warn).with(a_string_matching(warning_re))
+    end
+
+    it "guardrail (b): silent on `ruact_errors(record); redirect_to` on a Bucket-1 request" do
+      stub_development_env
+      post "/bucket/failed_with_redirect", "post[title]=", html_form_headers
+
+      expect(last_response.status).to eq(302)
+      expect(Rails.logger).not_to have_received(:warn).with(a_string_matching(warning_re))
+    end
+
+    it "guardrail (c): silent on the fall-through itself (errors were injected)" do
+      stub_development_env
+      post "/bucket/validated_create_invalid", "{}", json_headers
+
+      expect(JSON.parse(last_response.body).fetch("errors")).to eq("title" => ["Title can't be blank"])
+      expect(Rails.logger).not_to have_received(:warn).with(a_string_matching(warning_re))
+    end
+
+    it "guardrail (d): silent on an explicit render when the collector was never touched" do
+      stub_development_env
+      post "/bucket/untouched_explicit_render", "{}", json_headers
+
+      expect(JSON.parse(last_response.body)).to eq("ok" => true)
+      expect(Rails.logger).not_to have_received(:warn).with(a_string_matching(warning_re))
+    end
+
+    it "never warns outside development (the bypass case in the test env stays silent)" do
+      stub_env("test")
+      post "/bucket/opt_out_render", "{}", json_headers
+
+      expect(last_response.status).to eq(200)
+      expect(Rails.logger).not_to have_received(:warn).with(a_string_matching(warning_re))
+    end
+
+    it "never warns in production either" do
+      stub_env("production")
+      post "/bucket/opt_out_render", "{}", json_headers
+
+      expect(last_response.status).to eq(200)
+      expect(Rails.logger).not_to have_received(:warn).with(a_string_matching(warning_re))
+    end
   end
 
   # Story 10.0 (AC5) — the Server-path inherits the default_render graceful
