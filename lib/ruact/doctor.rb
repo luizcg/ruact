@@ -6,7 +6,7 @@ require "pathname"
 module Ruact
   # Runs a suite of installation health checks and prints ✓/✗ per check.
   # Extracted from the ruact:doctor Rake task for direct testability (FR27).
-  class Doctor
+  class Doctor # rubocop:disable Metrics/ClassLength
     CHECKS = %i[manifest vite controller layout streaming legacy_constant serialize_only flight_middleware].freeze
     # Built via Array#join so the gem-CI `name-propagation` guard does not
     # match these literals against itself (Story 5.1 review F4 — the doctor
@@ -64,6 +64,14 @@ module Ruact
     # future status) is treated as a failure (review finding R1).
     SUCCESS_STATUSES = %i[pass warn].freeze
 
+    # Story 15.3 (FR107) — version of the machine-readable `ruact:doctor --json`
+    # document (see {#as_json}). This is an **EXPERIMENTAL / UNSTABLE** contract:
+    # `0` signals the shape may change without a major version bump while the
+    # agent-facing introspection surface is iterated. Gate any parser on it.
+    # Distinct from {Ruact::ServerFunctions::Snapshot::VERSION_V2} (the internal
+    # codegen bridge version) — do not conflate the two.
+    SCHEMA_VERSION = 0
+
     # @param serialize_only_root [String] directory whose `**/*.rb` is scanned
     #   for the serialize-only tripwire. Defaults to the gem's own `lib/`;
     #   injectable so specs can point it at a fixture tree.
@@ -78,14 +86,59 @@ module Ruact
 
     def run
       puts "[ruact] Health check"
-      results = CHECKS.map { |check| send(:"check_#{check}") }
-      results.each { |status, message| puts format_result(status, message) }
+      computed = results
+      computed.each { |status, message| puts format_result(status, message) }
       # A :warn must NOT fail the run (Story 13.1 AC3); only :pass / :warn are
       # success. An unexpected status (rendered `✗`) fails loudly rather than
       # being silently treated as a pass (review finding R1).
-      passed = results.all? { |status, _| SUCCESS_STATUSES.include?(status) }
+      passed = passed?(computed)
       puts "Run rails generate ruact:install to fix configuration issues" unless passed
       passed
+    end
+
+    # Runs every check ONCE and returns the raw result tuples, index-aligned with
+    # {CHECKS}. Each tuple is `[status, message]` or `[status, message,
+    # remediation]` (the optional 3rd element is a machine-readable fix string,
+    # nil when the check has no cleanly separable remediation). Shared by {#run}
+    # (human path) and {#as_json} (JSON path) so a check like `check_vite` — which
+    # opens a socket — never runs twice. (Story 15.3)
+    #
+    # @return [Array<Array>] one tuple per check, in {CHECKS} order.
+    def results
+      CHECKS.map { |check| send(:"check_#{check}") }
+    end
+
+    # @param computed [Array<Array>] result tuples (defaults to a fresh {#results} run).
+    # @return [Boolean] true when NO check failed — only `:pass`/`:warn` are
+    #   success (mirrors {#run}'s rule; an unexpected status fails).
+    def passed?(computed = results)
+      computed.all? { |status, _| SUCCESS_STATUSES.include?(status) }
+    end
+
+    # Story 15.3 (FR107) — the machine-readable `ruact:doctor --json` document.
+    # Reuses the SAME {#results} tuples the human path prints (no double-run), so
+    # the JSON never disagrees with the `✓/⚠/✗` output. EXPERIMENTAL shape — gate
+    # parsers on `schema_version` (see {SCHEMA_VERSION}). Emits NO prose — the
+    # rake task prints ONLY this document in JSON mode.
+    #
+    # @return [Hash] `{ "schema_version" => Integer, "status" =>
+    #   "pass"|"fail", "checks" => [{ "name" =>, "status" =>, "message" =>,
+    #   "remediation" => (String|nil) }] }`.
+    def as_json
+      computed = results
+      {
+        "schema_version" => SCHEMA_VERSION,
+        "status" => passed?(computed) ? "pass" : "fail",
+        "checks" => CHECKS.each_index.map do |i|
+          status, message, remediation = computed[i]
+          {
+            "name" => CHECKS[i].to_s,
+            "status" => status.to_s,
+            "message" => message,
+            "remediation" => remediation
+          }
+        end
+      }
     end
 
     private
@@ -95,7 +148,8 @@ module Ruact
       if Pathname(path).exist?
         [:pass, "Manifest found at #{path}"]
       else
-        [:fail, "Manifest not found — run vite build"]
+        [:fail, "Manifest not found — run vite build",
+         "Run vite build (or bin/dev) to generate the client manifest."]
       end
     end
 
@@ -103,7 +157,8 @@ module Ruact
       TCPSocket.new("localhost", 5173).close
       [:pass, "Vite accessible at localhost:5173"]
     rescue Errno::ECONNREFUSED, Errno::EHOSTUNREACH
-      [:fail, "Vite not accessible at localhost:5173 — run npm run dev"]
+      [:fail, "Vite not accessible at localhost:5173 — run npm run dev",
+       "Run npm run dev (or bin/dev) to start the Vite dev server."]
     end
 
     def check_controller
@@ -111,7 +166,8 @@ module Ruact
       if File.exist?(path) && File.read(path).include?("Ruact::Controller")
         [:pass, "Ruact::Controller included in ApplicationController"]
       else
-        [:fail, "Ruact::Controller not included in ApplicationController"]
+        [:fail, "Ruact::Controller not included in ApplicationController",
+         "Run rails generate ruact:install to include Ruact::Controller in ApplicationController."]
       end
     end
 
@@ -120,7 +176,8 @@ module Ruact
       if File.exist?(path) && File.read(path).include?("ruact: root")
         [:pass, "React shell present in application.html.erb"]
       else
-        [:fail, "React shell missing from application.html.erb"]
+        [:fail, "React shell missing from application.html.erb",
+         "Run rails generate ruact:install to add the React shell to application.html.erb."]
       end
     end
 
@@ -198,7 +255,8 @@ module Ruact
       [:warn,
        "#{present.join(', ')} is mounted and may transform `text/x-component` (Flight) responses, " \
        "breaking the wire contract / streaming. Exclude Flight responses from compression " \
-       "(don't compress `text/x-component`) or mount it so it does not wrap the Flight routes."]
+       "(don't compress `text/x-component`) or mount it so it does not wrap the Flight routes.",
+       "Exclude text/x-component from compression, or mount the middleware so it does not wrap Flight routes."]
     end
 
     # Returns the app middleware stack to scan, or nil when unavailable (no
