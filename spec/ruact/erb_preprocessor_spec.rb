@@ -164,6 +164,21 @@ module Ruact
           .to raise_error(ChildrenNotSupportedError, /t\.erb:1/)
       end
 
+      # Regression (Codex Round 1, Patch 1): a MULTI-LINE Suspense opening tag
+      # must not shift the reported line — the `<Card>` below is physically on
+      # line 5 and must report :5 (Suspense is masked newline-for-newline).
+      it "reports the exact source line even after a multi-line Suspense opening" do
+        source = <<~ERB
+          <Suspense
+            fallback="loading"
+            delay="2.5">
+          </Suspense>
+          <Card>Hello</Card>
+        ERB
+        expect { run(source, identifier: "t.erb") }
+          .to raise_error(ChildrenNotSupportedError, /t\.erb:5/)
+      end
+
       # AC#2 regression — the loud error must NOT fire on any valid pattern.
       describe "does NOT fire on valid patterns (AC#2 byte-identical)" do
         it "self-closing tag, no props" do

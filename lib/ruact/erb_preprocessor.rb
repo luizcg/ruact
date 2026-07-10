@@ -28,16 +28,15 @@ module Ruact
     SUSPENSE_OPEN_RE  = /<Suspense\b([^>]*?)>/m
     SUSPENSE_CLOSE_RE = %r{</Suspense>}
 
-    # Story 15.2 (FR106) — matches a PascalCase component tag USED WITH CHILDREN:
-    # a non-self-closing opening tag `<Name ...>` followed by any content and a
-    # MATCHING closing tag `</Name>` (backreference \1). Keys on the matching
-    # closing tag, NOT on "opening tag lacks `/>`", so a bare non-self-closing
-    # opening with no closing tag (a `<Dialog>` opening) stays a valid call.
-    # `/m` lets children span multiple lines; the lazy `.*?` stops at the first
-    # matching close. Runs AFTER Suspense normalization (Step 1), by which point
-    # `<Suspense>...</Suspense>` is already lowercase `<ruact-suspense>` and can
-    # never match this PascalCase pattern — its legitimate children never trip.
-    CHILDREN_TAG_RE = %r{<([A-Z][A-Za-z0-9]*)(?:\s[^>]*)?>.*?</\1>}m
+    # Story 15.2 (FR106) — matches a PascalCase component OPENING tag (self-closing
+    # or not). The loud-children detection scans these left-to-right and flags the
+    # first NON-self-closing opening that has a later MATCHING closing tag
+    # `</Name>` — i.e. children / paired usage. It keys on the matching close, NOT
+    # on "opening lacks `/>`", so a bare non-self-closing opening with no closing
+    # tag (a `<Dialog>` opening) stays a valid call (D3). A linear `String#index`
+    # locates the literal close, avoiding the quadratic backtracking of a
+    # backreferenced lazy regex on component-dense templates.
+    CHILDREN_OPEN_RE = /<([A-Z][A-Za-z0-9]*)(?:\s[^>]*)?>/
 
     # Matches a +{ruby_expr}+ attribute value — captures everything between the braces.
     # We use a simple bracket-depth counter approach during scanning instead of regex
@@ -77,13 +76,15 @@ module Ruact
                end
         .gsub(SUSPENSE_CLOSE_RE, "</ruact-suspense>")
 
-      # Step 1.5 (Story 15.2 / FR106): AFTER Suspense normalization (so Suspense's
-      # legitimate children are already `<ruact-suspense>` and excluded) and
-      # BEFORE the general component pass, fail loudly if any PascalCase component
-      # tag is used with children (a matching closing tag). Silent degradation of
-      # `<Card>Hello</Card>` — the #1 predictable JSX-habit mistake — becomes a
-      # self-contained, re-raised-as-is PreprocessorError naming the fix.
-      detect_children!(result, identifier)
+      # Step 1.5 (Story 15.2 / FR106): before the general component pass, fail
+      # loudly if any PascalCase component tag is used with children (a matching
+      # closing tag). Silent degradation of `<Card>Hello</Card>` — the #1
+      # predictable JSX-habit mistake — becomes a self-contained, re-raised-as-is
+      # PreprocessorError naming the fix. It scans the ORIGINAL +source+ (so
+      # file:line is exact) and masks Suspense (the one legitimate paired
+      # PascalCase tag) newline-for-newline, so `<Suspense>...</Suspense>` can
+      # never trip and every reported line matches the template verbatim.
+      detect_children!(source, identifier)
 
       # Step 2: transform remaining PascalCase self-closing / opening component tags.
       result.gsub(COMPONENT_TAG_RE) do |match|
@@ -120,23 +121,47 @@ module Ruact
 
     # Story 15.2 (FR106) — raise a loud, self-contained {ChildrenNotSupportedError}
     # on the FIRST PascalCase component tag used with children (a matching closing
-    # tag). +result+ is the post-Suspense-normalization source; +identifier+ is
-    # the template path (from {ErbPreprocessorHook}). The line uses the same idiom
-    # as Step 2 (`count("\n") + 1`) on the OPENING tag's offset, so multi-line
-    # children report the opening line. Message mirrors {ComponentContract.raise_error}
-    # shape so both loud preprocess errors read identically. A no-op when no pair
-    # is present — the fast path stays byte-identical.
-    def detect_children!(result, identifier)
-      m = CHILDREN_TAG_RE.match(result)
-      return unless m
+    # tag). +source+ is the ORIGINAL template text; +identifier+ is the template
+    # path (from {ErbPreprocessorHook}). Suspense — the one legitimate paired
+    # PascalCase tag — is masked newline-for-newline first, so it never trips AND
+    # every byte position (hence every reported line) still lines up with the raw
+    # template. The line uses the same idiom as Step 2 (`count("\n") + 1`) on the
+    # OPENING tag's offset. Message mirrors {ComponentContract.raise_error} shape
+    # so both loud preprocess errors read identically. A no-op when no pair is
+    # present — the fast path stays byte-identical.
+    def detect_children!(source, identifier)
+      scan = mask_suspense(source)
 
-      component = m[1]
-      line      = result[0...m.begin(0)].count("\n") + 1
-      location  = [identifier, line].compact.join(":")
-      location  = "(unknown location)" if location.empty?
-      message = "ruact: <#{component}> at #{location} children are not supported " \
-                "— pass content as a prop, e.g. `<#{component} content={...} />`."
-      raise ChildrenNotSupportedError, message
+      scan.scan(CHILDREN_OPEN_RE) do
+        m   = ::Regexp.last_match
+        tag = m[0]
+        next if tag.end_with?("/>") # self-closing tag can carry no children
+
+        component = m[1]
+        # Linear literal search for the matching close; nil (no close) ⇒ a bare
+        # opening like `<Dialog open={true}>` — valid, stays silent (D3).
+        next unless scan.index("</#{component}>", m.end(0))
+
+        line     = scan[0...m.begin(0)].count("\n") + 1
+        location = [identifier, line].compact.join(":")
+        location = "(unknown location)" if location.empty?
+        raise ChildrenNotSupportedError,
+              "ruact: <#{component}> at #{location} children are not supported " \
+              "— pass content as a prop, e.g. `<#{component} content={...} />`."
+      end
+
+      nil
+    end
+
+    # Blank out Suspense open/close tags (the one legitimate paired PascalCase
+    # tag) while preserving EVERY newline and byte offset, so the loud-children
+    # scan neither trips on `<Suspense>...</Suspense>` nor mis-reports a line when
+    # a multi-line Suspense opening precedes the offending tag. Non-newline chars
+    # → spaces (same length); newlines kept verbatim.
+    def mask_suspense(source)
+      source
+        .gsub(SUSPENSE_OPEN_RE)  { |m| m.gsub(/[^\n]/, " ") }
+        .gsub(SUSPENSE_CLOSE_RE) { |m| m.gsub(/[^\n]/, " ") }
     end
 
     # Extract a string attribute value (double or single quoted) from an attrs string.
