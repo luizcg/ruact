@@ -1073,19 +1073,41 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(content.scan(begin_marker).count).to eq(1)
       end
 
-      it "warns and leaves the file untouched when the end marker is missing", :aggregate_failures do
-        broken = "# mine\n\n#{begin_marker}\ntruncated ruact section, no end marker\n"
-        File.write(agents_md_path, broken)
-
-        output = capture_stdout { build_generator(app_root, { force: true }).create_agents_md }
-
-        expect(File.read(agents_md_path)).to eq(broken)
-        expect(output).to include("warn")
-      end
-
       it "creates the file under --force when none exists" do
         silently { build_generator(app_root, { force: true }).create_agents_md }
         expect(File.read(agents_md_path)).to include(begin_marker)
+      end
+    end
+
+    # Codex R1 — an incomplete marker state is ambiguous in BOTH directions
+    # (appending would duplicate content next to a stray marker; replacing
+    # would guess the range), so the only byte-safe move is warn + no-op.
+    describe "broken marker pair (byte-safety)" do
+      [
+        ["a begin marker without its end marker",
+         "# mine\n\n<!-- ruact:begin -->\ntruncated ruact section, no end marker\n"],
+        ["an end marker without its begin marker",
+         "# mine\n\nstray tail of a ruact section\n<!-- ruact:end -->\n"],
+        ["an end marker preceding the begin marker",
+         "# mine\n\n<!-- ruact:end -->\nreversed\n<!-- ruact:begin -->\n"]
+      ].each do |(label, broken)|
+        it "warns and leaves the file untouched with #{label} (no --force)", :aggregate_failures do
+          File.write(agents_md_path, broken)
+
+          output = capture_stdout { build_generator(app_root).create_agents_md }
+
+          expect(File.read(agents_md_path)).to eq(broken)
+          expect(output).to include("warn")
+        end
+
+        it "warns and leaves the file untouched with #{label} (--force)", :aggregate_failures do
+          File.write(agents_md_path, broken)
+
+          output = capture_stdout { build_generator(app_root, { force: true }).create_agents_md }
+
+          expect(File.read(agents_md_path)).to eq(broken)
+          expect(output).to include("warn")
+        end
       end
     end
 

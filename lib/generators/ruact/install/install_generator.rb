@@ -234,8 +234,10 @@ module Ruact
         return template("AGENTS.md.tt", "AGENTS.md") unless destination.exist?
 
         content = destination.read
-        if content.include?(AGENTS_MD_BEGIN_MARKER)
-          refresh_or_skip_agents_md_section(content)
+        if AGENTS_MD_SECTION_RE.match?(content)
+          refresh_or_skip_agents_md_section
+        elsif agents_md_markers_broken?(content)
+          warn_agents_md_broken_markers
         else
           append_agents_md_section(content)
         end
@@ -328,28 +330,37 @@ module Ruact
         append_to_file "AGENTS.md", "#{separator}#{agents_md_section}"
       end
 
-      # Story 15.1 — markers already present: skip (idempotent re-run) unless
-      # --force, which replaces ONLY the content between (and including) the
-      # marker pair. Bytes outside the markers are never touched. A begin
-      # marker without its end marker is ambiguous — warn and leave the file
-      # alone rather than guess at the section boundary.
-      def refresh_or_skip_agents_md_section(content)
+      # Story 15.1 — a WELL-FORMED marker pair is present (the caller matched
+      # {AGENTS_MD_SECTION_RE}): skip (idempotent re-run) unless --force, which
+      # replaces ONLY the content between (and including) the marker pair.
+      # Bytes outside the markers are never touched.
+      def refresh_or_skip_agents_md_section
         unless options[:force]
           say_status "skip", "AGENTS.md already carries the ruact section " \
                              "(re-run with --force to refresh it)", :yellow
           return
         end
 
-        unless content.include?(AGENTS_MD_END_MARKER)
-          say_status "warn", "AGENTS.md has #{AGENTS_MD_BEGIN_MARKER} but no matching " \
-                             "#{AGENTS_MD_END_MARKER} — leaving the file untouched; " \
-                             "restore the end marker and re-run with --force", :yellow
-          return
-        end
-
         # Block form so `\`/`\1` sequences in the section are never treated as
         # backreferences by String#gsub.
         gsub_file("AGENTS.md", AGENTS_MD_SECTION_RE) { agents_md_section.chomp }
+      end
+
+      # Story 15.1 (Codex R1) — an INCOMPLETE marker state: one marker without
+      # its pair, or an end marker preceding the begin marker. Either way the
+      # section boundary is ambiguous in BOTH directions — appending would
+      # duplicate content next to a stray marker, and replacing would have to
+      # guess the range — so the only byte-safe move is to warn and leave every
+      # byte alone.
+      def agents_md_markers_broken?(content)
+        content.include?(AGENTS_MD_BEGIN_MARKER) || content.include?(AGENTS_MD_END_MARKER)
+      end
+
+      def warn_agents_md_broken_markers
+        say_status "warn", "AGENTS.md has an incomplete ruact marker pair " \
+                           "(#{AGENTS_MD_BEGIN_MARKER} … #{AGENTS_MD_END_MARKER}) — " \
+                           "leaving the file untouched; restore both markers (or delete " \
+                           "the partial ruact section) and re-run", :yellow
       end
 
       # Story 14.6 (live clean-room fix) — ruact OWNS `bin/dev`. The foreman
