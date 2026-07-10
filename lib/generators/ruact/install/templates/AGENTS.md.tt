@@ -150,6 +150,9 @@ duration, or a deliberate `expires_in: nil` for a non-expiring token.
 - If your app has TypeScript tooling configured, `npx tsc --noEmit`
   type-checks call sites against the generated accessor types (a fresh
   install does not ship a tsconfig).
+- In request specs, `require "ruact/testing"` then assert a page rendered a
+  component — `expect(response).to have_ruact_component("PostList").with_props(including("posts"))`
+  — no browser. Function-call/query responses are JSON: `JSON.parse(response.body)`.
 
 Docs: https://ruact.dev — compact agent reference at https://ruact.dev/llms.txt
 <!-- ruact:end -->
