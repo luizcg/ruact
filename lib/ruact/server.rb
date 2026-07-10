@@ -114,6 +114,18 @@ module Ruact
       # are byte-identical in every environment.
       after_action :__ruact_warn_errors_injection_opt_out!
 
+      # Story 15.5 (FR109) — dev-only response-shape legibility log: one
+      # `[ruact]` line per ruact-NEGOTIATED request naming the chosen bucket +
+      # the deciding signal (e.g. `Accept: application/json + POST →
+      # function-call JSON`), so the dual-bucket negotiation is observable at
+      # runtime without a debugger. Adjacent to the F6 warning above so the two
+      # dev-only legibility hooks read as a pair. Same dev gate
+      # (`__ruact_development?`), same log-only invariant — bodies, statuses,
+      # and headers are byte-identical in every environment. SILENT outside
+      # development and on a plain Rails action on the same controller (a
+      # response ruact did not negotiate).
+      after_action :__ruact_log_response_shape!
+
       # Story 8.4 salvage — same registration order as v1 (Pitfall #1): the
       # generic StandardError entry first, the explicit
       # InvalidAuthenticityToken entry second so it wins Rails'
@@ -268,6 +280,8 @@ module Ruact
       # Story 15.0 (F6) — a Bucket-2 `redirect_to` is a ruact-owned response
       # (`$redirect`; registered errors ride flash), not an injection opt-out.
       @__ruact_function_response_owned = true
+      # Story 15.5 (FR109) — mark the `$redirect` sub-shape for the dev log.
+      @__ruact_function_redirect = true
       render json: { "$redirect" => __ruact_redirect_path(location) }
     end
 
@@ -340,6 +354,96 @@ module Ruact
         "through (ruact injects `errors` into the body), or surface them on a page render with " \
         "`errors={ruact_errors}` / carry them through a `redirect_to` (flash)."
       )
+    end
+
+    # Story 15.5 (FR109) — the dev-only response-shape log. Emits exactly one
+    # `[ruact]` line per ruact-negotiated request naming the chosen bucket and
+    # the deciding signal (Accept + verb), mirroring the vocabulary of the
+    # canonical caller→shape table in `server-actions.md`. Log-only: the
+    # response body, status, and headers are byte-identical to before in every
+    # environment.
+    #
+    # Coverage (D1, `Ruact::Server`-only for 15.5): the function-call-JSON
+    # bucket (incl. the `204` and `$redirect` sub-shapes) plus, for a page
+    # render on a controller that also includes {Ruact::Controller}, the
+    # Flight-page and HTML-shell shapes. A GET query (separate dispatch
+    # controller) and a page-only controller (includes `Ruact::Controller` but
+    # not `Ruact::Server`) are NOT covered — the table documents those shapes;
+    # extending the log to them is deferred (see deferred-work.md).
+    #
+    # SILENT (returns nil message) outside development and on a plain Rails
+    # action on the same controller — a response ruact did not negotiate
+    # (no function-call Accept and no ruact page render). A raise / before_action
+    # halt that skips the after_action chain is an accepted, documented log gap
+    # (identical to the F6 warning).
+    def __ruact_log_response_shape!
+      return unless __ruact_development?
+
+      message = __ruact_response_shape_log_message
+      return unless message
+
+      Rails.logger&.info(message)
+    end
+
+    # Classify the negotiated response shape from the request signals
+    # (`__ruact_function_call?`, Accept, verb) and the ruact-owned outcome flags
+    # (`@__ruact_function_redirect` set by the Bucket-2 {#redirect_to};
+    # `@__ruact_negotiated_page` set by {Ruact::Controller#emit_ruact_response} /
+    # its Flight `redirect_to`). Returns nil when ruact did not negotiate the
+    # response, so the log stays silent on plain Rails actions.
+    #
+    # @return [String, nil] the `[ruact] Ctrl#action — <signal> → <bucket>`
+    #   line, or nil for a non-negotiated response.
+    def __ruact_response_shape_log_message
+      shape, signal = __ruact_negotiated_shape_and_signal
+      return unless shape
+
+      "[ruact] #{self.class.name}##{action_name} — #{signal} → #{shape}"
+    end
+
+    # @return [Array(String, String), nil] `[bucket, deciding_signal]` for a
+    #   ruact-negotiated response, or nil for one ruact did not own.
+    def __ruact_negotiated_shape_and_signal
+      if __ruact_function_call?
+        [__ruact_function_call_shape, "Accept: application/json + #{request.request_method}"]
+      else
+        __ruact_page_shape_and_signal
+      end
+    end
+
+    # The function-call (Bucket-2) sub-shape, distinguished by the ruact-owned
+    # outcome: a `$redirect` directive, a `204 No Content` (no exposed ivars),
+    # or the ordinary serialized-ivars JSON.
+    def __ruact_function_call_shape
+      return "function-call $redirect" if @__ruact_function_redirect
+      return "function-call JSON (204, no ivars)" if response.status == 204
+
+      "function-call JSON"
+    end
+
+    # The page-render (Bucket-1 / HTML-shell) shape, keyed on the flag
+    # {Ruact::Controller#emit_ruact_response} set when ruact rendered the page.
+    # nil for a plain Rails render (the flag was never set) → the log stays
+    # silent on a non-negotiated response.
+    def __ruact_page_shape_and_signal
+      case @__ruact_negotiated_page
+      when :flight
+        ["Flight page", __ruact_flight_signal]
+      when :flight_redirect
+        ["Flight redirect", __ruact_flight_signal]
+      when :html_shell
+        ["HTML shell", "HTML-acceptable Accept, no Flight header"]
+      end
+    end
+
+    # The Flight deciding signal, faithful to how the request announced itself:
+    # the `Accept: text/x-component` header, or the `Ruact-Request: 1` header.
+    def __ruact_flight_signal
+      if request.headers["Accept"].to_s.include?("text/x-component")
+        "Accept: text/x-component"
+      else
+        "Ruact-Request: 1"
+      end
     end
 
     # @return [Boolean] true only in a real Rails development environment
