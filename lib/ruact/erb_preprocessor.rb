@@ -38,6 +38,12 @@ module Ruact
     # component-dense fast path linear regardless of how many tags go unclosed.
     COMPONENT_ANY_TAG_RE = %r{<(/)?([A-Z][A-Za-z0-9]*)(?:\s[^>]*)?>}
 
+    # Cheap allocation-free probe (`String#match?`) for "is there ANY PascalCase
+    # closing tag at all?". The loud-children scan only matters when one exists,
+    # so this gates the (copy-heavy) mask/scan work off the common all-self-
+    # closing fast path. `</Suspense>` matches too — harmless, it gets masked.
+    CLOSING_TAG_PROBE_RE = %r{</[A-Z][A-Za-z0-9]*>}
+
     # Newline-preserving mask for ERB islands (`<% … %>`, `<%= … %>`, `<%# … %>`).
     # The loud-children scan blanks these first so a `</Card>` that lives inside
     # Ruby/ERB string or comment text can never be mistaken for a real component
@@ -137,6 +143,14 @@ module Ruact
     # so both loud preprocess errors read identically. A no-op when no pair is
     # present — the fast path stays byte-identical.
     def detect_children!(source, identifier)
+      # Fast path: a children pair REQUIRES a literal PascalCase closing tag, so
+      # a source without one (the common all-self-closing case) can never trip —
+      # bail before allocating anything. `match?` builds no MatchData, and this
+      # skips the mask/scan copies entirely, keeping the hot render/preprocess
+      # path's allocation profile flat (the benchmark renders only self-closing
+      # components, so it must stay at baseline).
+      return unless source.match?(CLOSING_TAG_PROBE_RE)
+
       # ERB islands first, then Suspense — both blank their text newline-for-
       # newline so byte offsets (hence reported lines) still match the raw
       # template, while neither ERB string text nor the legitimate Suspense pair
