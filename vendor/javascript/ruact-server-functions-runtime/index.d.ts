@@ -151,10 +151,35 @@ export const __RUNTIME_VERSION__: number;
  *
  * The gem's own headers (`Accept`, `Content-Type`, `X-CSRF-Token`)
  * win over `defaultHeaders` — CSRF cannot be silently overridden.
+ *
+ * Story 15.6 (FR110) — `autoRevalidate` (default `false`) is the app-wide
+ * auto-revalidate default: when `true`, every successful, non-redirecting
+ * mutation `await`s an in-place Flight refresh of the current path (via
+ * `revalidate()`) before resolving with the action's JSON result. A per-call
+ * `withRefresh(accessor)` wins over this global default.
  */
 export function configureRuactRuntime(options: {
   defaultHeaders?: Record<string, string> | (() => Record<string, string>) | null;
+  autoRevalidate?: boolean;
 }): void;
+
+/**
+ * Story 15.6 (FR110) — per-call auto-revalidate wrapper. Wraps a generated
+ * server-function accessor and returns a new accessor that forces an in-place
+ * Flight refresh of the current path after a successful, non-redirecting call —
+ * regardless of the app-wide `autoRevalidate` default (per-call explicit wins).
+ * Runtime-only: it does not change the codegen or the wire.
+ *
+ * A `$redirect` response still wins (the refresh is skipped); a failed mutation
+ * still throws before any refresh; and if no router is installed the descriptive
+ * `revalidate()` error surfaces (a successful mutation whose refresh rejects
+ * rejects the returned promise).
+ *
+ * The wrapped accessor keeps its own call signature (the same
+ * `(arg1?, arg2?) => Promise<unknown>` / `(formData) => Promise<void>`
+ * intersection the codegen emits).
+ */
+export function withRefresh<F extends (...args: never[]) => Promise<unknown>>(accessor: F): F;
 
 /**
  * Re-run-4 (2026-05-15) — structured error thrown for 4xx/5xx responses.
