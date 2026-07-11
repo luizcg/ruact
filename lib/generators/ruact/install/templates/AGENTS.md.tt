@@ -107,20 +107,20 @@ Regenerate it after changing routes or queries:
 
 ## Serialization is an allowlist
 
-Only the fields you name cross to the client. For an ActiveRecord row, build
-the wire hash by hand in the view or query — that explicit shape IS the
-allowlist:
+Only the fields you name cross to the client. `include Ruact::Serializable` +
+`ruact_props :id, :title` is that allowlist — on a PORO OR an ActiveRecord model
+(lazy AR readers checked on first serialize, not class-load; a typo still raises):
 
 ```ruby
-posts.map { |post| { id: post.id, title: post.title } } # :secret_token never crosses
+class Post < ApplicationRecord
+  include Ruact::Serializable
+  ruact_props :id, :title # other columns never cross
+end
 ```
 
-Do NOT put `ruact_props` on an ActiveRecord model: its attribute methods are
-defined lazily, so `ruact_props :title` raises `ArgumentError: method 'title'
-is not defined` at class-load. `include Ruact::Serializable` + `ruact_props` is
-that allowlist for a PORO whose readers already exist (`attr_reader`). A domain
-object with no allowlist logs a `[ruact] WARNING` and falls back to `as_json` in
-dev; production (`strict_serialization`) raises, as does an `as_json` returning `self`.
+The manual row hash `{ id: p.id, title: p.title }` is the equivalent for a
+no-model shape. An object with no allowlist warns + falls back to `as_json` in
+dev; production (`strict_serialization`) raises, as does `as_json` returning `self`.
 
 ## Record references — signed and explicit
 

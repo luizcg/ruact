@@ -2179,3 +2179,58 @@ TS-AST `Props` parse; a Ruby DSL / JSON sidecar; a new slot runtime; moving
 validation to render time. The **Epic 10 scaffold** consuming contracts and the
 **playground build-fails CI proof** are **Story 13.6** (`epics-phase-2.md`).
 ADR addendum (2026-06-26).
+
+### 2026-07-11 — Story 13.7 — `ruact_props` works on ActiveRecord models (deferred loud check for lazy attrs)
+
+Story 13.7 reopens **option (A)** that `deferred-work.md` #6 parked (the fix-B
+doc-only route) and makes `include Ruact::Serializable; ruact_props :id, :title`
+boot **directly on an ActiveRecord model**. It also closes the FR100 producer-side
+note (*"hoje `ruact_props` valida só o lado produtor, em class-load"*) by making the
+producer-side check itself AR-aware.
+
+**The bug.** ActiveRecord defines its attribute reader methods **lazily** (via
+`define_attribute_methods`, triggered on first instance access / `method_missing`),
+so at the moment the `ruact_props :title` macro runs, `method_defined?(:title)` is
+`false` **even for a real column**. The eager class-load check
+(`serializable.rb`) raised there — an AR model that included the module crashed at
+boot. (`attribute_names`/`column_names` would tell the truth, but they require a
+**live DB connection** — with none they raise `ActiveRecord::ConnectionNotDefined`
+— so any boot-time check based on them adds a class-load DB dependency, a Rails
+anti-pattern. Rejected.)
+
+**Decision — HYBRID timing (approach iv, locked by Luiz).** The loud check stays,
+but **when** it fires now depends on the class:
+
+- **PORO** — checked **eagerly at class-load** exactly as before. The non-lazy code
+  path is **byte-identical**; a PORO typo still raises `ArgumentError` immediately
+  (the existing PORO spec passes unedited — the C3 regression pin).
+- **ActiveRecord (lazy-attribute) class** — a name whose reader is not-yet-defined
+  is **recorded** at declaration and its loud check is **deferred to the first
+  `ruact_serialize`**, validated via `instance.respond_to?(attr)` (AR's
+  `respond_to?` returns `true` for a real column, `false` for a bogus name — a
+  genuine typo still raises the **same clean `ArgumentError`**, just at first render
+  of that model instead of at boot). The result is memoized (`respond_to?` runs once
+  per class, not per serialize).
+
+**Why this satisfies all four constraints.** C1 loud-omission preserved (PORO at
+boot, AR at first use — still loud, still `ArgumentError`); C2 **no DB dependency at
+boot** (`respond_to?` runs at first-serialize, when the DB is up); C3 PORO
+byte-identical; C4 `strict_serialization` untouched (an AR `Serializable` model
+already dispatches through `serialize_serializable` → `ruact_serialize`, verified
+under strict true/false).
+
+**No new dependency / no new config.** The lazy-attribute discriminator is
+`defined?(ActiveRecord::Base) && self < ActiveRecord::Base` — it references the
+constant **only when the host already defined it**, so the gem stays single-dep
+`nokogiri`. **No eager escape hatch** was added (Luiz chose simplicity — no config
+or macro to force an AR boot check); the natural first-serialize timing is the
+contract. No serializer-pipeline change (dispatch already routed AR → `ruact_serialize`).
+
+**Contract note (the one thing that moved).** For an AR model, a typo'd/omitted prop
+is now caught at the **first render of that model**, not at boot. This is the
+deliberate, documented cost of not adding a boot DB dependency; loudness itself is
+unchanged. The AGENTS.md/`llms.txt`/website reversal (`ruact_props` on AR is a
+first-class pattern again, manual row-hash kept as the no-model equivalent) ships in
+the same story, resolving `deferred-work.md` #7.
+
+ADR addendum (2026-07-11).
