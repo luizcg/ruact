@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-07-11
+
 ### Changed
 
 - **`ManifestError` message is now in English (was Portuguese)** ([Story 15.0](../_bmad-output/implementation-artifacts/15-0-agent-era-hygiene-pass.md)). When the Vite dev server is unreachable AND no `public/react-client-manifest.json` exists on disk, `Ruact::ManifestResolver` now raises `[ruact] Vite dev server unreachable at <url> and no react-client-manifest.json found at <path> — run `bin/dev`.` — same raise site, same `ManifestError` class, same HTTP→file fallback order, same diagnostic content (dev-server URL + manifest path + the `bin/dev` fix); only the language changed. Error messages are prompts — agents (and humans) regex-match them — so the stable tokens (`Vite dev server`, `react-client-manifest.json`, `bin/dev`) are preserved and now spec-pinned.
