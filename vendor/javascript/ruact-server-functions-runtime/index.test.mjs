@@ -15,6 +15,7 @@ import {
   RuactActionError,
   configureRuactRuntime,
   revalidate,
+  withRefresh,
 } from "./index.js";
 
 // Helper — a route-driven accessor targeting `POST /posts` (the canonical
@@ -820,5 +821,177 @@ describe("Story 9.3 — _makeServerFunction (route-driven, real path+verb)", () 
 
     expect(navSpy).not.toHaveBeenCalled();
     expect(result).toEqual({ post: { id: 1 }, $redirect: 42 });
+  });
+});
+
+// =============================================================================
+// Story 15.6 (FR110) — auto-revalidate opt-in: one await = mutation + refresh
+// =============================================================================
+
+describe("Story 15.6 — auto-revalidate opt-in", () => {
+  let originalRevalidate;
+  let originalNavigate;
+  let originalLocation;
+  let originalWindow;
+
+  beforeEach(() => {
+    originalRevalidate = globalThis.__ruact_revalidate;
+    originalNavigate = globalThis.__ruact_navigate;
+    originalLocation = globalThis.location;
+    originalWindow = globalThis.window;
+    globalThis.location = { pathname: "/posts", search: "?page=2" };
+  });
+
+  afterEach(() => {
+    // Reset the app-wide default so a leaked `autoRevalidate: true` can't bleed
+    // into the un-opted-in byte-parity tests elsewhere in the suite.
+    configureRuactRuntime({ autoRevalidate: false });
+    if (originalRevalidate === undefined) delete globalThis.__ruact_revalidate;
+    else globalThis.__ruact_revalidate = originalRevalidate;
+    globalThis.__ruact_navigate = originalNavigate;
+    if (originalLocation === undefined) {
+      // jsdom / browser env — leave the real `location` alone
+    } else {
+      globalThis.location = originalLocation;
+    }
+    globalThis.window = originalWindow;
+  });
+
+  // (a) request-composition order — POST then Flight refresh, in that order,
+  // resolves with the action's JSON result.
+  it("global default: refreshes the current path AFTER the mutation and resolves the JSON result", async () => {
+    const order = [];
+    mockFetchOk({ id: 7 });
+    const fetchSpy = globalThis.fetch;
+    fetchSpy.mockImplementation(async () => {
+      order.push("fetch");
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (n) => (n.toLowerCase() === "content-type" ? "application/json" : null) },
+        text: vi.fn().mockResolvedValue(JSON.stringify({ id: 7 })),
+        json: vi.fn().mockResolvedValue({ id: 7 }),
+      };
+    });
+    const revalidateSpy = vi.fn(async () => {
+      order.push("revalidate");
+    });
+    globalThis.__ruact_revalidate = revalidateSpy;
+    configureRuactRuntime({ autoRevalidate: true });
+
+    const createPost = _makeServerFunction({ method: "POST", path: "/posts", segments: [] });
+    const result = await createPost({ title: "x" });
+
+    expect(order).toEqual(["fetch", "revalidate"]);
+    expect(revalidateSpy).toHaveBeenCalledWith("/posts?page=2");
+    expect(result).toEqual({ id: 7 });
+  });
+
+  it("per-call withRefresh: forces the refresh even when the global default is OFF", async () => {
+    mockFetchOk({ id: 1 });
+    const revalidateSpy = vi.fn().mockResolvedValue(undefined);
+    globalThis.__ruact_revalidate = revalidateSpy;
+    configureRuactRuntime({ autoRevalidate: false });
+
+    const createPost = _makeServerFunction({ method: "POST", path: "/posts", segments: [] });
+    const result = await withRefresh(createPost)({ title: "x" });
+
+    expect(revalidateSpy).toHaveBeenCalledWith("/posts?page=2");
+    expect(result).toEqual({ id: 1 });
+  });
+
+  it("refreshes after a genuine null/204 result (not misread as a redirect)", async () => {
+    mockFetchOk("", { status: 204, contentType: "text/plain" });
+    const revalidateSpy = vi.fn().mockResolvedValue(undefined);
+    globalThis.__ruact_revalidate = revalidateSpy;
+
+    const createPost = _makeServerFunction({ method: "POST", path: "/posts", segments: [] });
+    const result = await withRefresh(createPost)({});
+
+    expect(revalidateSpy).toHaveBeenCalledTimes(1);
+    expect(result).toBeNull();
+  });
+
+  // (b) error propagation — a failed mutation rejects and issues NO refresh.
+  it("mutation failure propagates and does NOT refresh (refresh sequenced after success)", async () => {
+    mockFetchError(422, JSON.stringify({ error: "invalid" }));
+    const revalidateSpy = vi.fn().mockResolvedValue(undefined);
+    globalThis.__ruact_revalidate = revalidateSpy;
+    configureRuactRuntime({ autoRevalidate: true });
+
+    const createPost = _makeServerFunction({ method: "POST", path: "/posts", segments: [] });
+
+    await expect(createPost({ title: "" })).rejects.toMatchObject({
+      name: "RuactActionError",
+      status: 422,
+    });
+    expect(revalidateSpy).not.toHaveBeenCalled();
+  });
+
+  // (c) redirect-wins — a $redirect follows the redirect and issues NO refresh.
+  it("redirect wins: follows the $redirect, resolves null, and SKIPS the refresh", async () => {
+    mockFetchOk({ $redirect: "/posts/1" });
+    const navSpy = vi.fn();
+    globalThis.__ruact_navigate = navSpy;
+    const revalidateSpy = vi.fn().mockResolvedValue(undefined);
+    globalThis.__ruact_revalidate = revalidateSpy;
+    configureRuactRuntime({ autoRevalidate: true });
+
+    const createPost = _makeServerFunction({ method: "POST", path: "/posts", segments: [] });
+    const result = await createPost({ title: "x" });
+
+    expect(navSpy).toHaveBeenCalledWith("/posts/1");
+    expect(result).toBeNull();
+    expect(revalidateSpy).not.toHaveBeenCalled();
+  });
+
+  // (d) no-router — the descriptive revalidate() error surfaces (not swallowed).
+  it("no router installed: surfaces the descriptive revalidate() error", async () => {
+    mockFetchOk({ id: 1 });
+    if ("__ruact_revalidate" in globalThis) delete globalThis.__ruact_revalidate;
+    configureRuactRuntime({ autoRevalidate: true });
+
+    const createPost = _makeServerFunction({ method: "POST", path: "/posts", segments: [] });
+
+    await expect(createPost({ title: "x" })).rejects.toThrow(
+      /ruact: revalidate\(\) called but no router is installed/,
+    );
+  });
+
+  it("D3: a successful mutation whose refresh REJECTS rejects the returned promise", async () => {
+    mockFetchOk({ id: 9 });
+    const revalidateSpy = vi.fn().mockRejectedValue(new Error("Flight refresh failed"));
+    globalThis.__ruact_revalidate = revalidateSpy;
+
+    const createPost = _makeServerFunction({ method: "POST", path: "/posts", segments: [] });
+
+    await expect(withRefresh(createPost)({ title: "x" })).rejects.toThrow("Flight refresh failed");
+    expect(revalidateSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // (e) un-opted-in is byte-identical to today: exactly one fetch, no refresh.
+  it("un-opted-in call is byte-identical: one fetch, no refresh", async () => {
+    mockFetchOk({ id: 1 });
+    const revalidateSpy = vi.fn().mockResolvedValue(undefined);
+    globalThis.__ruact_revalidate = revalidateSpy;
+    // global default stays OFF (reset in afterEach), no withRefresh wrapper.
+
+    const createPost = _makeServerFunction({ method: "POST", path: "/posts", segments: [] });
+    const result = await createPost({ title: "x" });
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(revalidateSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({ id: 1 });
+  });
+
+  it("withRefresh throws a descriptive TypeError for a non-accessor argument", () => {
+    expect(() => withRefresh(() => {})).toThrow(/server-function accessor produced by the ruact codegen/);
+    expect(() => withRefresh(null)).toThrow(TypeError);
+  });
+
+  it("configureRuactRuntime rejects a non-boolean autoRevalidate", () => {
+    expect(() => configureRuactRuntime({ autoRevalidate: "yes" })).toThrow(
+      /autoRevalidate must be a boolean/,
+    );
   });
 });

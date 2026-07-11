@@ -14,9 +14,11 @@
 // enforces). Reads are CSRF-free (GET semantics).
 //
 // The export surface (`_makeServerFunction`, `_makeQuery`, `useQuery`,
-// `revalidate`, `configureRuactRuntime`, `RuactActionError`) and the
-// `"ruact/server-functions-runtime"` import path are part of the locked API —
-// do NOT change without coordinated codegen + Vite-plugin updates.
+// `revalidate`, `withRefresh`, `configureRuactRuntime`, `RuactActionError`) and
+// the `"ruact/server-functions-runtime"` import path are part of the locked API —
+// do NOT change without coordinated codegen + Vite-plugin updates. (Story 15.6
+// added `withRefresh` — a runtime-only wrapper; it is NOT re-exported through the
+// generated `.ruact/server-functions.ts` barrel, so codegen output is unchanged.)
 
 // Story 9.5 — `useQuery` is a React hook, so the runtime now depends on React.
 // React is declared as a `peerDependency` (every host already has it; the
@@ -33,8 +35,16 @@ const RUNTIME_VERSION = 1;
 // them; instead, hosts call `configureRuactRuntime` once at app boot
 // to register a headers-producing function. The function runs on
 // every fetch so dynamic tokens (refreshed at runtime) are picked up.
+// Story 15.6 (FR110) — `autoRevalidate` is the app-wide default for the
+// auto-revalidate opt-in: when `true`, every successful, NON-redirecting mutation
+// (`_makeServerFunction` accessor) `await`s an in-place Flight refresh of the
+// current path (via the existing `revalidate()`) BEFORE resolving with the
+// action's JSON result. Default `false` → today's behavior, byte-identical. A
+// per-call `withRefresh(accessor)` wrapper forces the refresh for a single call
+// and WINS over this global (D5: per-call explicit beats the global default).
 const runtimeOptions = {
   defaultHeaders: null,
+  autoRevalidate: false,
 };
 export function configureRuactRuntime(options) {
   if (options && Object.prototype.hasOwnProperty.call(options, "defaultHeaders")) {
@@ -46,6 +56,15 @@ export function configureRuactRuntime(options) {
         "configureRuactRuntime: defaultHeaders must be a plain object or a () => object function",
       );
     }
+  }
+  if (options && Object.prototype.hasOwnProperty.call(options, "autoRevalidate")) {
+    const value = options.autoRevalidate;
+    if (typeof value !== "boolean") {
+      throw new TypeError(
+        "configureRuactRuntime: autoRevalidate must be a boolean",
+      );
+    }
+    runtimeOptions.autoRevalidate = value;
   }
 }
 
@@ -101,12 +120,28 @@ export class RuactActionError extends Error {
  *     (`globalThis.__ruact_navigate`, `window.location.assign` fallback) and
  *     resolves `null`.
  *
+ * Story 15.6 (FR110) — auto-revalidate opt-in. When the call opts in — via the
+ * app-wide `configureRuactRuntime({ autoRevalidate: true })` default OR the
+ * per-call `withRefresh(accessor)` wrapper — a SUCCESSFUL, NON-redirecting
+ * mutation `await`s an in-place Flight refresh of the current path (the existing
+ * `revalidate()`) BEFORE the promise resolves, then resolves with the action's
+ * JSON result. This is pure client-side COMPOSITION of the two requests that
+ * already exist (POST-JSON mutation + GET-Flight refresh) — no new wire shape, no
+ * inbound Flight deserialization (serialize-only invariant intact). A `$redirect`
+ * WINS: the redirect is followed and the refresh is SKIPPED (refreshing the old
+ * path would be wrong). A failed mutation throws before the refresh runs, so no
+ * refresh happens. If the refresh is requested with no router installed, the
+ * descriptive `revalidate()` error surfaces (it is not swallowed).
+ *
  * @param {{ method: string, path: string, segments?: string[] }} descriptor
  * @returns {(arg1?: Record<string, unknown> | FormData, arg2?: FormData | Record<string, unknown>) => Promise<unknown>}
  */
 export function _makeServerFunction(descriptor) {
   const { method, path, segments = [] } = descriptor || {};
-  return async function ruactServerFunctionCall(...callArgs) {
+  // The core invoker takes the raw call-args plus a `refreshOverride`:
+  //   undefined → fall back to the app-wide `runtimeOptions.autoRevalidate`;
+  //   true/false → an explicit per-call decision that WINS over the global (D5).
+  const invoke = async function (callArgs, refreshOverride) {
     if (callArgs.length > 2) {
       throw new TypeError(
         `ruact server function ${method} ${path} called with ${callArgs.length} arguments — ` +
@@ -115,8 +150,61 @@ export function _makeServerFunction(descriptor) {
     }
     const args = pickWirePayload(callArgs);
     const url = interpolatePath(path, segments, args);
+    // AC4 — a failed mutation throws HERE, before any refresh is sequenced.
     const parsed = await ruactInvoke({ method, url, args, label: path });
-    return followRedirectIfPresent(parsed);
+    const { value, redirected } = followRedirect(parsed);
+    // AC2 — redirect wins: the destination already re-renders; skip the refresh.
+    if (redirected) return value;
+    const refresh =
+      refreshOverride === undefined ? runtimeOptions.autoRevalidate === true : refreshOverride === true;
+    if (refresh) {
+      // AC1 — refresh the current path in place BEFORE resolving. AC5 — if no
+      // router is installed, `revalidate()`'s descriptive error surfaces here
+      // (D3: a mutation that succeeded but whose refresh rejects rejects the
+      // promise — consistent with `revalidate()`'s loud-by-default stance).
+      await revalidate();
+    }
+    return value;
+  };
+  const accessor = function ruactServerFunctionCall(...callArgs) {
+    return invoke(callArgs, undefined);
+  };
+  // Stash the core invoker on the accessor (non-enumerable) so `withRefresh` can
+  // force a refresh for a single call WITHOUT the codegen emitting a different
+  // accessor shape — the generated `.ruact/server-functions.ts` stays byte-
+  // identical (AC6). Keyed by a module-private Symbol so host code can't collide.
+  Object.defineProperty(accessor, REFRESH_INVOKER, { value: invoke, enumerable: false });
+  return accessor;
+}
+
+// Story 15.6 (FR110) — module-private handle used by `withRefresh` to reach a
+// server-function accessor's core invoker (see `_makeServerFunction`).
+const REFRESH_INVOKER = Symbol("ruactRefreshInvoker");
+
+/**
+ * Story 15.6 (FR110) — per-call auto-revalidate wrapper. Wraps a generated
+ * server-function accessor and returns a NEW accessor that forces the in-place
+ * Flight refresh after a successful, non-redirecting call — regardless of the
+ * app-wide `autoRevalidate` default (D5: per-call explicit wins). Runtime-only:
+ * it does not change the codegen or the wire.
+ *
+ *   import { createPost } from "@/.ruact/server-functions";
+ *   import { withRefresh } from "ruact/server-functions-runtime";
+ *   await withRefresh(createPost)(formData); // mutation + refresh in one await
+ *
+ * @param {Function} accessor A `_makeServerFunction`-produced accessor.
+ * @returns {(...args: unknown[]) => Promise<unknown>} A refreshing accessor.
+ */
+export function withRefresh(accessor) {
+  const invoke = typeof accessor === "function" ? accessor[REFRESH_INVOKER] : undefined;
+  if (typeof invoke !== "function") {
+    throw new TypeError(
+      "ruact withRefresh() expects a server-function accessor produced by the ruact codegen " +
+        "(imported from @/.ruact/server-functions)",
+    );
+  }
+  return function ruactRefreshingCall(...callArgs) {
+    return invoke(callArgs, true);
   };
 }
 
@@ -519,6 +607,15 @@ function readSegment(args, seg) {
 // `{ "$redirect": "<path>" }`; follow it via the router handoff and resolve
 // `null` (consistent with the 204→null contract).
 function followRedirectIfPresent(parsed) {
+  return followRedirect(parsed).value;
+}
+
+// Story 15.6 — the same follow logic, but reporting WHETHER a redirect was
+// followed as an explicit boolean. Auto-revalidate needs to distinguish "a
+// redirect was followed → skip the refresh" from "the action genuinely resolved
+// `null`/204 → still refresh" — inferring redirect from `value === null` would
+// wrongly skip the refresh after an ordinary empty-body mutation.
+function followRedirect(parsed) {
   if (
     parsed &&
     typeof parsed === "object" &&
@@ -526,9 +623,9 @@ function followRedirectIfPresent(parsed) {
     typeof parsed.$redirect === "string"
   ) {
     navigateTo(parsed.$redirect);
-    return null;
+    return { value: null, redirected: true };
   }
-  return parsed;
+  return { value: parsed, redirected: false };
 }
 
 function navigateTo(target) {
