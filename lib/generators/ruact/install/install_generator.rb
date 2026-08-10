@@ -109,11 +109,27 @@ module Ruact
 
         # Migration path for an app installed before the layout owned the
         # document: the root is already there, only the asset call is missing.
+        #
+        # The anchor matches the ROOT DIV itself rather than the marker-then-div
+        # pair, and tolerates the ways a real layout is written — single or
+        # double quotes, extra attributes, any attribute order, CRLF, and the
+        # marker on the same line. The earlier anchor required the exact emitted
+        # formatting, so a hand-edited layout silently matched nothing.
         if content.include?("ruact: root")
+          before = File.read(Pathname(destination_root).join(layout_file))
           inject_into_file layout_file,
-                           "    <%= ruact_js_assets %>\n",
-                           after: %r{<%# ruact: root %>\n.*<div id="root"></div>\n}
-          say_status "update", "added ruact_js_assets to the existing layout root", :green
+                           "\n    <%= ruact_js_assets %>",
+                           after: %r{<div\s[^>]*id\s*=\s*["']root["'][^>]*>\s*</div>}
+          after = File.read(Pathname(destination_root).join(layout_file))
+
+          # `inject_into_file` prints "File unchanged!" and carries on when the
+          # anchor misses, so a success message here would be a lie — and the app
+          # would keep rendering through ruact's CSS-less shell with no clue why.
+          if after == before
+            warn_layout_migration_failed
+          else
+            say_status "update", "added ruact_js_assets to the existing layout root", :green
+          end
           return
         end
 
@@ -145,6 +161,36 @@ module Ruact
         empty_directory "app/assets/builds"
         create_file "app/assets/builds/.keep" unless
           File.exist?(Pathname(destination_root).join("app/assets/builds/.keep"))
+
+        warn_unless_layout_links_builds
+      end
+
+      # The compiled stylesheet still has to be REQUESTED. Rails 8's default
+      # layout links `stylesheet_link_tag :app`, which Propshaft expands over
+      # every stylesheet on the load path — so `app/assets/builds/tailwind.css`
+      # is picked up with no further wiring (verified against a generated app:
+      # the rendered `<head>` carries `/assets/tailwind-<digest>.css`).
+      #
+      # A layout that instead links stylesheets BY NAME never asks for it, and
+      # the failure is silent: Tailwind builds fine, Propshaft serves it fine,
+      # and the page is simply unstyled. Warn rather than edit — which
+      # stylesheets a layout links is the app's business.
+      def warn_unless_layout_links_builds
+        layout_path = Pathname(destination_root).join("app/views/layouts/application.html.erb")
+        return unless layout_path.exist?
+
+        content = layout_path.read
+        return unless content.include?("stylesheet_link_tag")
+        return if content.match?(/stylesheet_link_tag\s+:app\b/) || content.include?("tailwind")
+
+        say_status "notice", "your layout links stylesheets by name — add the built one:", :yellow
+        say ""
+        say "      <%= stylesheet_link_tag \"tailwind\" %>"
+        say ""
+        say "  `stylesheet_link_tag :app` (the Rails 8 default) would pick up"
+        say "  app/assets/builds/tailwind.css on its own; a named link does not,"
+        say "  and the page would render unstyled with no error."
+        say ""
       end
 
       def create_components_directory
@@ -563,6 +609,23 @@ module Ruact
       # only URL-safe characters; anything else collapses to a hyphen.
       def shadcn?
         options[:shadcn]
+      end
+
+      # Printed when the layout carries the ruact marker but the anchor found no
+      # root div to inject after. Silence would be the dangerous outcome: the app
+      # keeps rendering through ruact's CSS-less built-in shell, and nothing ever
+      # says why.
+      def warn_layout_migration_failed
+        say_status "skip", "could not locate the React root div in the layout", :red
+        say ""
+        say "  ruact could not add `ruact_js_assets` automatically. Add it by hand,"
+        say "  just after the root div in app/views/layouts/application.html.erb:"
+        say ""
+        say "      <div id=\"root\"></div>"
+        say "      <%= ruact_js_assets %>"
+        say ""
+        say "  Without it your app's CSS cannot reach a ruact-rendered page."
+        say ""
       end
 
       # The superset the scaffold generator narrows per resource. Loaded lazily

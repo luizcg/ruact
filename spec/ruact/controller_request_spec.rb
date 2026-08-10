@@ -120,6 +120,8 @@ module ControllerRequestSpecSupport
           # `ruact_js_assets`.
           get "/layout-demo/show",         to: "controller_request_spec_support/layout_demo#show"
           get "/unwired-layout-demo/show", to: "controller_request_spec_support/unwired_layout_demo#show"
+          get "/exploding-layout-demo/show", to: "controller_request_spec_support/exploding_layout_demo#show"
+          get "/rootless-layout-demo/show", to: "controller_request_spec_support/rootless_layout_demo#show"
         end
       end
     end
@@ -201,6 +203,31 @@ module ControllerRequestSpecSupport
 
     append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
     layout "ruact_host"
+
+    def show
+      ruact_render
+    end
+  end
+
+  # An unmigrated layout that RAISES if rendered (it reads an ivar a ruact
+  # action never sets). Under `:auto` ruact must never execute it.
+  class ExplodingLayoutDemoController < ActionController::Base
+    include Ruact::Controller
+
+    append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
+    layout "exploding_host"
+
+    def show
+      ruact_render
+    end
+  end
+
+  # A layout that calls `ruact_js_assets` but has no root div to mount into.
+  class RootlessLayoutDemoController < ActionController::Base
+    include Ruact::Controller
+
+    append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
+    layout "rootless_host"
 
     def show
       ruact_render
@@ -336,6 +363,38 @@ module Ruact # rubocop:disable Style/OneClassPerFile
           expect(last_response.body).to include("__FLIGHT_DATA")
           expect(last_response.body).to include("DemoButton")
           expect(last_response.body).not_to include("host-app.css")
+        end
+      end
+
+      # THE backward-compatibility guarantee, and the one the first cut of this
+      # change broke (found in review): under `:auto` an unmigrated layout must
+      # never be EXECUTED, only inspected. A pre-migration layout has never once
+      # run on a ruact page, so it can reference state a ruact action never sets
+      # — rendering it speculatively, just to discover it lacks the helper,
+      # turns a working page into a 500 on an app that changed nothing.
+      context "when the unmigrated layout would raise if it were rendered" do
+        it "never executes it — the page still renders through the built-in shell" do
+          get "/exploding-layout-demo/show"
+
+          expect(last_response.status).to(eq(200),
+                                          "expected the layout NOT to be rendered; got " \
+                                          "#{last_response.status} body=#{last_response.body[0, 300]}")
+          expect(last_response.body).to include("Rails RSC")
+          expect(last_response.body).to include("DemoButton")
+        end
+      end
+
+      # A layout can carry `ruact_js_assets` and still be unusable: with no root
+      # div, React boots with nothing to mount into and the page is silently
+      # blank. Checking only for the payload marker accepted exactly this.
+      context "when the layout has the assets but no root div to mount into" do
+        it "falls back rather than serving a document React cannot mount into" do
+          get "/rootless-layout-demo/show"
+
+          expect(last_response.status).to eq(200)
+          expect(last_response.body).to include("Rails RSC")
+          expect(last_response.body).not_to include("host-app.css")
+          expect(last_response.body).to match(/id="root"/)
         end
       end
 

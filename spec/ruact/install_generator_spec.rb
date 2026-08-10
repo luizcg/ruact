@@ -1326,6 +1326,102 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
       end
     end
 
+    # Codex review finding: the layout-migration branch was pinned only by the
+    # REPRODUCTION helper above, which cannot see the real generator's anchor
+    # regex. Invoking the actual generator caught that a layout written with
+    # single quotes matched nothing while the generator still printed a success
+    # message. These specs drive `InstallGenerator#inject_layout_shell` itself.
+    describe "inject_layout_shell — the REAL generator", :aggregate_failures do
+      def write_layout(body)
+        path = File.join(app_root, "app/views/layouts/application.html.erb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, body)
+        path
+      end
+
+      def layout_after_run(body)
+        path = write_layout(body)
+        silently { build_generator(app_root).inject_layout_shell }
+        File.read(path)
+      end
+
+      it "migrates a layout whose root div uses single quotes" do
+        result = layout_after_run(<<~HTML)
+          <html>
+            <body>
+              <%# ruact: root %>
+              <div id='root'></div>
+            </body>
+          </html>
+        HTML
+
+        expect(result).to include("<%= ruact_js_assets %>")
+      end
+
+      it "migrates a layout whose root div carries extra attributes" do
+        result = layout_after_run(<<~HTML)
+          <html>
+            <body>
+              <%# ruact: root %>
+              <div class="app" id="root" data-turbo="false"></div>
+            </body>
+          </html>
+        HTML
+
+        expect(result).to include("<%= ruact_js_assets %>")
+      end
+
+      it "migrates a layout with the marker and the div on one line" do
+        result = layout_after_run(
+          %(<html><body><%# ruact: root %><div id="root"></div></body></html>\n)
+        )
+
+        expect(result).to include("<%= ruact_js_assets %>")
+      end
+
+      it "is idempotent — a second run adds nothing" do
+        path = write_layout(<<~HTML)
+          <html>
+            <body>
+              <%# ruact: root %>
+              <div id="root"></div>
+            </body>
+          </html>
+        HTML
+        silently { build_generator(app_root).inject_layout_shell }
+        silently { build_generator(app_root).inject_layout_shell }
+
+        expect(File.read(path).scan("ruact_js_assets").size).to eq(1)
+      end
+
+      # Silence here is the dangerous outcome: the app keeps rendering through
+      # ruact's CSS-less shell and nothing ever says why.
+      it "says so LOUDLY when it cannot find the root div, instead of claiming success" do
+        write_layout(<<~HTML)
+          <html>
+            <body>
+              <%# ruact: root %>
+              <span id="root"></span>
+            </body>
+          </html>
+        HTML
+
+        output = capture_generator_output { build_generator(app_root).inject_layout_shell }
+
+        expect(output).to include("could not locate the React root div")
+        expect(output).not_to include("added ruact_js_assets")
+      end
+
+      def capture_generator_output
+        original = $stdout
+        $stdout = StringIO.new
+        yield
+        $stdout.string
+      ensure
+        $stdout = original
+      end
+    end
+
     describe "without --shadcn (the default path is untouched)", :aggregate_failures do
       let(:generator) { build_generator(app_root) }
 

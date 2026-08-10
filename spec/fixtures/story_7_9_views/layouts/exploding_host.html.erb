@@ -1,0 +1,21 @@
+<%# An UNMIGRATED layout that cannot survive being rendered on a ruact page.
+    It reads an ivar that only a plain Rails action would have set — exactly the
+    shape of a real pre-migration app, whose layout has never once run on a
+    ruact-rendered page. If ruact renders this speculatively just to discover it
+    lacks `ruact_js_assets`, the app 500s on a page that used to work.
+
+    NOTE: this comment MENTIONS the helper name on purpose. A readiness check
+    that greps the source for the bare string counts this layout as wired and
+    renders it — which is exactly the bug this fixture exists to catch. Only an
+    actual `<%%= ruact_js_assets %%>` output tag may count. %>
+<!DOCTYPE html>
+<html>
+  <head>
+    <title><%= @page_title.upcase %></title>
+  </head>
+  <body>
+    <%= yield %>
+    <%# ruact: root %>
+    <div id="root"></div>
+  </body>
+</html>
