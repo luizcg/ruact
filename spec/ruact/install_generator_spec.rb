@@ -88,17 +88,35 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
       :injected
     end
 
-    # Reproduces inject_layout_shell logic from the generator
+    # Reproduces inject_layout_shell logic from the generator.
+    #
+    # NOTE: this is a REPRODUCTION, not the generator itself, so it can drift
+    # from `InstallGenerator#inject_layout_shell` — and it did: it kept
+    # asserting the pre-layout-ownership behaviour while the generator moved on.
+    # Keep the two in step by hand until the harness can invoke the real Thor
+    # generator.
     def inject_layout_shell(dest_root)
       layout_file = File.join(dest_root, "app/views/layouts/application.html.erb")
       return :missing unless File.exist?(layout_file)
 
       content = File.read(layout_file)
-      return :already_present if content.include?("ruact: root")
+      return :already_present if content.include?("ruact_js_assets")
+
+      # Migration: the root is already there from an older install, only the
+      # asset call is missing — without it the layout is not ruact-ready and
+      # `Ruact.config.layout`'s `:auto` keeps using the built-in shell.
+      if content.include?("ruact: root")
+        modified = content.sub(
+          %r{(<%# ruact: root %>\n.*<div id="root"></div>\n)},
+          "\\1    <%= ruact_js_assets %>\n"
+        )
+        File.write(layout_file, modified)
+        return :migrated
+      end
 
       modified = content.sub(
         "  </body>",
-        "    <%# ruact: root %>\n    <div id=\"root\"></div>\n  </body>"
+        "    <%# ruact: root %>\n    <div id=\"root\"></div>\n    <%= ruact_js_assets %>\n  </body>"
       )
       File.write(layout_file, modified)
       :injected
@@ -149,6 +167,15 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         HTML
       end
 
+      # A layout carrying ONLY the root — what every install before the layout
+      # owned the document produced.
+      let(:legacy_layout_content) do
+        layout_content.sub(
+          "  </body>",
+          "    <%# ruact: root %>\n    <div id=\"root\"></div>\n  </body>"
+        )
+      end
+
       it "injects the RSC root div before </body>" do
         write_file("app/views/layouts/application.html.erb", layout_content)
         result = inject_layout_shell(tmpdir)
@@ -159,15 +186,50 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(content).to include("ruact: root")
       end
 
+      # The root alone is NOT enough: without `ruact_js_assets` the layout is not
+      # ruact-ready, so `Ruact.config.layout`'s `:auto` default keeps rendering
+      # through the built-in shell — which has no stylesheet slot, so the app's
+      # CSS never reaches a ruact page. This is the assertion whose absence let
+      # that state ship as a "pass".
+      it "also injects ruact_js_assets, so the layout actually owns the document" do
+        write_file("app/views/layouts/application.html.erb", layout_content)
+        inject_layout_shell(tmpdir)
+
+        content = read_file("app/views/layouts/application.html.erb")
+        expect(content).to include("<%= ruact_js_assets %>")
+        expect(content.index('<div id="root">')).to be < content.index("ruact_js_assets")
+      end
+
+      it "migrates a legacy root-only layout by adding the missing asset call" do
+        write_file("app/views/layouts/application.html.erb", legacy_layout_content)
+
+        result = inject_layout_shell(tmpdir)
+
+        expect(result).to eq(:migrated)
+        content = read_file("app/views/layouts/application.html.erb")
+        expect(content).to include("<%= ruact_js_assets %>")
+        expect(content.scan('<div id="root">').size).to eq(1)
+      end
+
       it "returns :already_present on second run (idempotent, AC#3)" do
         content_with_marker = layout_content.sub(
           "  </body>",
-          "    <%# ruact: root %>\n    <div id=\"root\"></div>\n  </body>"
+          "    <%# ruact: root %>\n    <div id=\"root\"></div>\n    " \
+          "<%= ruact_js_assets %>\n  </body>"
         )
         write_file("app/views/layouts/application.html.erb", content_with_marker)
 
         result = inject_layout_shell(tmpdir)
         expect(result).to eq(:already_present)
+      end
+
+      it "does not duplicate the asset call across a migrate-then-rerun" do
+        write_file("app/views/layouts/application.html.erb", legacy_layout_content)
+        inject_layout_shell(tmpdir)
+        inject_layout_shell(tmpdir)
+
+        content = read_file("app/views/layouts/application.html.erb")
+        expect(content.scan("ruact_js_assets").size).to eq(1)
       end
 
       it "does not duplicate the root div when run twice (AC#3)" do

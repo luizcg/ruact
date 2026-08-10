@@ -67,18 +67,37 @@ module Ruact
                          after: /class ApplicationController.*\n/
       end
 
+      # The layout owns the document: `stylesheet_link_tag`, favicons, fonts and
+      # every `<head>`-writing gem only reach a ruact page because Rails' own
+      # layout renders it (see `Ruact::Configuration#layout`). That requires TWO
+      # things in the layout — the React root, and `ruact_js_assets` to emit the
+      # bootstrap entry + this render's Flight payload. Under the `:auto`
+      # default a layout carrying only the root is treated as not-yet-migrated
+      # and ruact keeps using its built-in (CSS-less) shell, so the helper is
+      # what actually flips an app onto the layout path.
       def inject_layout_shell
         layout_file = "app/views/layouts/application.html.erb"
         return unless File.exist?(Pathname(destination_root).join(layout_file))
 
         content = File.read(Pathname(destination_root).join(layout_file))
+
+        if content.include?("ruact_js_assets")
+          say_status "skip", "ruact root + assets already present in layout", :yellow
+          return
+        end
+
+        # Migration path for an app installed before the layout owned the
+        # document: the root is already there, only the asset call is missing.
         if content.include?("ruact: root")
-          say_status "skip", "Rails RSC root already present in layout", :yellow
+          inject_into_file layout_file,
+                           "    <%= ruact_js_assets %>\n",
+                           after: %r{<%# ruact: root %>\n.*<div id="root"></div>\n}
+          say_status "update", "added ruact_js_assets to the existing layout root", :green
           return
         end
 
         inject_into_file layout_file,
-                         "\n    <%# ruact: root %>\n    <div id=\"root\"></div>\n",
+                         "\n    <%# ruact: root %>\n    <div id=\"root\"></div>\n    <%= ruact_js_assets %>\n",
                          before: "  </body>"
       end
 

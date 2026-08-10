@@ -5,6 +5,7 @@ require "socket"
 require "uri"
 require_relative "view_helper"
 require_relative "validation_errors_collector"
+require_relative "controller/document_rendering"
 
 module Ruact
   # Include in ApplicationController to enable RSC rendering.
@@ -27,6 +28,9 @@ module Ruact
     # and so the shared `vite_dev_running?` / `vite_manifest_entry` helpers are
     # reachable here without duplication.
     include Ruact::ViewHelper
+    # Who owns the `<head>` — the host app's layout, with ruact's built-in shell
+    # as the un-migrated fallback. See Ruact::Controller::DocumentRendering.
+    include Ruact::Controller::DocumentRendering
 
     private
 
@@ -178,7 +182,7 @@ module Ruact
         if ruact_request?
           render plain: payload, content_type: "text/x-component"
         else
-          render html: ruact_html_shell(payload).html_safe, layout: false
+          render_ruact_document(payload)
         end
       end
     end
@@ -235,51 +239,6 @@ module Ruact
       action = action_name
       controller = self.class.name.underscore.sub("_controller", "")
       Rails.root.join("app", "views", controller, "#{action}.html.erb")
-    end
-
-    def ruact_html_shell(flight_payload)
-      # Story 14.2 — the JS asset block (entry `<script>` tags + `__FLIGHT_DATA`)
-      # is delegated to the single `Ruact::ViewHelper#ruact_js_assets`
-      # implementation. The bootstrap entry script is a deferred ES module, so it
-      # runs after the inline `__FLIGHT_DATA` classic script has populated the
-      # queue regardless of source order — emitting the whole block in `<body>`
-      # is correct.
-      <<~HTML
-        <!DOCTYPE html>
-        <html lang="en">
-          <head>
-            <meta charset="UTF-8" />
-            <meta name="viewport" content="width=device-width, initial-scale=1" />
-            #{ruact_csrf_meta_tag}
-            <title>Rails RSC</title>
-          </head>
-          <body>
-            <div id="root"></div>
-            #{ruact_js_assets(flight_payload)}
-          </body>
-        </html>
-      HTML
-    end
-
-    # Story 8.3 review R7 — emits `<meta name="csrf-token" content="...">`
-    # into the shell so the JS runtime's `<meta>` lookup can forward a
-    # valid `X-CSRF-Token` on every server-function (mutation) call. Without
-    # this, hosts that route `ruact_render` through the gem's HTML shell (the
-    # standard path) have no token in the document and the host's
-    # `protect_from_forgery` rejects every non-GET server function.
-    #
-    # Returns an empty string when CSRF protection isn't available
-    # (non-Rails specs, or hosts that have deliberately stripped
-    # `form_authenticity_token` from the controller surface).
-    def ruact_csrf_meta_tag
-      return "" unless respond_to?(:form_authenticity_token, true)
-
-      token = form_authenticity_token
-      return "" if token.nil? || token.empty?
-
-      %(<meta name="csrf-token" content="#{ERB::Util.html_escape(token)}" />)
-    rescue StandardError
-      ""
     end
   end
 end

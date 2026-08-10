@@ -1,0 +1,17 @@
+<%# A MIGRATED host layout: the app owns the document. The stylesheet link is
+    the whole point — it is the thing ruact's built-in shell has no slot for,
+    so a spec asserting it appears in the response is asserting that the host
+    app's CSS actually reaches a ruact page. %>
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" href="/host-app.css" />
+    <title>Host App Title</title>
+  </head>
+  <body>
+    <%= yield %>
+    <%# ruact: root %>
+    <div id="root"></div>
+    <%= ruact_js_assets %>
+  </body>
+</html>

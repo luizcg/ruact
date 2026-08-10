@@ -171,10 +171,31 @@ module Ruact
       end
     end
 
+    # Three states, because the middle one is invisible otherwise: a layout can
+    # carry the React root and still never call `ruact_js_assets`, in which case
+    # `Ruact.config.layout`'s `:auto` default silently keeps using ruact's
+    # built-in shell — and that shell has no stylesheet slot, so the app renders
+    # with none of its own CSS. That is exactly the state every app installed
+    # before the layout owned the document is in, so it reports as a warning
+    # with the one-line fix rather than as a pass.
     def check_layout
       path = Rails.root.join("app", "views", "layouts", "application.html.erb")
-      if File.exist?(path) && File.read(path).include?("ruact: root")
-        [:pass, "React shell present in application.html.erb"]
+      unless File.exist?(path)
+        return [:fail, "React shell missing from application.html.erb",
+                "Run rails generate ruact:install to add the React shell to application.html.erb."]
+      end
+
+      content = File.read(path)
+      has_root   = content.include?("ruact: root")
+      has_assets = content.include?("ruact_js_assets")
+
+      if has_root && has_assets
+        [:pass, "layout owns the document (React root + ruact_js_assets)"]
+      elsif has_root
+        [:warn, "layout has the React root but never calls ruact_js_assets",
+         "ruact is falling back to its built-in shell, which carries no stylesheet — your app's CSS " \
+         "never reaches a ruact page. Add <%= ruact_js_assets %> next to <div id=\"root\"></div> in " \
+         "application.html.erb (or re-run rails generate ruact:install)."]
       else
         [:fail, "React shell missing from application.html.erb",
          "Run rails generate ruact:install to add the React shell to application.html.erb."]

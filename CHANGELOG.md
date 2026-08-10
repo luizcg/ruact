@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A ruact page can now carry your app's CSS — the Rails layout owns the document.** `ruact_render` rendered the view with `layout: false` and then wrapped the Flight payload in a hardcoded HTML shell whose `<head>` holds only `charset`, `viewport`, the CSRF meta tag and the title `Rails RSC`. That shell has **no stylesheet slot and never uses your layout**, so `stylesheet_link_tag` — and with it favicons, fonts, analytics and every `<head>`-writing gem — could not reach a ruact-rendered page **at all**. The visible consequence: `rails generate ruact:scaffold --shadcn` emitted components whose Tailwind classes had nothing to resolve against, so the generated CRUD was **unstyled by construction**; the docs' instruction to put shadcn theme variables in `app/assets/stylesheets/application.css` pointed at a file that provably never reached the browser; and Epic 12 (`ruact_meta` → tags in `<head>`) had no surface to write into. The default agnostic scaffold was affected too — it renders plain semantic HTML and only *looked* acceptable because browsers style a bare `<table>`.
+
+  A non-Flight HTML response is now rendered **through the host app's own layout**, with the React root's bootstrap tags supplied by the layout's `<%= ruact_js_assets %>` call (which, called with no argument, picks up the render's Flight payload). The Flight wire shape (`text/x-component`) is untouched — this only changes the full document a browser gets on a normal navigation.
+
+  Controlled by the new **`Ruact.config.layout`** (`:auto` default, or `true` / a layout name / `false`). The default is **migration-safe**: a layout that does not call `ruact_js_assets` is treated as not-yet-migrated and keeps rendering through the built-in shell exactly as before, so **no existing app changes behavior until its layout is migrated**. An app with no resolvable layout at all (API-shaped, or `layout false`) also keeps the shell — the layout is probed before it is used, because asking Rails for a layout that does not exist raises. Under an explicit `true`/String an unready layout raises in development/test and degrades to the shell (logged) in production, so a missing helper can never serve a blank page to live traffic.
+
+  **To migrate an existing app:** add `<%= ruact_js_assets %>` next to the `<div id="root"></div>` in `app/views/layouts/application.html.erb`, or re-run `rails generate ruact:install` (which now injects both, and adds only the missing call to a layout that already has the root). `rails ruact:doctor` reports the half-migrated state as a **warning** naming the one-line fix — where it previously reported a root-only layout as a pass.
+
+  **Known limitation:** a ruact view is rendered in its own pass (it produces the component tree), so `content_for` declared *inside the view* does not reach the layout. Set document metadata from the controller.
+
 ## [0.0.8] - 2026-07-11
 
 ### Changed

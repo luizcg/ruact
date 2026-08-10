@@ -24,6 +24,7 @@ module Ruact
       signed_global_id_default_purpose
       signed_global_id_default_expires_in
       shadcn_compatible_versions
+      layout
     ].freeze
 
     # @!attribute [r] manifest_path
@@ -135,6 +136,39 @@ module Ruact
     #     suppress the warning — the documented "override" path.
     #   @example Allow shadcn v3 once you have verified it
     #     Ruact.configure { |c| c.shadcn_compatible_versions = [1, 2, 3] }
+    #
+    # @!attribute [r] layout
+    #   @return [Symbol, Boolean, String] Which document wrapper a ruact page's
+    #     HTML response is rendered into. The Flight response shape
+    #     (`text/x-component`) is never affected — this is only about the
+    #     full-document render a browser gets on a normal navigation.
+    #
+    #     - `:auto` (default) — render through the host app's own layout when
+    #       that layout is ruact-ready (it calls `ruact_js_assets`), otherwise
+    #       fall back to the gem's built-in shell. This is the migration-safe
+    #       default: an app whose layout has not been migrated keeps rendering
+    #       exactly as before.
+    #     - `true` — always render through the controller's normal Rails layout.
+    #     - a String — always render through that named layout (e.g. `"ruact"`).
+    #     - `false` — always render the gem's built-in minimal shell.
+    #
+    #     The layout path exists because the document `<head>` belongs to the
+    #     host app: `stylesheet_link_tag`, favicons, fonts, analytics and any
+    #     `<head>`-writing gem only reach the page when Rails' own layout owns
+    #     the document. The built-in shell carries no stylesheet slot, so under
+    #     `layout = false` a ruact page renders with no app CSS at all.
+    #
+    #     A ruact-ready layout is a normal Rails layout that also calls
+    #     `<%= ruact_js_assets %>` (which emits the React root's bootstrap entry
+    #     tags and the per-render Flight payload). `rails generate ruact:install`
+    #     writes one; `rails ruact:doctor` reports a layout that is missing it.
+    #   @note A ruact view is rendered in its own pass (it produces the component
+    #     tree), so `content_for` declared inside the view does NOT reach the
+    #     layout. Set document metadata from the controller instead.
+    #   @example Force the app layout even before doctor reports it ready
+    #     Ruact.configure { |c| c.layout = true }
+    #   @example Keep the pre-0.0.9 built-in shell
+    #     Ruact.configure { |c| c.layout = false }
     ATTRIBUTES.each do |attr|
       attr_reader attr
 
@@ -188,6 +222,7 @@ module Ruact
         @signed_global_id_default_purpose = nil
         @signed_global_id_default_expires_in = nil
         @shadcn_compatible_versions = [1, 2]
+        @layout = :auto
       end
     end
 
@@ -249,7 +284,26 @@ module Ruact
       when :query_route_prefix      then validate_query_route_prefix!(value)
       when :query_parent_controller then validate_query_parent_controller!(value)
       when :shadcn_compatible_versions then validate_shadcn_compatible_versions!(value)
+      when :layout                     then validate_layout!(value)
       end
+    end
+
+    # The value selects a render strategy by identity (`:auto` / `true` /
+    # `false`) or names a layout (String). Anything else would otherwise be
+    # treated as "not false" and reach `render_to_string(layout: <value>)`,
+    # where a Symbol layout name or a stray nil surfaces as a confusing
+    # first-request 500 instead of a boot-time error. `nil` is rejected on
+    # purpose: "no layout" is spelled `false`, so a nil left over from a
+    # conditional in the initializer is a mistake, not a silent shell fallback.
+    def validate_layout!(value)
+      return if [:auto, true, false].include?(value)
+      return if value.is_a?(String) && !value.empty?
+
+      raise Ruact::ConfigurationError,
+            "Ruact::Configuration#layout must be :auto, true, false, or a non-empty String " \
+            "layout name; got #{value.inspect} (#{value.class.name}). " \
+            ":auto renders through the app layout when it calls ruact_js_assets and falls back " \
+            "to ruact's built-in shell otherwise; false always uses the built-in shell."
     end
 
     def validate_max_upload_bytes!(value)

@@ -23,10 +23,20 @@ RSpec.describe Ruact::Doctor do
     File.write(dir.join("application_controller.rb"), content)
   end
 
-  def make_layout(with_sentinel: true)
+  # `with_assets` is the second half of a migrated layout: the React root alone
+  # leaves ruact on its built-in (CSS-less) shell, so the two markers are
+  # independent inputs, not one sentinel.
+  def make_layout(with_sentinel: true, with_assets: true)
     dir = tmpdir.join("app", "views", "layouts")
     FileUtils.mkdir_p(dir)
-    content = with_sentinel ? "<%# ruact: root %>\n<div id=\"root\"></div>\n" : "<body></body>\n"
+    content =
+      if !with_sentinel
+        "<body></body>\n"
+      elsif with_assets
+        "<%# ruact: root %>\n<div id=\"root\"></div>\n<%= ruact_js_assets %>\n"
+      else
+        "<%# ruact: root %>\n<div id=\"root\"></div>\n"
+      end
     File.write(dir.join("application.html.erb"), content)
   end
 
@@ -131,12 +141,35 @@ RSpec.describe Ruact::Doctor do
   describe "#check_layout (AC#1, #5)" do
     subject(:doctor) { described_class.new }
 
-    context "when layout contains the React shell sentinel" do
-      before { make_layout(with_sentinel: true) }
+    context "when the layout owns the document (React root + ruact_js_assets)" do
+      before { make_layout(with_sentinel: true, with_assets: true) }
 
       it "returns :pass" do
         status, = doctor.send(:check_layout)
         expect(status).to eq(:pass)
+      end
+    end
+
+    # The half-migrated state every app installed before the layout owned the
+    # document lands in: the root is there, so the old check said :pass, but
+    # without `ruact_js_assets` the `:auto` default keeps using ruact's built-in
+    # shell and the app's CSS never reaches the page. It must be visible, and it
+    # must not fail the run (nothing is broken — the page still renders).
+    context "when the layout has the React root but never calls ruact_js_assets" do
+      before { make_layout(with_sentinel: true, with_assets: false) }
+
+      it "returns :warn" do
+        status, = doctor.send(:check_layout)
+        expect(status).to eq(:warn)
+      end
+
+      it "does not fail the doctor run" do
+        expect(described_class::SUCCESS_STATUSES).to include(:warn)
+      end
+
+      it "remediates by naming the helper to add" do
+        _, _, remediation = doctor.send(:check_layout)
+        expect(remediation).to include("ruact_js_assets")
       end
     end
 

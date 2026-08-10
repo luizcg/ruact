@@ -44,12 +44,21 @@ module Ruact
     # (no drift). Available in every view via the railtie's
     # `ActionView::Base.include(Ruact::ViewHelper)`.
     #
+    # Called from a LAYOUT the argument is normally omitted: the payload for the
+    # render in flight is picked up from `@ruact_flight_payload`, which
+    # `Ruact::Controller#render_ruact_document` sets on the controller and Rails
+    # copies to the view (the name does not match the `/\A@_/` protected-ivar
+    # filter). On a plain Rails page — no ruact render in flight — that ivar is
+    # absent and the helper emits only the entry tags, exactly as before.
+    #
     # @param flight_payload [String, nil] the per-render Flight wire payload to
-    #   inline as `__FLIGHT_DATA`; omit (or pass nil) to emit only the entry tags.
+    #   inline as `__FLIGHT_DATA`. Omit inside a layout to use the render in
+    #   flight; an explicit argument always wins.
     # @return [ActiveSupport::SafeBuffer] the asset markup, html_safe
     # @example In a layout
     #   <%= ruact_js_assets %>
     def ruact_js_assets(flight_payload = nil)
+      flight_payload ||= @ruact_flight_payload
       parts = []
       parts << ruact_flight_data_script(flight_payload) unless flight_payload.nil?
       parts << ruact_vite_tags
