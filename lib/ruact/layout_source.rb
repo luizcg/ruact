@@ -15,12 +15,18 @@ module Ruact
     # ERB comments are stripped before anything else. A commented-out call —
     # `<%# <%= ruact_js_assets %> %>`, which a developer produces the moment
     # they disable it while debugging — emits NOTHING, so counting it as wired
-    # would send ruact off to render an unmigrated layout.
-    ERB_COMMENT = /<%#.*?%>/m
+    # would report a layout as migrated when it is not. The `-?` covers ERB's
+    # trim-mode forms (`<%-#` / `-%>`), which Erubi treats as comments too and
+    # an earlier version of this pattern missed.
+    ERB_COMMENT = /<%-?#.*?-?%>/m
 
     # An ERB OUTPUT tag calling the helper: `<%= ruact_js_assets %>` and the raw
     # `<%== ... %>` form, with or without arguments or surrounding whitespace.
-    ASSETS_CALL = /<%=+[^%]*\bruact_js_assets\b/
+    # Scanning stops at the tag's own `%>` rather than forbidding `%` outright —
+    # `<%= raw("100%") + ruact_js_assets %>` is a legitimate call that a
+    # `[^%]*` pattern rejected, while still never matching a bare mention that
+    # merely follows some other tag.
+    ASSETS_CALL = /<%=+(?:(?!%>).)*?\bruact_js_assets\b/m
 
     # The React mount target, as an attribute rather than as a substring. The
     # lookbehind is what stops `data-id="root"` (and any other `*-id`) from

@@ -210,7 +210,7 @@ module ControllerRequestSpecSupport
   end
 
   # An unmigrated layout that RAISES if rendered (it reads an ivar a ruact
-  # action never sets). Under `:auto` ruact must never execute it.
+  # action never sets). With the default config ruact must never execute it.
   class ExplodingLayoutDemoController < ActionController::Base
     include Ruact::Controller
 
@@ -317,93 +317,95 @@ module Ruact # rubocop:disable Style/OneClassPerFile
     # `stylesheet_link_tag` in the app's layout never reached the browser. The
     # generated `--shadcn` scaffold was therefore unstyled by construction, and
     # Epic 12 (`ruact_meta` → tags in `<head>`) had no surface to write into.
+    #
+    # The opt-in is EXPLICIT (`Ruact.config.layout`). ruact used to infer
+    # readiness from the layout itself; three review rounds each found another
+    # template shape that fooled the inference, so the question is no longer
+    # asked. These examples pin both halves: nothing happens without the config,
+    # and everything happens with it.
     describe "the layout owns the document" do
-      it "puts the host app's stylesheet on a ruact page (the CSS could not arrive before)" do
-        get "/layout-demo/show"
-
-        expect(last_response.status).to(eq(200),
-                                        "expected 200, got #{last_response.status} " \
-                                        "body=#{last_response.body[0, 400]}")
-        expect(last_response.body).to include('<link rel="stylesheet" href="/host-app.css" />')
-      end
-
-      it "keeps the host layout's own <title> instead of ruact's placeholder" do
-        get "/layout-demo/show"
-
-        expect(last_response.body).to include("<title>Host App Title</title>")
-        expect(last_response.body).not_to include("Rails RSC")
-      end
-
-      it "still ships the Flight payload and the component, through the layout's ruact_js_assets" do
-        get "/layout-demo/show"
-
-        expect(last_response.body).to include("__FLIGHT_DATA")
-        expect(last_response.body).to include("DemoButton")
-      end
-
-      it "does not apply the layout to a Flight request (the wire shape is unchanged)" do
-        get "/layout-demo/show", {}, { "HTTP_ACCEPT" => "text/x-component" }
-
-        expect(last_response.headers["Content-Type"]).to include("text/x-component")
-        expect(last_response.body).not_to include("host-app.css")
-        expect(last_response.body).to include("DemoButton")
-      end
-
-      # Fail-SAFE, not fail-blank: rendering through a layout that never calls
-      # `ruact_js_assets` would emit a document with no bootstrap and no
-      # payload. Under the `:auto` default that is the expected un-migrated
-      # state, so it must degrade to the built-in shell — a working (if
-      # unstyled) page — rather than serve a blank one.
-      context "when the host layout never calls ruact_js_assets" do
-        it "falls back to the built-in shell instead of serving a blank document" do
-          get "/unwired-layout-demo/show"
-
-          expect(last_response.status).to eq(200)
-          expect(last_response.body).to include("Rails RSC")
-          expect(last_response.body).to include("__FLIGHT_DATA")
-          expect(last_response.body).to include("DemoButton")
-          expect(last_response.body).not_to include("host-app.css")
+      def configure_layout(value)
+        Ruact.configure do |c|
+          c.manifest_path = ControllerRequestSpecSupport.manifest_path
+          c.layout = value
         end
       end
 
-      # THE backward-compatibility guarantee, and the one the first cut of this
-      # change broke (found in review): under `:auto` an unmigrated layout must
-      # never be EXECUTED, only inspected. A pre-migration layout has never once
-      # run on a ruact page, so it can reference state a ruact action never sets
-      # — rendering it speculatively, just to discover it lacks the helper,
-      # turns a working page into a 500 on an app that changed nothing.
-      context "when the unmigrated layout would raise if it were rendered" do
-        it "never executes it — the page still renders through the built-in shell" do
+      # The whole backward-compatibility story, and it is now structural rather
+      # than argued: with the default config ruact never looks at, resolves, or
+      # renders a layout at all.
+      context "with the default configuration (layout = false)" do
+        it "renders the built-in shell, exactly as before the layout path existed" do
+          get "/layout-demo/show"
+
+          expect(last_response.status).to eq(200)
+          expect(last_response.body).to include("Rails RSC")
+          expect(last_response.body).not_to include("host-app.css")
+          expect(last_response.body).to include("DemoButton")
+        end
+
+        # This layout raises if it is rendered (it reads an ivar a ruact action
+        # never sets) — the shape of a real pre-migration app. Nothing may
+        # execute it.
+        it "never executes an unmigrated layout, so a working page cannot become a 500" do
           get "/exploding-layout-demo/show"
 
           expect(last_response.status).to(eq(200),
                                           "expected the layout NOT to be rendered; got " \
                                           "#{last_response.status} body=#{last_response.body[0, 300]}")
           expect(last_response.body).to include("Rails RSC")
+        end
+      end
+
+      context "when the app opts in (layout = true)" do
+        before { configure_layout(true) }
+
+        it "puts the host app's stylesheet on a ruact page (the CSS could not arrive before)" do
+          get "/layout-demo/show"
+
+          expect(last_response.status).to(eq(200),
+                                          "expected 200, got #{last_response.status} " \
+                                          "body=#{last_response.body[0, 400]}")
+          expect(last_response.body).to include('<link rel="stylesheet" href="/host-app.css" />')
+        end
+
+        it "keeps the host layout's own <title> instead of ruact's placeholder" do
+          get "/layout-demo/show"
+
+          expect(last_response.body).to include("<title>Host App Title</title>")
+          expect(last_response.body).not_to include("Rails RSC")
+        end
+
+        it "still ships the Flight payload and the component, through the layout's ruact_js_assets" do
+          get "/layout-demo/show"
+
+          expect(last_response.body).to include("__FLIGHT_DATA")
           expect(last_response.body).to include("DemoButton")
         end
-      end
 
-      # A layout can carry `ruact_js_assets` and still be unusable: with no root
-      # div, React boots with nothing to mount into and the page is silently
-      # blank. Checking only for the payload marker accepted exactly this.
-      context "when the layout has the assets but no root div to mount into" do
-        it "falls back rather than serving a document React cannot mount into" do
-          get "/rootless-layout-demo/show"
+        it "does not apply the layout to a Flight request (the wire shape is unchanged)" do
+          get "/layout-demo/show", {}, { "HTTP_ACCEPT" => "text/x-component" }
 
-          expect(last_response.status).to eq(200)
-          expect(last_response.body).to include("Rails RSC")
+          expect(last_response.headers["Content-Type"]).to include("text/x-component")
           expect(last_response.body).not_to include("host-app.css")
-          expect(last_response.body).to match(/id="root"/)
+          expect(last_response.body).to include("DemoButton")
         end
-      end
 
-      # An app with no resolvable layout at all (API-shaped, or `layout false`)
-      # must keep working: `layout: true` raises ArgumentError there, which
-      # would have turned every such page into a 500 the moment this default
-      # landed.
-      context "when the controller has no resolvable layout" do
-        it "renders the built-in shell rather than raising" do
+        # Opting in and pointing ruact at a layout that cannot mount the app is
+        # a configuration error, and silence would cost a blank page.
+        it "fails loudly when the opted-in layout never calls ruact_js_assets" do
+          expect { get "/unwired-layout-demo/show" }
+            .to raise_error(Ruact::Error, /ruact_js_assets/)
+        end
+
+        it "fails loudly when the opted-in layout has no root div to mount into" do
+          expect { get "/rootless-layout-demo/show" }
+            .to raise_error(Ruact::Error, /root/)
+        end
+
+        # `layout false` on one controller inside an app that opted in globally
+        # is a normal Rails pattern, not a mistake — it must degrade, not raise.
+        it "degrades to the shell for a controller with no resolvable layout" do
           get "/demo/show"
 
           expect(last_response.status).to eq(200)
@@ -412,17 +414,14 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         end
       end
 
-      context "when layout is configured false" do
-        it "uses the built-in shell even though the layout is ready" do
-          Ruact.configure do |c|
-            c.manifest_path = ControllerRequestSpecSupport.manifest_path
-            c.layout = false
-          end
+      context "when a named layout is configured" do
+        before { configure_layout("ruact_host") }
 
-          get "/layout-demo/show"
+        it "renders every ruact page through that layout" do
+          get "/demo/show"
 
-          expect(last_response.body).to include("Rails RSC")
-          expect(last_response.body).not_to include("host-app.css")
+          expect(last_response.body).to include("host-app.css")
+          expect(last_response.body).to include("DemoButton")
         end
       end
     end

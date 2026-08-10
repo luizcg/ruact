@@ -48,6 +48,26 @@ RSpec.describe Ruact::LayoutSource do
       expect(described_class.wired?("<%# ruact_js_assets %>\n<%= ruact_js_assets %>")).to be true
     end
 
+    # Round-3 finding: ERB's trim-mode comment (`<%-# ... -%>`) is a comment in
+    # Erubi too — verified by compiling it — but the stripper only knew `<%#`,
+    # so a call disabled this way read as wired.
+    it "rejects a call disabled with a trim-mode comment" do
+      expect(described_class.wired?("<%-# <%= ruact_js_assets %> -%>")).to be false
+    end
+
+    # Round-3 finding, the other direction: forbidding `%` before the name to
+    # avoid crossing tag boundaries also rejected legitimate calls. A false
+    # "unwired" is safer than a false "wired", but it is still a wrong answer —
+    # the app would silently keep ruact's CSS-less shell.
+    it "accepts a call whose expression contains a percent sign" do
+      expect(described_class.wired?(%(<%= raw("100%") + ruact_js_assets %>))).to be true
+      expect(described_class.wired?("<%= ruact_js_assets if 50 % 2 == 0 %>")).to be true
+    end
+
+    it "still refuses to match across a tag boundary" do
+      expect(described_class.wired?("<%= something %> then a bare ruact_js_assets mention")).to be false
+    end
+
     it "rejects a layout that never names it" do
       expect(described_class.wired?("<html><body><%= yield %></body></html>")).to be false
     end

@@ -141,8 +141,11 @@ RSpec.describe Ruact::Doctor do
   describe "#check_layout (AC#1, #5)" do
     subject(:doctor) { described_class.new }
 
-    context "when the layout owns the document (React root + ruact_js_assets)" do
-      before { make_layout(with_sentinel: true, with_assets: true) }
+    context "when the layout is wired and the app opted in" do
+      before do
+        make_layout(with_sentinel: true, with_assets: true)
+        Ruact.configure { |c| c.layout = true }
+      end
 
       it "returns :pass" do
         status, = doctor.send(:check_layout)
@@ -150,30 +153,60 @@ RSpec.describe Ruact::Doctor do
       end
     end
 
-    # The half-migrated state every app installed before the layout owned the
-    # document lands in: the root is there, so the old check said :pass, but
-    # without `ruact_js_assets` the `:auto` default keeps using ruact's built-in
-    # shell and the app's CSS never reaches the page. It must be visible, and it
-    # must not fail the run (nothing is broken — the page still renders).
-    context "when the layout has the React root but never calls ruact_js_assets" do
-      before { make_layout(with_sentinel: true, with_assets: false) }
+    # Both halves are silent when wrong, and they are DIFFERENT fixes — "add one
+    # line to the layout" versus "flip one setting" — so they report separately.
+    context "when the layout is wired but Ruact.config.layout is false" do
+      before do
+        make_layout(with_sentinel: true, with_assets: true)
+        Ruact.configure { |c| c.layout = false }
+      end
 
-      it "returns :warn" do
-        status, = doctor.send(:check_layout)
+      it "returns :warn naming the setting, not the layout" do
+        status, message, remediation = doctor.send(:check_layout)
+
         expect(status).to eq(:warn)
+        expect(message).to include("config.layout is false")
+        expect(remediation).to include("config.layout = true")
       end
 
       it "does not fail the doctor run" do
         expect(described_class::SUCCESS_STATUSES).to include(:warn)
       end
+    end
 
-      it "remediates by naming the helper to add" do
-        _, _, remediation = doctor.send(:check_layout)
+    context "when the layout has the React root but never calls ruact_js_assets" do
+      before do
+        make_layout(with_sentinel: true, with_assets: false)
+        Ruact.configure { |c| c.layout = true }
+      end
+
+      it "fails and names the helper to add" do
+        status, _message, remediation = doctor.send(:check_layout)
+
+        expect(status).to eq(:fail)
         expect(remediation).to include("ruact_js_assets")
       end
     end
 
-    context "when React shell sentinel is absent" do
+    # The drift this shares with the runtime and the generator: a MENTION of the
+    # helper in a comment is not a call, and reporting :pass on one sent a
+    # developer looking anywhere but at the real problem.
+    context "when the layout only mentions the helper in a comment" do
+      before do
+        dir = tmpdir.join("app", "views", "layouts")
+        FileUtils.mkdir_p(dir)
+        File.write(dir.join("application.html.erb"),
+                   "<%# ruact: root %>\n<div id=\"root\"></div>\n<%# TODO: add ruact_js_assets %>\n")
+        Ruact.configure { |c| c.layout = true }
+      end
+
+      it "does not report it as wired" do
+        status, = doctor.send(:check_layout)
+        expect(status).to eq(:fail)
+      end
+    end
+
+    context "when the layout has neither the root nor the helper" do
       before { make_layout(with_sentinel: false) }
 
       it "returns :fail" do
@@ -181,8 +214,17 @@ RSpec.describe Ruact::Doctor do
         expect(status).to eq(:fail)
       end
 
-      it "message is 'React shell missing from application.html.erb'" do
+      it "names both halves, since either could be the missing one" do
         _, msg = doctor.send(:check_layout)
+        expect(msg).to include("React root").and include("ruact_js_assets")
+      end
+    end
+
+    context "when there is no application layout file at all" do
+      it "reports the file, not its contents" do
+        status, msg = doctor.send(:check_layout)
+
+        expect(status).to eq(:fail)
         expect(msg).to eq("React shell missing from application.html.erb")
       end
     end
