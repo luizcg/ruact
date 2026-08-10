@@ -22,16 +22,9 @@ module Ruact
       # BOTH dev and production, whose entry tags differ.
       RUACT_ASSETS_MARKER = "__FLIGHT_DATA"
 
-      # The React mount target. Matched loosely on purpose — a host layout may
-      # write the div with single quotes, extra attributes, or a different
-      # attribute order, and all of those mount fine.
-      RUACT_ROOT_MARKER = /id\s*=\s*["']root["']/
-
-      # An ERB OUTPUT tag that calls the helper — `<%= ruact_js_assets %>`, with
-      # or without arguments. Matching the bare name would count a mention in a
-      # comment (`<%# ... ruact_js_assets ... %>`) or a commented-out call as
-      # wired, and ruact would then render a layout that emits nothing.
-      RUACT_ASSETS_CALL = /<%=[^%]*\bruact_js_assets\b/
+      # What counts as a mount target and what counts as a real call both live in
+      # {Ruact::LayoutSource}, shared with `ruact:install` so the runtime and the
+      # generator can never disagree about whether a layout is migrated.
 
       private
 
@@ -96,7 +89,7 @@ module Ruact
       # Requiring both also makes an accidental `__FLIGHT_DATA` string in user
       # content far less likely to read as a wired layout.
       def ruact_document_mountable?(document)
-        document.include?(RUACT_ASSETS_MARKER) && document.match?(RUACT_ROOT_MARKER)
+        document.include?(RUACT_ASSETS_MARKER) && Ruact::LayoutSource.root?(document)
       end
 
       # `:missing` (no layout to render into), `:unwired` (a layout that does not
@@ -171,7 +164,7 @@ module Ruact
       def ruact_layout_source_wired?(template)
         return false unless template.respond_to?(:source)
 
-        template.source.to_s.match?(RUACT_ASSETS_CALL)
+        Ruact::LayoutSource.wired?(template.source)
       rescue StandardError
         false
       end

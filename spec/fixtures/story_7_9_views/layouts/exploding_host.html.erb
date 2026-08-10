@@ -4,10 +4,13 @@
     ruact-rendered page. If ruact renders this speculatively just to discover it
     lacks `ruact_js_assets`, the app 500s on a page that used to work.
 
-    NOTE: this comment MENTIONS the helper name on purpose. A readiness check
-    that greps the source for the bare string counts this layout as wired and
-    renders it — which is exactly the bug this fixture exists to catch. Only an
-    actual `<%%= ruact_js_assets %%>` output tag may count. %>
+    NOTE: this comment MENTIONS the helper name on purpose — a readiness check
+    that greps for the bare string counts this layout as wired and renders it. %>
+<%# <%= ruact_js_assets %> %>
+<%# ...and the line above is a genuinely COMMENTED-OUT call, which is the
+    sharper version of the same trap: ERB comments do not nest, so it emits
+    nothing, but a check that only looks for `<%=` sees a call. Both shapes must
+    read as UNMIGRATED, or this layout gets rendered and 500s below. %>
 <!DOCTYPE html>
 <html>
   <head>

@@ -102,7 +102,11 @@ module Ruact
 
         content = File.read(Pathname(destination_root).join(layout_file))
 
-        if content.include?("ruact_js_assets")
+        # A CALL, not a mention: `<%# TODO: add ruact_js_assets %>` used to read
+        # as "already present" here and skip the migration, leaving the app on
+        # ruact's CSS-less shell with the generator reporting success. Shared
+        # with the runtime so both agree on what "migrated" means.
+        if Ruact::LayoutSource.wired?(content)
           say_status "skip", "ruact root + assets already present in layout", :yellow
           return
         end
@@ -114,12 +118,14 @@ module Ruact
         # pair, and tolerates the ways a real layout is written — single or
         # double quotes, extra attributes, any attribute order, CRLF, and the
         # marker on the same line. The earlier anchor required the exact emitted
-        # formatting, so a hand-edited layout silently matched nothing.
+        # formatting, so a hand-edited layout silently matched nothing. The
+        # attribute boundary in `ROOT_ELEMENT` is what keeps `data-id="root"`
+        # from being mistaken for the mount point.
         if content.include?("ruact: root")
           before = File.read(Pathname(destination_root).join(layout_file))
           inject_into_file layout_file,
                            "\n    <%= ruact_js_assets %>",
-                           after: %r{<div\s[^>]*id\s*=\s*["']root["'][^>]*>\s*</div>}
+                           after: Ruact::LayoutSource::ROOT_ELEMENT
           after = File.read(Pathname(destination_root).join(layout_file))
 
           # `inject_into_file` prints "File unchanged!" and carries on when the

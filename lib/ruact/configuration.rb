@@ -145,10 +145,17 @@ module Ruact
     #
     #     - `:auto` (default) — render through the host app's own layout when
     #       that layout is ruact-ready (it calls `ruact_js_assets`), otherwise
-    #       fall back to the gem's built-in shell. This is the migration-safe
-    #       default: an app whose layout has not been migrated keeps rendering
-    #       exactly as before.
+    #       fall back to the gem's built-in shell. Migration-safe, and the
+    #       mechanism is the guarantee: `:auto` INSPECTS the layout's source and
+    #       never renders it speculatively, so a layout that has never run on a
+    #       ruact page cannot be executed just to discover it is unmigrated.
     #     - `true` — always render through the controller's normal Rails layout.
+    #       **This is a sharp opt-in:** unlike `:auto` it RENDERS the layout and
+    #       judges the result, so an unmigrated layout that depends on state a
+    #       ruact action never sets (a `@page_title` ivar, an expected
+    #       `content_for`) will raise from your own layout rather than degrade.
+    #       Use it when the layout is genuinely ready but `:auto` cannot tell —
+    #       typically because the helper is called from a partial.
     #     - a String — always render through that named layout (e.g. `"ruact"`).
     #     - `false` — always render the gem's built-in minimal shell.
     #
@@ -165,7 +172,8 @@ module Ruact
     #   @note A ruact view is rendered in its own pass (it produces the component
     #     tree), so `content_for` declared inside the view does NOT reach the
     #     layout. Set document metadata from the controller instead.
-    #   @example Force the app layout even before doctor reports it ready
+    #   @example Opt in explicitly — e.g. a layout that reaches the helper
+    #     through a partial, which `:auto`'s source read cannot see
     #     Ruact.configure { |c| c.layout = true }
     #   @example Keep the pre-0.0.9 built-in shell
     #     Ruact.configure { |c| c.layout = false }
