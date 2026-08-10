@@ -1236,4 +1236,119 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
       end
     end
   end
+
+  # The `--shadcn` prerequisites. The gap these close is concrete: shadcn's CLI
+  # aborts on a ruact app with "No Tailwind CSS configuration found" and "Could
+  # not find valid path aliases", because a ruact app ships neither Tailwind nor
+  # a tsconfig.json. Without them `ruact:scaffold --shadcn` emitted components
+  # whose classes resolved to nothing — styled markup with no styles.
+  describe "install generator — --shadcn prerequisites" do
+    require "stringio"
+    require "generators/ruact/install/install_generator"
+
+    let(:app_root) { Dir.mktmpdir("ruact_install_shadcn") }
+
+    after { FileUtils.rm_rf(app_root) }
+
+    def build_generator(root, opts = {})
+      Ruact::Generators::InstallGenerator.new([], opts, destination_root: root)
+    end
+
+    def silently
+      original = $stdout
+      $stdout = StringIO.new
+      yield
+    ensure
+      $stdout = original
+    end
+
+    def read(relative)
+      File.read(File.join(app_root, relative))
+    end
+
+    describe "with --shadcn", :aggregate_failures do
+      let(:generator) { build_generator(app_root, shadcn: true) }
+
+      it "writes the Tailwind entry shadcn points components.json at" do
+        silently { generator.create_shadcn_prerequisites }
+
+        expect(File).to exist(File.join(app_root, "app/javascript/styles/globals.css"))
+        expect(read("app/javascript/styles/globals.css")).to include('@import "tailwindcss"')
+      end
+
+      it "writes the tsconfig import alias shadcn probes for" do
+        silently { generator.create_shadcn_prerequisites }
+
+        tsconfig = JSON.parse(read("tsconfig.json"))
+        expect(tsconfig.dig("compilerOptions", "paths", "@/*")).to eq(["app/javascript/*"])
+      end
+
+      it "creates the builds directory Propshaft serves the compiled stylesheet from" do
+        silently { generator.create_shadcn_prerequisites }
+
+        expect(File).to exist(File.join(app_root, "app/assets/builds/.keep"))
+      end
+
+      it "declares Tailwind in package.json with a build:css script" do
+        silently { generator.create_package_json }
+
+        pkg = JSON.parse(read("package.json"))
+        expect(pkg.dig("devDependencies", "tailwindcss")).to be_a(String)
+        expect(pkg.dig("devDependencies", "@tailwindcss/cli")).to be_a(String)
+        expect(pkg.dig("devDependencies", "tw-animate-css")).to be_a(String)
+        expect(pkg.dig("scripts", "build:css")).to include("app/assets/builds/tailwind.css")
+      end
+
+      it "adds a css watch process so bin/dev rebuilds the stylesheet" do
+        silently { generator.create_launch_files }
+
+        expect(read("Procfile.dev")).to match(/^css: .*tailwind\.css --watch$/)
+      end
+
+      it "gitignores the compiled stylesheet (a build artifact of globals.css)" do
+        File.write(File.join(app_root, ".gitignore"), "/log/*\n")
+        silently { generator.append_gitignore_entries }
+
+        expect(read(".gitignore")).to include("app/assets/builds/tailwind.css")
+      end
+
+      # The one thing a reader cannot guess: current shadcn defaults to Base UI,
+      # but the components the scaffold generates import Radix primitives.
+      it "prints the two shadcn commands, pinning --base radix" do
+        expect { generator.send(:show_shadcn_next_steps) }
+          .to output(/npx shadcn@latest init --base radix/).to_stdout
+      end
+
+      it "prints the complete add-list, so the scaffold pre-flight cannot fail on a gap" do
+        expect { generator.send(:show_shadcn_next_steps) }
+          .to output(/add button input textarea switch select label badge table alert-dialog dropdown-menu/)
+          .to_stdout
+      end
+    end
+
+    describe "without --shadcn (the default path is untouched)", :aggregate_failures do
+      let(:generator) { build_generator(app_root) }
+
+      it "writes no Tailwind entry and no tsconfig" do
+        silently { generator.create_shadcn_prerequisites }
+
+        expect(File).not_to exist(File.join(app_root, "app/javascript/styles/globals.css"))
+        expect(File).not_to exist(File.join(app_root, "tsconfig.json"))
+      end
+
+      it "leaves package.json free of Tailwind" do
+        silently { generator.create_package_json }
+
+        pkg = JSON.parse(read("package.json"))
+        expect(pkg["devDependencies"].keys).not_to include("tailwindcss", "@tailwindcss/cli")
+        expect(pkg["scripts"]).not_to have_key("build:css")
+      end
+
+      it "leaves Procfile.dev at the two processes it always had" do
+        silently { generator.create_launch_files }
+
+        expect(read("Procfile.dev")).not_to include("css:")
+      end
+    end
+  end
 end

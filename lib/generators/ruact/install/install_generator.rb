@@ -12,7 +12,10 @@ module Ruact
     # Performs the following actions:
     # 1. Creates config/initializers/ruact.rb
     # 2. Injects `include Ruact::Controller` into ApplicationController
-    # 3. Injects the React root div into app/views/layouts/application.html.erb
+    # 3. Injects the React root div AND `ruact_js_assets` into
+    #    app/views/layouts/application.html.erb, so the app's own layout owns
+    #    the document (and its `<head>` — stylesheets, fonts, meta — reaches a
+    #    ruact page). See Ruact::Configuration#layout.
     # 4. Creates app/javascript/components/.keep
     # 5. Creates vite.config.js (or shows manual instructions if one exists)
     # 6. Creates package.json (react/react-dom/vite/@vitejs/plugin-react) so a
@@ -25,6 +28,10 @@ module Ruact
     #    verification commands in context by default (Story 15.1, FR105).
     # 9. Runs `npm install` so JavaScript dependencies are ready (FR101);
     #    skippable via --skip-npm.
+    # 10. With `--shadcn`: also emits the prerequisites shadcn's own CLI refuses
+    #    to initialize without (a Tailwind entry + a `tsconfig.json` import
+    #    alias), wires the `css` build process, and prints the two `npx shadcn`
+    #    commands it deliberately does not run.
     #
     # Story 14.2 (FR104) — the generator no longer writes a bootstrap entry into
     # the user's tree. ruact's React entry is served as the virtual module
@@ -47,6 +54,20 @@ module Ruact
                    type: :boolean,
                    default: false,
                    desc: "Skip running npm install (for CI or non-npm package managers)"
+
+      # Prepares the app for the `ruact:scaffold --shadcn` path. shadcn's own
+      # CLI refuses to initialize without BOTH Tailwind and a TypeScript import
+      # alias, and a ruact app has neither — it ships no Tailwind and no
+      # `tsconfig.json` at all. That left `--shadcn` scaffolding into an app
+      # where the generated components' classes resolved to nothing: markup with
+      # no styling. This flag emits exactly the prerequisites (verified against
+      # the real shadcn CLI) and then PRINTS the two `npx shadcn` commands
+      # rather than running them — they hit the network and `shadcn init` is
+      # interactive, so automating them is neither safe nor possible.
+      class_option :shadcn,
+                   type: :boolean,
+                   default: false,
+                   desc: "Also wire Tailwind + a TS import alias, the prerequisites for `ruact:scaffold --shadcn`"
 
       def create_initializer
         template "initializer.rb.tt", "config/initializers/ruact.rb"
@@ -101,6 +122,31 @@ module Ruact
                          before: "  </body>"
       end
 
+      # `--shadcn` only. Two files, both of them things shadcn's CLI checks for
+      # and refuses to proceed without ("No Tailwind CSS configuration found" /
+      # "Could not find valid path aliases"), verified against shadcn 4.x:
+      #
+      #   app/javascript/styles/globals.css — the Tailwind entry. shadcn appends
+      #     its design tokens here, which is why components.json points at it.
+      #   tsconfig.json — the `@/*` → `app/javascript/*` alias. The Vite plugin
+      #     already registers the same alias for the BUNDLER, so components
+      #     resolve at runtime today; this is what makes it resolve for
+      #     TypeScript (and therefore for shadcn's alias probe and your editor).
+      #
+      # Both are guarded: an app that already has them keeps its own.
+      def create_shadcn_prerequisites
+        return unless shadcn?
+
+        create_guarded_file "app/javascript/styles/globals.css", "globals.css.tt"
+        create_guarded_file "tsconfig.json", "tsconfig.json.tt"
+        # Propshaft only serves directories that exist; the built stylesheet is
+        # generated, so the directory ships with a .keep and the artifact is
+        # gitignored (see append_gitignore_entries).
+        empty_directory "app/assets/builds"
+        create_file "app/assets/builds/.keep" unless
+          File.exist?(Pathname(destination_root).join("app/assets/builds/.keep"))
+      end
+
       def create_components_directory
         empty_directory "app/javascript/components"
         create_file "app/javascript/components/.keep" unless
@@ -125,6 +171,10 @@ module Ruact
           "app/javascript/.ruact/server-functions.ts",
           "tmp/cache/ruact/"
         ]
+        # The compiled stylesheet is a build artifact of globals.css, rebuilt by
+        # the Procfile's `css` process on every boot — same reasoning as the
+        # generated server-functions module above.
+        entries << "app/assets/builds/tailwind.css" if shadcn?
         # Substring matches (`existing.include?(entry)`) were unsafe — they
         # would skip "tmp/cache/ruact/" when the file already contained
         # "tmp/cache/ruact/some-cache.bin", leaving the directory itself
@@ -310,6 +360,8 @@ module Ruact
           say "  2. Start your app:           bin/dev"
         end
 
+        show_shadcn_next_steps if shadcn?
+
         say "\nThen add <MyComponent /> to any ERB view.\n"
         say "Note: re-run this generator after updating the ruact gem to refresh"
         say "the bundled Vite plugin path in vite.config.js."
@@ -317,6 +369,33 @@ module Ruact
       end
 
       private
+
+      # The generator does NOT run these: `shadcn init` is interactive (it
+      # prompts for a component library and a preset) and both commands hit the
+      # network. What it CAN do is spell them exactly, which is the part nobody
+      # guesses: current shadcn defaults to **Base UI**, while ruact's generated
+      # components import **Radix** primitives — accepting the default gives you
+      # a component library the scaffold cannot use. Hence the explicit
+      # `--base radix`.
+      #
+      # The component list is ruact's own authoritative set
+      # (ScaffoldGenerator#required_shadcn_components), derived from the
+      # templates' imports, so the two generators cannot drift.
+      def show_shadcn_next_steps
+        say ""
+        say "shadcn prerequisites are in place (Tailwind entry, tsconfig alias, css process)."
+        say "Two commands remain — they are interactive and hit the network, so run them yourself:"
+        say ""
+        say "  npx shadcn@latest init --base radix"
+        say "  npx shadcn@latest add #{shadcn_add_list}"
+        say ""
+        say "  (--base radix matters: shadcn now defaults to Base UI, but the components"
+        say "   `ruact:scaffold --shadcn` generates import Radix primitives.)"
+        say "  (init also asks you to pick a style preset — any of them works.)"
+        say ""
+        say "Then scaffold a resource:"
+        say "  bin/rails generate ruact:scaffold Post title:string body:text --shadcn"
+      end
 
       # Story 15.1 — the exact marker tokens delimiting the ruact-managed
       # section of AGENTS.md. For a prose file the only safe idempotency key is
@@ -482,6 +561,21 @@ module Ruact
       # Story 14.6 — a valid, lowercase npm "name" for the generated package.json,
       # derived from the app directory. npm names must be lowercase and contain
       # only URL-safe characters; anything else collapses to a hyphen.
+      def shadcn?
+        options[:shadcn]
+      end
+
+      # The superset the scaffold generator narrows per resource. Loaded lazily
+      # (and only under `--shadcn`) so a plain install never pays for the
+      # scaffold generator's load, and so a failure to reach it degrades to the
+      # literal list rather than aborting an otherwise-successful install.
+      def shadcn_add_list
+        require_relative "../scaffold/scaffold_shadcn_preflight"
+        ScaffoldGenerator::ShadcnPreflight::ALL_SHADCN_COMPONENTS.join(" ")
+      rescue StandardError
+        "button input textarea switch select label badge table alert-dialog dropdown-menu"
+      end
+
       def app_package_name
         base = File.basename(File.expand_path(destination_root))
         sanitized = base.downcase.gsub(/[^a-z0-9._-]/, "-").squeeze("-").gsub(/\A-+|-+\z/, "")

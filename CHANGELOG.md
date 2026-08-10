@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`rails generate ruact:install --shadcn` — the `--shadcn` scaffold path now has a working setup.** `ruact:scaffold --shadcn` emits components dressed in Tailwind classes, but nothing in ruact ever wired Tailwind, so the generated CRUD rendered **unstyled**: the classes had nothing to resolve against. Worse, the documented next step did not work either — shadcn's own CLI **refuses to initialize** in a ruact app, aborting with *"No Tailwind CSS configuration found"* and *"Could not find valid path aliases"*, because a fresh ruact app ships neither Tailwind nor a `tsconfig.json`.
+
+  The new flag emits exactly those prerequisites, each verified against the real shadcn CLI: `app/javascript/styles/globals.css` (the Tailwind entry shadcn appends its design tokens to, and points `components.json` at), a `tsconfig.json` carrying the `@/*` → `app/javascript/*` alias (the bundled Vite plugin already registers the same alias for the *bundler*; this is what makes it resolve for *TypeScript*, and therefore for shadcn's probe and your editor), `app/assets/builds/` with the compiled stylesheet gitignored, the `build:css` script, and a `css` process in `Procfile.dev` so `bin/dev` rebuilds the stylesheet alongside Rails and Vite.
+
+  It then **prints** the two `npx shadcn` commands instead of running them — they hit the network, and `shadcn init` is interactive, so automating them is neither safe (the scaffold generator's "never auto-run npx/npm" rule) nor possible. The printed `init` line pins **`--base radix`**, which is the part nobody would guess: current shadcn defaults to **Base UI**, while the components `ruact:scaffold --shadcn` generates import **Radix** primitives — accepting the default gets you a component library the scaffold cannot use. The printed `add` list is the complete primitive superset, pinned by a spec as a superset of whatever a given resource narrows to, so the two generators cannot drift.
+
+  **The default (agnostic) path is untouched** — no Tailwind, no `tsconfig.json`, and a byte-identical `package.json` and `Procfile.dev`, all pinned by specs.
+
+  Verified end to end twice from `rails new`: the generated CRUD renders as a styled shadcn table with the `useQuery` search filtering rows live. Note that shadcn's CLI is currently **4.x** while `shadcn_compatible_versions` defaults to `[1, 2]`, so the scaffold's version pre-flight emits its (non-blocking) warning; the generated components do work against 4.x.
+
 ### Fixed
 
 - **A ruact page can now carry your app's CSS — the Rails layout owns the document.** `ruact_render` rendered the view with `layout: false` and then wrapped the Flight payload in a hardcoded HTML shell whose `<head>` holds only `charset`, `viewport`, the CSRF meta tag and the title `Rails RSC`. That shell has **no stylesheet slot and never uses your layout**, so `stylesheet_link_tag` — and with it favicons, fonts, analytics and every `<head>`-writing gem — could not reach a ruact-rendered page **at all**. The visible consequence: `rails generate ruact:scaffold --shadcn` emitted components whose Tailwind classes had nothing to resolve against, so the generated CRUD was **unstyled by construction**; the docs' instruction to put shadcn theme variables in `app/assets/stylesheets/application.css` pointed at a file that provably never reached the browser; and Epic 12 (`ruact_meta` → tags in `<head>`) had no surface to write into. The default agnostic scaffold was affected too — it renders plain semantic HTML and only *looked* acceptable because browsers style a bare `<table>`.

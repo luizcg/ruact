@@ -47,6 +47,16 @@ module Ruact
         # List/DeleteDialog primitives. EVERY entry is a plain `npx shadcn add`
         # primitive — there is NO `data-table` recipe and NO `@tanstack/react-table`
         # dependency (Story 10.2b removed the engine; the List is a plain `table`).
+        # The COMPLETE primitive set — the union of everything any generated
+        # resource can import. `#required_shadcn_components` NARROWS this per
+        # resource (the input-family entries depend on the attribute types),
+        # but `ruact:install --shadcn` runs before any resource exists, so it
+        # prints this superset. A spec pins the narrowed list as a subset of
+        # this one, so the two cannot drift apart.
+        ALL_SHADCN_COMPONENTS = %w[
+          button input textarea switch select label badge table alert-dialog dropdown-menu
+        ].freeze
+
         def required_shadcn_components
           components = ["button"]
           components << "input"    if form_uses_input?

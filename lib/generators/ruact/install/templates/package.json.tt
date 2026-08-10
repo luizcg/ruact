@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build"<% if shadcn? %>,
+    "build:css": "@tailwindcss/cli -i app/javascript/styles/globals.css -o app/assets/builds/tailwind.css --minify"<% end %>
   },
   "dependencies": {
     "react": "^19.0.0",
@@ -12,6 +13,11 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
+<% if shadcn? -%>
+    "@tailwindcss/cli": "^4.0.0",
+    "tailwindcss": "^4.0.0",
+    "tw-animate-css": "^1.0.0",
+<% end -%>
     "vite": "^6.0.7"
   }
 }

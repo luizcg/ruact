@@ -1136,6 +1136,20 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
         expect(minimal).to eq(%w[button input label badge table alert-dialog dropdown-menu])
       end
 
+      # `ruact:install --shadcn` runs before any resource exists, so it prints
+      # the SUPERSET constant instead of this per-resource list. If a template
+      # ever imports a primitive the constant does not carry, the printed
+      # `npx shadcn add` line would be short one component and the scaffold
+      # would fail its own pre-flight — so pin the relationship.
+      it "keeps the per-resource list a subset of the superset install prints" do
+        superset = described_class::ShadcnPreflight::ALL_SHADCN_COMPONENTS
+        richest  = build(%w[Post title:string body:text published:boolean author:references])
+                   .required_shadcn_components
+
+        expect(richest).to all(be_in(superset))
+        expect(superset).to match_array(richest)
+      end
+
       it "maps each component to its app/javascript/components/ui/<name>.tsx file" do
         gen = build(default_args)
         expect(gen.shadcn_component_file("table").to_s)
