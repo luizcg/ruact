@@ -1,0 +1,24 @@
+<%# An UNMIGRATED layout that cannot survive being rendered on a ruact page.
+    It reads an ivar that only a plain Rails action would have set — exactly the
+    shape of a real pre-migration app, whose layout has never once run on a
+    ruact-rendered page. If ruact renders this speculatively just to discover it
+    lacks `ruact_js_assets`, the app 500s on a page that used to work.
+
+    NOTE: this comment MENTIONS the helper name on purpose — a readiness check
+    that greps for the bare string counts this layout as wired and renders it. %>
+<%# <%= ruact_js_assets %> %>
+<%# ...and the line above is a genuinely COMMENTED-OUT call, which is the
+    sharper version of the same trap: ERB comments do not nest, so it emits
+    nothing, but a check that only looks for `<%=` sees a call. Both shapes must
+    read as UNMIGRATED, or this layout gets rendered and 500s below. %>
+<!DOCTYPE html>
+<html>
+  <head>
+    <title><%= @page_title.upcase %></title>
+  </head>
+  <body>
+    <%= yield %>
+    <%# ruact: root %>
+    <div id="root"></div>
+  </body>
+</html>

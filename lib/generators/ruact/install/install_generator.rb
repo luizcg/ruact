@@ -12,7 +12,10 @@ module Ruact
     # Performs the following actions:
     # 1. Creates config/initializers/ruact.rb
     # 2. Injects `include Ruact::Controller` into ApplicationController
-    # 3. Injects the React root div into app/views/layouts/application.html.erb
+    # 3. Injects the React root div AND `ruact_js_assets` into
+    #    app/views/layouts/application.html.erb, so the app's own layout owns
+    #    the document (and its `<head>` — stylesheets, fonts, meta — reaches a
+    #    ruact page). See Ruact::Configuration#layout.
     # 4. Creates app/javascript/components/.keep
     # 5. Creates vite.config.js (or shows manual instructions if one exists)
     # 6. Creates package.json (react/react-dom/vite/@vitejs/plugin-react) so a
@@ -25,6 +28,10 @@ module Ruact
     #    verification commands in context by default (Story 15.1, FR105).
     # 9. Runs `npm install` so JavaScript dependencies are ready (FR101);
     #    skippable via --skip-npm.
+    # 10. With `--shadcn`: also emits the prerequisites shadcn's own CLI refuses
+    #    to initialize without (a Tailwind entry + a `tsconfig.json` import
+    #    alias), wires the `css` build process, and prints the two `npx shadcn`
+    #    commands it deliberately does not run.
     #
     # Story 14.2 (FR104) — the generator no longer writes a bootstrap entry into
     # the user's tree. ruact's React entry is served as the virtual module
@@ -48,8 +55,32 @@ module Ruact
                    default: false,
                    desc: "Skip running npm install (for CI or non-npm package managers)"
 
+      # Prepares the app for the `ruact:scaffold --shadcn` path. shadcn's own
+      # CLI refuses to initialize without BOTH Tailwind and a TypeScript import
+      # alias, and a ruact app has neither — it ships no Tailwind and no
+      # `tsconfig.json` at all. That left `--shadcn` scaffolding into an app
+      # where the generated components' classes resolved to nothing: markup with
+      # no styling. This flag emits exactly the prerequisites (verified against
+      # the real shadcn CLI) and then PRINTS the two `npx shadcn` commands
+      # rather than running them — they hit the network and `shadcn init` is
+      # interactive, so automating them is neither safe nor possible.
+      class_option :shadcn,
+                   type: :boolean,
+                   default: false,
+                   desc: "Also wire Tailwind + a TS import alias, the prerequisites for `ruact:scaffold --shadcn`"
+
+      # A fresh app gets the whole initializer. An app that ALREADY has one gets
+      # a surgical injection instead of `template`'s overwrite prompt, which
+      # offered a bad choice on the one path that matters most — migrating an
+      # existing app: overwrite and lose every setting the app had
+      # (`strict_serialization`, `manifest_path`, the SGID defaults…), or skip
+      # and end up half-migrated, with the layout edited but `config.layout`
+      # still off and nothing saying so except `ruact:doctor`.
       def create_initializer
-        template "initializer.rb.tt", "config/initializers/ruact.rb"
+        path = Pathname(destination_root).join("config/initializers/ruact.rb")
+        return template "initializer.rb.tt", "config/initializers/ruact.rb" unless path.exist?
+
+        inject_layout_setting(path)
       end
 
       def inject_controller_concern
@@ -67,19 +98,91 @@ module Ruact
                          after: /class ApplicationController.*\n/
       end
 
+      # The layout owns the document: `stylesheet_link_tag`, favicons, fonts and
+      # every `<head>`-writing gem only reach a ruact page because Rails' own
+      # layout renders it (see `Ruact::Configuration#layout`). That requires TWO
+      # things in the layout — the React root, and `ruact_js_assets` to emit the
+      # bootstrap entry + this render's Flight payload. The other half of the
+      # opt-in is `config.layout = true`, which the generated initializer
+      # carries — a layout with the helper but the setting off (or the reverse)
+      # keeps rendering through ruact's built-in, CSS-less shell.
       def inject_layout_shell
         layout_file = "app/views/layouts/application.html.erb"
         return unless File.exist?(Pathname(destination_root).join(layout_file))
 
         content = File.read(Pathname(destination_root).join(layout_file))
-        if content.include?("ruact: root")
-          say_status "skip", "Rails RSC root already present in layout", :yellow
+
+        # A CALL, not a mention: `<%# TODO: add ruact_js_assets %>` used to read
+        # as "already present" here and skip the migration, leaving the app on
+        # ruact's CSS-less shell with the generator reporting success. Shared
+        # with the runtime so both agree on what "migrated" means.
+        # BOTH halves, not just the helper. A layout carrying `ruact_js_assets`
+        # with no `<div id="root"></div>` was skipped as "already present" — and
+        # since this generator also turns `config.layout` on, that app then
+        # raised at render time on a document React could not mount into.
+        if Ruact::LayoutSource.wired?(content) && Ruact::LayoutSource.root?(content)
+          say_status "skip", "ruact root + assets already present in layout", :yellow
           return
         end
 
+        # Migration path for an app installed before the layout owned the
+        # document: the root is already there, only the asset call is missing.
+        #
+        # The anchor matches the ROOT DIV itself rather than the marker-then-div
+        # pair, and tolerates the ways a real layout is written — single or
+        # double quotes, extra attributes, any attribute order, CRLF, and the
+        # marker on the same line. The earlier anchor required the exact emitted
+        # formatting, so a hand-edited layout silently matched nothing. The
+        # attribute boundary in `ROOT_ELEMENT` is what keeps `data-id="root"`
+        # from being mistaken for the mount point.
+        if Ruact::LayoutSource.root?(content)
+          return migrate_layout(layout_file,
+                                "\n    <%= ruact_js_assets %>",
+                                after: Ruact::LayoutSource::ROOT_ELEMENT,
+                                success: "added ruact_js_assets to the existing layout root")
+        end
+
+        # The mirror case: the helper is there but the mount target is not, so
+        # the root goes in just BEFORE the call (React needs the node in the
+        # document, and keeping the pair adjacent matches what a fresh install
+        # writes). Injecting the whole block instead would duplicate the helper.
+        if Ruact::LayoutSource.wired?(content)
+          return migrate_layout(layout_file,
+                                "<%# ruact: root %>\n    <div id=\"root\"></div>\n    ",
+                                before: Ruact::LayoutSource::ASSETS_CALL,
+                                success: "added the React root div next to the existing ruact_js_assets")
+        end
+
         inject_into_file layout_file,
-                         "\n    <%# ruact: root %>\n    <div id=\"root\"></div>\n",
+                         "\n    <%# ruact: root %>\n    <div id=\"root\"></div>\n    <%= ruact_js_assets %>\n",
                          before: "  </body>"
+      end
+
+      # `--shadcn` only. Two files, both of them things shadcn's CLI checks for
+      # and refuses to proceed without ("No Tailwind CSS configuration found" /
+      # "Could not find valid path aliases"), verified against shadcn 4.x:
+      #
+      #   app/javascript/styles/globals.css — the Tailwind entry. shadcn appends
+      #     its design tokens here, which is why components.json points at it.
+      #   tsconfig.json — the `@/*` → `app/javascript/*` alias. The Vite plugin
+      #     already registers the same alias for the BUNDLER, so components
+      #     resolve at runtime today; this is what makes it resolve for
+      #     TypeScript (and therefore for shadcn's alias probe and your editor).
+      #
+      # Both are guarded: an app that already has them keeps its own.
+      def create_shadcn_prerequisites
+        return unless shadcn?
+
+        create_guarded_file "app/javascript/styles/globals.css", "globals.css.tt"
+        create_guarded_file "tsconfig.json", "tsconfig.json.tt"
+        # Propshaft only serves directories that exist; the built stylesheet is
+        # generated, so the directory ships with a .keep and the artifact is
+        # gitignored (see append_gitignore_entries).
+        empty_directory "app/assets/builds"
+        create_file "app/assets/builds/.keep" unless
+          File.exist?(Pathname(destination_root).join("app/assets/builds/.keep"))
+
+        warn_unless_layout_links_builds
       end
 
       def create_components_directory
@@ -106,6 +209,10 @@ module Ruact
           "app/javascript/.ruact/server-functions.ts",
           "tmp/cache/ruact/"
         ]
+        # The compiled stylesheet is a build artifact of globals.css, rebuilt by
+        # the Procfile's `css` process on every boot — same reasoning as the
+        # generated server-functions module above.
+        entries << "app/assets/builds/tailwind.css" if shadcn?
         # Substring matches (`existing.include?(entry)`) were unsafe — they
         # would skip "tmp/cache/ruact/" when the file already contained
         # "tmp/cache/ruact/some-cache.bin", leaving the directory itself
@@ -291,6 +398,8 @@ module Ruact
           say "  2. Start your app:           bin/dev"
         end
 
+        show_shadcn_next_steps if shadcn?
+
         say "\nThen add <MyComponent /> to any ERB view.\n"
         say "Note: re-run this generator after updating the ruact gem to refresh"
         say "the bundled Vite plugin path in vite.config.js."
@@ -298,6 +407,96 @@ module Ruact
       end
 
       private
+
+      # `inject_into_file` prints "File unchanged!" and carries on when its
+      # anchor misses, so reporting success without checking would be a lie —
+      # and the app would keep rendering through ruact's CSS-less shell with no
+      # clue why. Compare the file around the call and only claim what happened.
+      def migrate_layout(layout_file, content, success:, **anchor)
+        path   = Pathname(destination_root).join(layout_file)
+        before = path.read
+        inject_into_file layout_file, content, **anchor
+
+        if path.read == before
+          warn_layout_migration_failed
+        else
+          say_status "update", success, :green
+        end
+      end
+
+      def inject_layout_setting(path)
+        content = path.read
+
+        if content.match?(/^\s*config\.layout\s*=/)
+          say_status "skip", "config.layout already set in config/initializers/ruact.rb", :yellow
+          return
+        end
+
+        unless content.match?(/Ruact\.configure\s+do\s*\|(\w+)\|/)
+          warn_initializer_not_injectable
+          return
+        end
+
+        inject_into_file "config/initializers/ruact.rb",
+                         LAYOUT_SETTING_SNIPPET,
+                         after: /Ruact\.configure\s+do\s*\|\w+\|\n/
+        say_status "update", "set config.layout = true (your layout renders ruact pages)", :green
+      end
+
+      # The compiled stylesheet still has to be REQUESTED. Rails 8's default
+      # layout links `stylesheet_link_tag :app`, which Propshaft expands over
+      # every stylesheet on the load path — so `app/assets/builds/tailwind.css`
+      # is picked up with no further wiring (verified against a generated app:
+      # the rendered `<head>` carries `/assets/tailwind-<digest>.css`).
+      #
+      # A layout that instead links stylesheets BY NAME never asks for it, and
+      # the failure is silent: Tailwind builds fine, Propshaft serves it fine,
+      # and the page is simply unstyled. Warn rather than edit — which
+      # stylesheets a layout links is the app's business.
+      def warn_unless_layout_links_builds
+        layout_path = Pathname(destination_root).join("app/views/layouts/application.html.erb")
+        return unless layout_path.exist?
+
+        content = layout_path.read
+        return unless content.include?("stylesheet_link_tag")
+        return if content.match?(/stylesheet_link_tag\s+:app\b/) || content.include?("tailwind")
+
+        say_status "notice", "your layout links stylesheets by name — add the built one:", :yellow
+        say ""
+        say "      <%= stylesheet_link_tag \"tailwind\" %>"
+        say ""
+        say "  `stylesheet_link_tag :app` (the Rails 8 default) would pick up"
+        say "  app/assets/builds/tailwind.css on its own; a named link does not,"
+        say "  and the page would render unstyled with no error."
+        say ""
+      end
+
+      # The generator does NOT run these: `shadcn init` is interactive (it
+      # prompts for a component library and a preset) and both commands hit the
+      # network. What it CAN do is spell them exactly, which is the part nobody
+      # guesses: current shadcn defaults to **Base UI**, while ruact's generated
+      # components import **Radix** primitives — accepting the default gives you
+      # a component library the scaffold cannot use. Hence the explicit
+      # `--base radix`.
+      #
+      # The component list is ruact's own authoritative set
+      # (ScaffoldGenerator#required_shadcn_components), derived from the
+      # templates' imports, so the two generators cannot drift.
+      def show_shadcn_next_steps
+        say ""
+        say "shadcn prerequisites are in place (Tailwind entry, tsconfig alias, css process)."
+        say "Two commands remain — they are interactive and hit the network, so run them yourself:"
+        say ""
+        say "  npx shadcn@latest init --base radix"
+        say "  npx shadcn@latest add #{shadcn_add_list}"
+        say ""
+        say "  (--base radix matters: shadcn now defaults to Base UI, but the components"
+        say "   `ruact:scaffold --shadcn` generates import Radix primitives.)"
+        say "  (init also asks you to pick a style preset — any of them works.)"
+        say ""
+        say "Then scaffold a resource:"
+        say "  bin/rails generate ruact:scaffold Post title:string body:text --shadcn"
+      end
 
       # Story 15.1 — the exact marker tokens delimiting the ruact-managed
       # section of AGENTS.md. For a prose file the only safe idempotency key is
@@ -463,6 +662,66 @@ module Ruact
       # Story 14.6 — a valid, lowercase npm "name" for the generated package.json,
       # derived from the app directory. npm names must be lowercase and contain
       # only URL-safe characters; anything else collapses to a hyphen.
+      # Kept verbatim in step with the `initializer.rb.tt` template's own
+      # `config.layout` block, so a migrated app and a fresh one end up reading
+      # the same thing.
+      LAYOUT_SETTING_SNIPPET = <<~RUBY
+        # Render ruact pages through this app's own layout, so the document `<head>`
+        # is yours: stylesheets, favicons, fonts and any gem that writes into
+        # `<head>` reach a ruact page. Requires the layout to call
+        # `<%= ruact_js_assets %>` (this generator adds it next to the React root).
+        config.layout = true
+
+      RUBY
+      private_constant :LAYOUT_SETTING_SNIPPET
+
+      # The initializer exists but is not the shape we know how to edit (someone
+      # rewrote it, or wrapped the configure call). Never guess at it — say what
+      # to add, so the app cannot end up half-migrated in silence.
+      def warn_initializer_not_injectable
+        say_status "skip", "could not find the Ruact.configure block to update", :red
+        say ""
+        say "  Add this line inside `Ruact.configure` in config/initializers/ruact.rb:"
+        say ""
+        say "      config.layout = true"
+        say ""
+        say "  Without it ruact keeps using its built-in shell, which carries no"
+        say "  stylesheet — your app's CSS will not reach a ruact-rendered page."
+        say ""
+      end
+
+      def shadcn?
+        options[:shadcn]
+      end
+
+      # Printed when the layout carries the ruact marker but the anchor found no
+      # root div to inject after. Silence would be the dangerous outcome: the app
+      # keeps rendering through ruact's CSS-less built-in shell, and nothing ever
+      # says why.
+      def warn_layout_migration_failed
+        say_status "skip", "could not locate the React root div in the layout", :red
+        say ""
+        say "  ruact could not add `ruact_js_assets` automatically. Add it by hand,"
+        say "  just after the root div in app/views/layouts/application.html.erb:"
+        say ""
+        say "      <div id=\"root\"></div>"
+        say "      <%= ruact_js_assets %>"
+        say ""
+        say "  Without it your app's CSS cannot reach a ruact-rendered page."
+        say ""
+      end
+
+      # The superset the scaffold generator narrows per resource. Loaded lazily
+      # (and only under `--shadcn`) so a plain install never pays for the
+      # scaffold generator's load, and so a failure to reach it degrades to the
+      # literal list rather than aborting an otherwise-successful install.
+      def shadcn_add_list
+        require_relative "../scaffold/scaffold_shadcn_preflight"
+        ScaffoldGenerator::ShadcnPreflight::ALL_SHADCN_COMPONENTS.join(" ")
+      rescue StandardError
+        "button input textarea switch select label badge table alert-dialog dropdown-menu"
+      end
+
       def app_package_name
         base = File.basename(File.expand_path(destination_root))
         sanitized = base.downcase.gsub(/[^a-z0-9._-]/, "-").squeeze("-").gsub(/\A-+|-+\z/, "")

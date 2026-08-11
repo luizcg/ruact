@@ -88,22 +88,6 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
       :injected
     end
 
-    # Reproduces inject_layout_shell logic from the generator
-    def inject_layout_shell(dest_root)
-      layout_file = File.join(dest_root, "app/views/layouts/application.html.erb")
-      return :missing unless File.exist?(layout_file)
-
-      content = File.read(layout_file)
-      return :already_present if content.include?("ruact: root")
-
-      modified = content.sub(
-        "  </body>",
-        "    <%# ruact: root %>\n    <div id=\"root\"></div>\n  </body>"
-      )
-      File.write(layout_file, modified)
-      :injected
-    end
-
     describe "ApplicationController injection (AC#1, AC#3)" do
       let(:controller_content) do
         "class ApplicationController < ActionController::Base\nend\n"
@@ -134,60 +118,6 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         content = read_file("app/controllers/application_controller.rb")
         occurrences = content.scan("Ruact::Controller").size
         expect(occurrences).to eq(1)
-      end
-    end
-
-    describe "Layout injection (AC#1, AC#3)" do
-      let(:layout_content) do
-        <<~HTML
-          <!DOCTYPE html>
-          <html>
-            <body>
-              <%= yield %>
-            </body>
-          </html>
-        HTML
-      end
-
-      it "injects the RSC root div before </body>" do
-        write_file("app/views/layouts/application.html.erb", layout_content)
-        result = inject_layout_shell(tmpdir)
-
-        expect(result).to eq(:injected)
-        content = read_file("app/views/layouts/application.html.erb")
-        expect(content).to include('<div id="root"></div>')
-        expect(content).to include("ruact: root")
-      end
-
-      it "returns :already_present on second run (idempotent, AC#3)" do
-        content_with_marker = layout_content.sub(
-          "  </body>",
-          "    <%# ruact: root %>\n    <div id=\"root\"></div>\n  </body>"
-        )
-        write_file("app/views/layouts/application.html.erb", content_with_marker)
-
-        result = inject_layout_shell(tmpdir)
-        expect(result).to eq(:already_present)
-      end
-
-      it "does not duplicate the root div when run twice (AC#3)" do
-        write_file("app/views/layouts/application.html.erb", layout_content)
-        inject_layout_shell(tmpdir)
-        inject_layout_shell(tmpdir)
-
-        content = read_file("app/views/layouts/application.html.erb")
-        occurrences = content.scan('<div id="root">').size
-        expect(occurrences).to eq(1)
-      end
-
-      it "places the root div before the closing </body> tag" do
-        write_file("app/views/layouts/application.html.erb", layout_content)
-        inject_layout_shell(tmpdir)
-
-        content = read_file("app/views/layouts/application.html.erb")
-        root_pos  = content.index('<div id="root">')
-        body_pos  = content.index("</body>")
-        expect(root_pos).to be < body_pos
       end
     end
 
@@ -1171,6 +1101,448 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
       # tripwire's tolerance is 160 (the tripwire's, not the product contract's).
       it "keeps the template body at or under 160 lines" do
         expect(File.read(template_path).lines.count).to be <= 160
+      end
+    end
+  end
+
+  # The `--shadcn` prerequisites. The gap these close is concrete: shadcn's CLI
+  # aborts on a ruact app with "No Tailwind CSS configuration found" and "Could
+  # not find valid path aliases", because a ruact app ships neither Tailwind nor
+  # a tsconfig.json. Without them `ruact:scaffold --shadcn` emitted components
+  # whose classes resolved to nothing — styled markup with no styles.
+  describe "install generator — --shadcn prerequisites" do
+    require "stringio"
+    require "generators/ruact/install/install_generator"
+
+    let(:app_root) { Dir.mktmpdir("ruact_install_shadcn") }
+
+    after { FileUtils.rm_rf(app_root) }
+
+    def build_generator(root, opts = {})
+      Ruact::Generators::InstallGenerator.new([], opts, destination_root: root)
+    end
+
+    def silently
+      original = $stdout
+      $stdout = StringIO.new
+      yield
+    ensure
+      $stdout = original
+    end
+
+    def read(relative)
+      File.read(File.join(app_root, relative))
+    end
+
+    describe "with --shadcn", :aggregate_failures do
+      let(:generator) { build_generator(app_root, shadcn: true) }
+
+      it "writes the Tailwind entry shadcn points components.json at" do
+        silently { generator.create_shadcn_prerequisites }
+
+        expect(File).to exist(File.join(app_root, "app/javascript/styles/globals.css"))
+        expect(read("app/javascript/styles/globals.css")).to include('@import "tailwindcss"')
+      end
+
+      it "writes the tsconfig import alias shadcn probes for" do
+        silently { generator.create_shadcn_prerequisites }
+
+        tsconfig = JSON.parse(read("tsconfig.json"))
+        expect(tsconfig.dig("compilerOptions", "paths", "@/*")).to eq(["app/javascript/*"])
+      end
+
+      it "creates the builds directory Propshaft serves the compiled stylesheet from" do
+        silently { generator.create_shadcn_prerequisites }
+
+        expect(File).to exist(File.join(app_root, "app/assets/builds/.keep"))
+      end
+
+      it "declares Tailwind in package.json with a build:css script" do
+        silently { generator.create_package_json }
+
+        pkg = JSON.parse(read("package.json"))
+        expect(pkg.dig("devDependencies", "tailwindcss")).to be_a(String)
+        expect(pkg.dig("devDependencies", "@tailwindcss/cli")).to be_a(String)
+        expect(pkg.dig("devDependencies", "tw-animate-css")).to be_a(String)
+        expect(pkg.dig("scripts", "build:css")).to include("app/assets/builds/tailwind.css")
+      end
+
+      it "adds a css watch process so bin/dev rebuilds the stylesheet" do
+        silently { generator.create_launch_files }
+
+        expect(read("Procfile.dev")).to match(/^css: .*tailwind\.css --watch$/)
+      end
+
+      it "gitignores the compiled stylesheet (a build artifact of globals.css)" do
+        File.write(File.join(app_root, ".gitignore"), "/log/*\n")
+        silently { generator.append_gitignore_entries }
+
+        expect(read(".gitignore")).to include("app/assets/builds/tailwind.css")
+      end
+
+      # The one thing a reader cannot guess: current shadcn defaults to Base UI,
+      # but the components the scaffold generates import Radix primitives.
+      it "prints the two shadcn commands, pinning --base radix" do
+        expect { generator.send(:show_shadcn_next_steps) }
+          .to output(/npx shadcn@latest init --base radix/).to_stdout
+      end
+
+      it "prints the complete add-list, so the scaffold pre-flight cannot fail on a gap" do
+        expect { generator.send(:show_shadcn_next_steps) }
+          .to output(/add button input textarea switch select label badge table alert-dialog dropdown-menu/)
+          .to_stdout
+      end
+    end
+
+    # Codex review finding: the layout-migration branch was pinned only by the
+    # REPRODUCTION helper above, which cannot see the real generator's anchor
+    # regex. Invoking the actual generator caught that a layout written with
+    # single quotes matched nothing while the generator still printed a success
+    # message. These specs drive `InstallGenerator#inject_layout_shell` itself.
+    # Thor registers every PUBLIC instance method of a generator as a command and
+    # runs it in declaration order. A helper left public therefore executes on
+    # its own, out of context — this has bitten three times in this branch: a
+    # message printed twice, a `--shadcn`-only notice firing on the default
+    # path, and a helper taking a required argument being invoked with none.
+    # Pin the command list so the next one is caught here rather than in an app.
+    describe "Thor command surface" do
+      it "registers only the install steps, never the private helpers" do
+        expect(Ruact::Generators::InstallGenerator.commands.keys).to contain_exactly(
+          "create_initializer",
+          "inject_controller_concern",
+          "inject_layout_shell",
+          "create_shadcn_prerequisites",
+          "create_components_directory",
+          "create_server_functions_directory",
+          "append_gitignore_entries",
+          "prime_server_functions_codegen",
+          "create_vite_config",
+          "create_package_json",
+          "create_launch_files",
+          "advise_plumbing_migration",
+          "create_agents_md",
+          "install_javascript_dependencies",
+          "show_post_install_message"
+        )
+      end
+
+      it "has no command requiring arguments (Thor invokes them with none)" do
+        requiring_args = Ruact::Generators::InstallGenerator.commands.keys.reject do |name|
+          Ruact::Generators::InstallGenerator.instance_method(name).arity.zero?
+        end
+
+        expect(requiring_args).to be_empty
+      end
+    end
+
+    # Migrating an existing app is the path that matters most here, and Thor's
+    # `template` handles it badly: it raises an overwrite CONFLICT, offering a
+    # choice between losing every setting the app already had and ending up
+    # half-migrated (layout edited, `config.layout` still off) in silence.
+    describe "create_initializer on an app that already has one", :aggregate_failures do
+      def write_initializer(body)
+        path = File.join(app_root, "config/initializers/ruact.rb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, body)
+        path
+      end
+
+      it "adds config.layout without touching the app's existing settings" do
+        path = write_initializer(<<~RUBY)
+          Ruact.configure do |config|
+            config.strict_serialization = true
+            config.max_upload_bytes = 25 * 1024 * 1024
+          end
+        RUBY
+
+        silently { build_generator(app_root).create_initializer }
+
+        result = File.read(path)
+        expect(result).to include("config.layout = true")
+        expect(result).to include("config.strict_serialization = true")
+        expect(result).to include("config.max_upload_bytes = 25 * 1024 * 1024")
+      end
+
+      # `config.layout = false` is a deliberate choice (keep the built-in
+      # shell). Re-running install must not quietly reverse it.
+      it "leaves an explicit opt-out alone" do
+        path = write_initializer("Ruact.configure do |config|\n  config.layout = false\nend\n")
+
+        silently { build_generator(app_root).create_initializer }
+
+        expect(File.read(path)).to include("config.layout = false")
+        expect(File.read(path)).not_to include("config.layout = true")
+      end
+
+      it "is idempotent" do
+        path = write_initializer("Ruact.configure do |config|\nend\n")
+
+        silently { build_generator(app_root).create_initializer }
+        silently { build_generator(app_root).create_initializer }
+
+        expect(File.read(path).scan("config.layout").size).to eq(1)
+      end
+
+      # Never guess at an initializer we do not recognise — say what to add,
+      # because the silent outcome is an app whose CSS never reaches the page.
+      it "tells the user what to add when it cannot find the configure block" do
+        write_initializer("# hand-rolled\nRuact.config\n")
+
+        output = capture_generator_output { build_generator(app_root).create_initializer }
+
+        expect(output).to include("could not find the Ruact.configure block")
+        expect(output).to include("config.layout = true")
+      end
+
+      def capture_generator_output
+        original = $stdout
+        $stdout = StringIO.new
+        yield
+        $stdout.string
+      ensure
+        $stdout = original
+      end
+    end
+
+    describe "inject_layout_shell — the REAL generator", :aggregate_failures do
+      def write_layout(body)
+        path = File.join(app_root, "app/views/layouts/application.html.erb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, body)
+        path
+      end
+
+      def layout_after_run(body)
+        path = write_layout(body)
+        silently { build_generator(app_root).inject_layout_shell }
+        File.read(path)
+      end
+
+      # The fresh-install path. Previously covered only by a REPRODUCTION of the
+      # generator's logic, which twice drifted from the generator itself and hid
+      # real defects; the reproduction is gone and these drive the real thing.
+      it "adds both the root div and the asset call to a layout that has neither" do
+        path = write_layout(<<~HTML)
+          <html>
+            <body>
+              <%= yield %>
+            </body>
+          </html>
+        HTML
+
+        silently { build_generator(app_root).inject_layout_shell }
+
+        result = File.read(path)
+        expect(result).to include(%(<div id="root"></div>))
+        expect(result).to include("<%= ruact_js_assets %>")
+        expect(result).to include("ruact: root")
+      end
+
+      it "places them inside the body, before the closing tag" do
+        path = write_layout("<html>\n  <body>\n    <%= yield %>\n  </body>\n</html>\n")
+
+        silently { build_generator(app_root).inject_layout_shell }
+
+        result = File.read(path)
+        expect(result.index(%(<div id="root">))).to be < result.index("</body>")
+        expect(result.index(%(<div id="root">))).to be < result.index("ruact_js_assets")
+      end
+
+      it "is a no-op on a layout that is already migrated" do
+        path = write_layout(<<~HTML)
+          <html>
+            <body>
+              <%# ruact: root %>
+              <div id="root"></div>
+              <%= ruact_js_assets %>
+            </body>
+          </html>
+        HTML
+        before = File.read(path)
+
+        silently { build_generator(app_root).inject_layout_shell }
+
+        expect(File.read(path)).to eq(before)
+      end
+
+      it "migrates a layout whose root div uses single quotes" do
+        result = layout_after_run(<<~HTML)
+          <html>
+            <body>
+              <%# ruact: root %>
+              <div id='root'></div>
+            </body>
+          </html>
+        HTML
+
+        expect(result).to include("<%= ruact_js_assets %>")
+      end
+
+      it "migrates a layout whose root div carries extra attributes" do
+        result = layout_after_run(<<~HTML)
+          <html>
+            <body>
+              <%# ruact: root %>
+              <div class="app" id="root" data-turbo="false"></div>
+            </body>
+          </html>
+        HTML
+
+        expect(result).to include("<%= ruact_js_assets %>")
+      end
+
+      it "migrates a layout with the marker and the div on one line" do
+        result = layout_after_run(
+          %(<html><body><%# ruact: root %><div id="root"></div></body></html>\n)
+        )
+
+        expect(result).to include("<%= ruact_js_assets %>")
+      end
+
+      it "is idempotent — a second run adds nothing" do
+        path = write_layout(<<~HTML)
+          <html>
+            <body>
+              <%# ruact: root %>
+              <div id="root"></div>
+            </body>
+          </html>
+        HTML
+        silently { build_generator(app_root).inject_layout_shell }
+        silently { build_generator(app_root).inject_layout_shell }
+
+        expect(File.read(path).scan("ruact_js_assets").size).to eq(1)
+      end
+
+      # Round-2 finding: the anchor matched any attribute ENDING in `id`, so a
+      # layout with `data-id="root"` and no real mount point got the helper
+      # injected and a success message. It now reads as "no root present" and
+      # the generator writes a proper root + helper instead of warning — the
+      # look-alike div is left alone, being none of its business.
+      it "does not mistake a look-alike attribute for the React root" do
+        path = write_layout(<<~HTML)
+          <html>
+            <body>
+              <%# ruact: root %>
+              <div data-id="root"></div>
+            </body>
+          </html>
+        HTML
+
+        silently { build_generator(app_root).inject_layout_shell }
+
+        result = File.read(path)
+        expect(result).to match(%r{<div id="root"></div>})
+        expect(result).to include("<%= ruact_js_assets %>")
+      end
+
+      # The mirror of the legacy migration: the call is there, the mount target
+      # is not. Injecting the whole block would duplicate the helper.
+      it "adds only the missing root when the layout already calls the helper" do
+        path = write_layout(<<~HTML)
+          <html>
+            <body>
+              <%= yield %>
+              <%= ruact_js_assets %>
+            </body>
+          </html>
+        HTML
+
+        silently { build_generator(app_root).inject_layout_shell }
+
+        result = File.read(path)
+        expect(result).to match(%r{<div id="root"></div>})
+        expect(result.scan("ruact_js_assets").size).to eq(1)
+        expect(result.index(%(<div id="root">))).to be < result.index("ruact_js_assets")
+      end
+
+      # A root that is NOT an empty paired div (a spinner placeholder, say) has
+      # nothing safe to inject after, so the generator says so instead of
+      # guessing where the call belongs.
+      it "warns when the root div is not the empty form it knows how to anchor on" do
+        write_layout(<<~HTML)
+          <html>
+            <body>
+              <%# ruact: root %>
+              <div id="root">loading…</div>
+            </body>
+          </html>
+        HTML
+
+        output = capture_generator_output { build_generator(app_root).inject_layout_shell }
+
+        expect(output).to include("could not locate the React root div")
+      end
+
+      # Round-2 finding: the "already migrated, skip" guard was a substring
+      # match, so a TODO note about the helper made the generator skip an app
+      # that was never migrated.
+      it "does not treat a TODO comment naming the helper as already migrated" do
+        path = write_layout(<<~HTML)
+          <html>
+            <body>
+              <%# TODO: add ruact_js_assets %>
+              <%# ruact: root %>
+              <div id="root"></div>
+            </body>
+          </html>
+        HTML
+
+        silently { build_generator(app_root).inject_layout_shell }
+
+        expect(File.read(path)).to include("<%= ruact_js_assets %>")
+      end
+
+      # Silence here is the dangerous outcome: the app keeps rendering through
+      # ruact's CSS-less shell and nothing ever says why.
+      it "says so LOUDLY when it cannot find the root div, instead of claiming success" do
+        write_layout(<<~HTML)
+          <html>
+            <body>
+              <%# ruact: root %>
+              <span id="root"></span>
+            </body>
+          </html>
+        HTML
+
+        output = capture_generator_output { build_generator(app_root).inject_layout_shell }
+
+        expect(output).to include("could not locate the React root div")
+        expect(output).not_to include("added ruact_js_assets")
+      end
+
+      def capture_generator_output
+        original = $stdout
+        $stdout = StringIO.new
+        yield
+        $stdout.string
+      ensure
+        $stdout = original
+      end
+    end
+
+    describe "without --shadcn (the default path is untouched)", :aggregate_failures do
+      let(:generator) { build_generator(app_root) }
+
+      it "writes no Tailwind entry and no tsconfig" do
+        silently { generator.create_shadcn_prerequisites }
+
+        expect(File).not_to exist(File.join(app_root, "app/javascript/styles/globals.css"))
+        expect(File).not_to exist(File.join(app_root, "tsconfig.json"))
+      end
+
+      it "leaves package.json free of Tailwind" do
+        silently { generator.create_package_json }
+
+        pkg = JSON.parse(read("package.json"))
+        expect(pkg["devDependencies"].keys).not_to include("tailwindcss", "@tailwindcss/cli")
+        expect(pkg["scripts"]).not_to have_key("build:css")
+      end
+
+      it "leaves Procfile.dev at the two processes it always had" do
+        silently { generator.create_launch_files }
+
+        expect(read("Procfile.dev")).not_to include("css:")
       end
     end
   end

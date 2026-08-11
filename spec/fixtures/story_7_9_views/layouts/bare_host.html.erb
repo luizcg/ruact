@@ -1,0 +1,16 @@
+<%# An UNMIGRATED host layout: it has the React root but never calls
+    `ruact_js_assets`, so rendering the page through it would produce a
+    document with no bootstrap entry and no Flight payload — a blank page.
+    ruact must detect that and fall back to its built-in shell instead. %>
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" href="/host-app.css" />
+    <title>Host App Title</title>
+  </head>
+  <body>
+    <%= yield %>
+    <%# ruact: root %>
+    <div id="root"></div>
+  </body>
+</html>

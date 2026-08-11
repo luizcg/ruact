@@ -171,14 +171,46 @@ module Ruact
       end
     end
 
+    # Two independent halves have to line up, and BOTH are silent when wrong:
+    # the layout has to call `ruact_js_assets`, and `Ruact.config.layout` has to
+    # be on. Miss either and ruact renders its built-in shell — which carries no
+    # stylesheet, so the app's own CSS never reaches a ruact page and nothing
+    # errors. Reporting each half separately is the point: "add one line" and
+    # "flip one setting" are different fixes.
+    #
+    # `Ruact::LayoutSource` is the SHARED definition of "calls the helper" —
+    # the runtime and `ruact:install` read it too, so this check cannot drift
+    # into disagreeing with what actually happens at render time (it did:
+    # a `<%# TODO: add ruact_js_assets %>` comment used to pass here).
     def check_layout
       path = Rails.root.join("app", "views", "layouts", "application.html.erb")
-      if File.exist?(path) && File.read(path).include?("ruact: root")
-        [:pass, "React shell present in application.html.erb"]
-      else
-        [:fail, "React shell missing from application.html.erb",
-         "Run rails generate ruact:install to add the React shell to application.html.erb."]
+      unless File.exist?(path)
+        return [:fail, "React shell missing from application.html.erb",
+                "Run rails generate ruact:install to add the React shell to application.html.erb."]
       end
+
+      content    = File.read(path)
+      has_root   = Ruact::LayoutSource.root?(content)
+      has_assets = Ruact::LayoutSource.wired?(content)
+      opted_in   = Ruact.config.layout != false
+
+      return layout_unwired_result unless has_root && has_assets
+      return layout_not_opted_in_result unless opted_in
+
+      [:pass, "layout owns the document (React root + ruact_js_assets, config.layout on)"]
+    end
+
+    def layout_unwired_result
+      [:fail, "layout is missing the React root and/or the ruact_js_assets call",
+       "Add <%= ruact_js_assets %> next to <div id=\"root\"></div> in " \
+       "app/views/layouts/application.html.erb (or re-run rails generate ruact:install). " \
+       "Without both, ruact renders its built-in shell and your app's CSS never reaches the page."]
+    end
+
+    def layout_not_opted_in_result
+      [:warn, "layout is ready but Ruact.config.layout is false",
+       "Your layout calls ruact_js_assets, but ruact is still rendering its built-in shell " \
+       "(which has no stylesheet). Set `config.layout = true` in config/initializers/ruact.rb."]
     end
 
     def check_streaming

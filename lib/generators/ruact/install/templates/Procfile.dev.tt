@@ -1,2 +1,5 @@
 web: bin/rails server -p 3000
 vite: npm run dev
+<% if shadcn? -%>
+css: npx @tailwindcss/cli -i app/javascript/styles/globals.css -o app/assets/builds/tailwind.css --watch
+<% end -%>

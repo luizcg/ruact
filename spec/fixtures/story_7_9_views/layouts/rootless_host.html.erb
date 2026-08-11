@@ -1,0 +1,15 @@
+<%# A layout that calls `ruact_js_assets` but never got the React root div.
+    The payload and the bootstrap both ship, so an assets-only readiness check
+    accepts it — and the browser boots React with nothing to mount into,
+    producing a silently blank page. %>
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" href="/host-app.css" />
+    <title>Host App Title</title>
+  </head>
+  <body>
+    <%= yield %>
+    <%= ruact_js_assets %>
+  </body>
+</html>

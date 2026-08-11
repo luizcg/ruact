@@ -1,0 +1,20 @@
+/* Tailwind entry — the SOURCE, not the asset the browser gets.
+ *
+ * Built into app/assets/builds/tailwind.css by the `css` process in
+ * Procfile.dev, which Propshaft then serves and the layout links:
+ *
+ *   this file ──build──> app/assets/builds/tailwind.css
+ *             ──Propshaft──> /assets/tailwind-<digest>.css
+ *             ──stylesheet_link_tag in app/views/layouts──> the page
+ *
+ * `npx shadcn init` appends its design tokens (the CSS variables the
+ * components reference by name) below this import — that is why
+ * components.json points its `tailwind.css` at this file.
+ */
+@import "tailwindcss";
+
+/* Tailwind v4 declares its class scan here instead of in a config file.
+   Components carry most of the classes; the ERB views carry the page-level
+   ones, so both paths are needed. */
+@source "../components";
+@source "../../views";

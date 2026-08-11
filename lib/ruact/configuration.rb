@@ -24,6 +24,7 @@ module Ruact
       signed_global_id_default_purpose
       signed_global_id_default_expires_in
       shadcn_compatible_versions
+      layout
     ].freeze
 
     # @!attribute [r] manifest_path
@@ -135,6 +136,47 @@ module Ruact
     #     suppress the warning — the documented "override" path.
     #   @example Allow shadcn v3 once you have verified it
     #     Ruact.configure { |c| c.shadcn_compatible_versions = [1, 2, 3] }
+    #
+    # @!attribute [r] layout
+    #   @return [Boolean, String] Which document wrapper a ruact page's HTML
+    #     response is rendered into. The Flight response shape
+    #     (`text/x-component`) is never affected — this is only about the
+    #     full-document render a browser gets on a normal navigation.
+    #
+    #     - `false` (default) — render the gem's built-in minimal shell.
+    #     - `true` — render through the controller's normal Rails layout.
+    #     - a String — render through that named layout (e.g. `"ruact"`).
+    #
+    #     The layout path exists because the document `<head>` belongs to the
+    #     host app: `stylesheet_link_tag`, favicons, fonts, analytics and any
+    #     `<head>`-writing gem only reach the page when Rails' own layout owns
+    #     the document. The built-in shell carries no stylesheet slot, so under
+    #     the `false` default a ruact page renders with no app CSS at all —
+    #     which is why `rails generate ruact:install` writes `config.layout =
+    #     true` into the generated initializer and adds `<%= ruact_js_assets %>`
+    #     to your layout in the same run.
+    #
+    #     **This setting is deliberately explicit — there is no auto-detection.**
+    #     ruact used to try to infer whether your layout was ready by inspecting
+    #     it. Deciding that reliably means answering "does this template call
+    #     this method?", which cannot be done by pattern-matching a template
+    #     language: three review rounds each found another shape that fooled it
+    #     (a mention in a comment, a commented-out call, a trim-mode comment),
+    #     and each wrong answer governed how every page in the app rendered.
+    #     One explicit line is worth more than a clever guess here.
+    #
+    #     A layout is ready when it calls `<%= ruact_js_assets %>` (which emits
+    #     the React root's bootstrap entry tags and the per-render Flight
+    #     payload) next to a `<div id="root"></div>`. If it does not, ruact says
+    #     so loudly in development rather than serving a blank page, and
+    #     `rails ruact:doctor` reports it.
+    #   @note A ruact view is rendered in its own pass (it produces the component
+    #     tree), so `content_for` declared inside the view does NOT reach the
+    #     layout. Set document metadata from the controller instead.
+    #   @example Let your layout own the document (what ruact:install writes)
+    #     Ruact.configure { |c| c.layout = true }
+    #   @example Use a dedicated layout for ruact pages only
+    #     Ruact.configure { |c| c.layout = "ruact" }
     ATTRIBUTES.each do |attr|
       attr_reader attr
 
@@ -188,6 +230,7 @@ module Ruact
         @signed_global_id_default_purpose = nil
         @signed_global_id_default_expires_in = nil
         @shadcn_compatible_versions = [1, 2]
+        @layout = false
       end
     end
 
@@ -249,7 +292,37 @@ module Ruact
       when :query_route_prefix      then validate_query_route_prefix!(value)
       when :query_parent_controller then validate_query_parent_controller!(value)
       when :shadcn_compatible_versions then validate_shadcn_compatible_versions!(value)
+      when :layout                     then validate_layout!(value)
       end
+    end
+
+    # The value selects a render strategy by identity (`true` / `false`) or
+    # names a layout (String). Anything else would otherwise be treated as "not
+    # false" and reach `render_to_string(layout: <value>)`, where a Symbol
+    # layout name or a stray nil surfaces as a confusing first-request 500
+    # instead of a boot-time error. `nil` is rejected on purpose: "no layout" is
+    # spelled `false`, so a nil left over from a conditional in the initializer
+    # is a mistake, not a silent shell fallback.
+    def validate_layout!(value)
+      return if [true, false].include?(value)
+      return if value.is_a?(String) && !value.empty?
+
+      # `:auto` is rejected BY NAME because it used to be the default. An app
+      # carrying it forward from an older initializer must be told it is gone,
+      # not have it silently reinterpreted as "some truthy value".
+      if value == :auto
+        raise Ruact::ConfigurationError,
+              "Ruact::Configuration#layout no longer supports :auto — it inferred whether your " \
+              "layout was ready by inspecting it, which could not be done reliably. " \
+              "Set `true` to render through your app's layout (make sure it calls " \
+              "`<%= ruact_js_assets %>`), or `false` for ruact's built-in shell."
+      end
+
+      raise Ruact::ConfigurationError,
+            "Ruact::Configuration#layout must be true, false, or a non-empty String layout name; " \
+            "got #{value.inspect} (#{value.class.name}). " \
+            "true renders through your app's layout (which must call ruact_js_assets); " \
+            "false uses ruact's built-in shell."
     end
 
     def validate_max_upload_bytes!(value)
