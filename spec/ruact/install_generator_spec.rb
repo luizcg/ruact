@@ -1199,6 +1199,111 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
     # regex. Invoking the actual generator caught that a layout written with
     # single quotes matched nothing while the generator still printed a success
     # message. These specs drive `InstallGenerator#inject_layout_shell` itself.
+    # Thor registers every PUBLIC instance method of a generator as a command and
+    # runs it in declaration order. A helper left public therefore executes on
+    # its own, out of context — this has bitten three times in this branch: a
+    # message printed twice, a `--shadcn`-only notice firing on the default
+    # path, and a helper taking a required argument being invoked with none.
+    # Pin the command list so the next one is caught here rather than in an app.
+    describe "Thor command surface" do
+      it "registers only the install steps, never the private helpers" do
+        expect(Ruact::Generators::InstallGenerator.commands.keys).to contain_exactly(
+          "create_initializer",
+          "inject_controller_concern",
+          "inject_layout_shell",
+          "create_shadcn_prerequisites",
+          "create_components_directory",
+          "create_server_functions_directory",
+          "append_gitignore_entries",
+          "prime_server_functions_codegen",
+          "create_vite_config",
+          "create_package_json",
+          "create_launch_files",
+          "advise_plumbing_migration",
+          "create_agents_md",
+          "install_javascript_dependencies",
+          "show_post_install_message"
+        )
+      end
+
+      it "has no command requiring arguments (Thor invokes them with none)" do
+        requiring_args = Ruact::Generators::InstallGenerator.commands.keys.reject do |name|
+          Ruact::Generators::InstallGenerator.instance_method(name).arity.zero?
+        end
+
+        expect(requiring_args).to be_empty
+      end
+    end
+
+    # Migrating an existing app is the path that matters most here, and Thor's
+    # `template` handles it badly: it raises an overwrite CONFLICT, offering a
+    # choice between losing every setting the app already had and ending up
+    # half-migrated (layout edited, `config.layout` still off) in silence.
+    describe "create_initializer on an app that already has one", :aggregate_failures do
+      def write_initializer(body)
+        path = File.join(app_root, "config/initializers/ruact.rb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, body)
+        path
+      end
+
+      it "adds config.layout without touching the app's existing settings" do
+        path = write_initializer(<<~RUBY)
+          Ruact.configure do |config|
+            config.strict_serialization = true
+            config.max_upload_bytes = 25 * 1024 * 1024
+          end
+        RUBY
+
+        silently { build_generator(app_root).create_initializer }
+
+        result = File.read(path)
+        expect(result).to include("config.layout = true")
+        expect(result).to include("config.strict_serialization = true")
+        expect(result).to include("config.max_upload_bytes = 25 * 1024 * 1024")
+      end
+
+      # `config.layout = false` is a deliberate choice (keep the built-in
+      # shell). Re-running install must not quietly reverse it.
+      it "leaves an explicit opt-out alone" do
+        path = write_initializer("Ruact.configure do |config|\n  config.layout = false\nend\n")
+
+        silently { build_generator(app_root).create_initializer }
+
+        expect(File.read(path)).to include("config.layout = false")
+        expect(File.read(path)).not_to include("config.layout = true")
+      end
+
+      it "is idempotent" do
+        path = write_initializer("Ruact.configure do |config|\nend\n")
+
+        silently { build_generator(app_root).create_initializer }
+        silently { build_generator(app_root).create_initializer }
+
+        expect(File.read(path).scan("config.layout").size).to eq(1)
+      end
+
+      # Never guess at an initializer we do not recognise — say what to add,
+      # because the silent outcome is an app whose CSS never reaches the page.
+      it "tells the user what to add when it cannot find the configure block" do
+        write_initializer("# hand-rolled\nRuact.config\n")
+
+        output = capture_generator_output { build_generator(app_root).create_initializer }
+
+        expect(output).to include("could not find the Ruact.configure block")
+        expect(output).to include("config.layout = true")
+      end
+
+      def capture_generator_output
+        original = $stdout
+        $stdout = StringIO.new
+        yield
+        $stdout.string
+      ensure
+        $stdout = original
+      end
+    end
+
     describe "inject_layout_shell — the REAL generator", :aggregate_failures do
       def write_layout(body)
         path = File.join(app_root, "app/views/layouts/application.html.erb")
@@ -1311,13 +1416,55 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
 
       # Round-2 finding: the anchor matched any attribute ENDING in `id`, so a
       # layout with `data-id="root"` and no real mount point got the helper
-      # injected and a success message.
+      # injected and a success message. It now reads as "no root present" and
+      # the generator writes a proper root + helper instead of warning — the
+      # look-alike div is left alone, being none of its business.
       it "does not mistake a look-alike attribute for the React root" do
-        write_layout(<<~HTML)
+        path = write_layout(<<~HTML)
           <html>
             <body>
               <%# ruact: root %>
               <div data-id="root"></div>
+            </body>
+          </html>
+        HTML
+
+        silently { build_generator(app_root).inject_layout_shell }
+
+        result = File.read(path)
+        expect(result).to match(%r{<div id="root"></div>})
+        expect(result).to include("<%= ruact_js_assets %>")
+      end
+
+      # The mirror of the legacy migration: the call is there, the mount target
+      # is not. Injecting the whole block would duplicate the helper.
+      it "adds only the missing root when the layout already calls the helper" do
+        path = write_layout(<<~HTML)
+          <html>
+            <body>
+              <%= yield %>
+              <%= ruact_js_assets %>
+            </body>
+          </html>
+        HTML
+
+        silently { build_generator(app_root).inject_layout_shell }
+
+        result = File.read(path)
+        expect(result).to match(%r{<div id="root"></div>})
+        expect(result.scan("ruact_js_assets").size).to eq(1)
+        expect(result.index(%(<div id="root">))).to be < result.index("ruact_js_assets")
+      end
+
+      # A root that is NOT an empty paired div (a spinner placeholder, say) has
+      # nothing safe to inject after, so the generator says so instead of
+      # guessing where the call belongs.
+      it "warns when the root div is not the empty form it knows how to anchor on" do
+        write_layout(<<~HTML)
+          <html>
+            <body>
+              <%# ruact: root %>
+              <div id="root">loading…</div>
             </body>
           </html>
         HTML

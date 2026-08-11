@@ -4,7 +4,7 @@ Ruact.configure do |config|
   # Render ruact pages through your app's own layout, so the document `<head>`
   # is yours: `stylesheet_link_tag`, favicons, fonts, analytics and any gem that
   # writes into `<head>` all reach a ruact page. Requires the layout to call
-  # `<%%= ruact_js_assets %%>` (this generator adds it next to the React root).
+  # `<%%= ruact_js_assets %>` (this generator adds it next to the React root).
   #
   # Set to false to use ruact's built-in minimal shell instead — it has no
   # stylesheet slot, so your app's CSS will NOT reach a ruact-rendered page.

@@ -96,13 +96,27 @@ module Ruact
       # (`layout -> { MissingConstant::LAYOUT }`). Turning that into "no layout"
       # would hide the developer's bug behind a silently degraded page.
       def ruact_layout_resolvable?(layout)
-        return lookup_context.exists?(layout, ["layouts"]) if layout.is_a?(String)
+        return ruact_layout_exists?(layout) if layout.is_a?(String)
 
-        !_default_layout(lookup_context, [:html], []).nil?
+        resolved = _default_layout(lookup_context, [:html], [])
+        return false if resolved.nil? || resolved == false
+        # `_default_layout` returns a Template for the conventional lookup but a
+        # bare String path for a controller-declared `layout "name"` — and it
+        # returns that String WITHOUT checking the template exists. Treating
+        # "not nil" as resolvable therefore sent a declared-but-missing layout
+        # into `render_to_string`, where it raised `MissingTemplate` instead of
+        # taking the intended degrade-to-shell path.
+        return ruact_layout_exists?(resolved) if resolved.is_a?(String)
+
+        true
       rescue NameError
         raise
       rescue StandardError
         false
+      end
+
+      def ruact_layout_exists?(name)
+        lookup_context.exists?(name.to_s.delete_prefix("layouts/"), ["layouts"])
       end
 
       def __ruact_handle_unready_layout(_layout, reason)

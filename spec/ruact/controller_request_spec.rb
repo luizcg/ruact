@@ -122,6 +122,7 @@ module ControllerRequestSpecSupport
           get "/unwired-layout-demo/show", to: "controller_request_spec_support/unwired_layout_demo#show"
           get "/exploding-layout-demo/show", to: "controller_request_spec_support/exploding_layout_demo#show"
           get "/rootless-layout-demo/show", to: "controller_request_spec_support/rootless_layout_demo#show"
+          get "/ghost-layout-demo/show", to: "controller_request_spec_support/ghost_layout_demo#show"
         end
       end
     end
@@ -216,6 +217,20 @@ module ControllerRequestSpecSupport
 
     append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
     layout "exploding_host"
+
+    def show
+      ruact_render
+    end
+  end
+
+  # Declares a layout that does not exist. `_default_layout` hands back the
+  # String path WITHOUT checking, so "not nil" read as resolvable and the render
+  # raised MissingTemplate instead of degrading.
+  class GhostLayoutDemoController < ActionController::Base
+    include Ruact::Controller
+
+    append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
+    layout "no_such_host"
 
     def show
       ruact_render
@@ -401,6 +416,19 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         it "fails loudly when the opted-in layout has no root div to mount into" do
           expect { get "/rootless-layout-demo/show" }
             .to raise_error(Ruact::Error, /root/)
+        end
+
+        # A controller that declares a layout which does not exist: Rails'
+        # `_default_layout` returns the String path without checking it, so
+        # "resolvable" has to mean "the template is actually there".
+        it "degrades to the shell when a declared layout does not exist" do
+          get "/ghost-layout-demo/show"
+
+          expect(last_response.status).to(eq(200),
+                                          "expected a degrade, got #{last_response.status} " \
+                                          "body=#{last_response.body[0, 300]}")
+          expect(last_response.body).to include("Rails RSC")
+          expect(last_response.body).to include("DemoButton")
         end
 
         # `layout false` on one controller inside an app that opted in globally
