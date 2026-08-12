@@ -9,7 +9,7 @@ Gem::Specification.new do |spec|
   spec.email = ["luizcg@gmail.com"]
 
   spec.summary = "React Server Components for Rails — render React components from ERB using the Flight wire format."
-  spec.homepage = "https://luizcg.github.io/ruact/"
+  spec.homepage = "https://ruact.dev/"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.2.0"
 
