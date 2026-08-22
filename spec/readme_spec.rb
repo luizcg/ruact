@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "nokogiri"
 require "pathname"
 
 # Story 5.14 — the README gate that lives INSIDE this repository.
@@ -75,59 +76,57 @@ RSpec.describe "README.md", :story_5_14 do
     markdown.scan(/\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/).flatten
   end
 
-  # A fenced block is a picture OF markup, not markup. Anything inside one is
-  # displayed, never rendered, so it must not be mistaken for a real reference.
-  # CommonMark allows up to three spaces of indent, `~~~` as well as backticks,
-  # and runs longer than three that only a run of the same length can close —
-  # so the backreference is what keeps ```` ``` ```` from closing a ```` ~~~ ````
-  # block, and vice versa.
-  def fence_re
-    /^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n.*?^[ \t]{0,3}\1[ \t]*$/m
-  end
-
-  def outside_code_fences(markdown)
-    markdown.gsub(fence_re, "")
-  end
-
-  # Story 5.2 — GitHub's sanitizer allows raw `<img>`, and `width` is the only
-  # lever it gives for sizing a README image, so the demo is HTML rather than
-  # markdown. The regex above cannot see an HTML attribute, which left the one
-  # reference the README most needs checked entirely ungated. This closes that.
+  # Story 5.2 — the demo reference, pinned BYTE FOR BYTE.
   #
-  # Returns whole tags, not just `src`: an attribute is only meaningful together
-  # with the tag it belongs to. Checking "some `<img>` has the right src" and
-  # "the first `<img>` has good alt text" as two independent facts passes a
-  # README where those are two different images.
-  # `[^>]*` would end the tag at a `>` sitting inside a quoted attribute value —
-  # and this story's own alt text is full of them (`&gt;` is safe, a literal is
-  # not). Consume quoted runs whole instead.
-  def img_tag_re
-    /<img\b(?:[^>"']|"[^"]*"|'[^']*')*>/m
+  # The first version of this gate hand-rolled HTML and CommonMark recognition
+  # out of regexes, and review corrected it in three consecutive rounds:
+  # `\bsrc=` matched `data-src=`, a literal `>` inside an attribute ended the
+  # tag early, fences were only recognised at column 0, then unterminated
+  # fences were not recognised at all, then unquoted attribute values were
+  # invisible. Those are not five bugs. Neither HTML nor CommonMark is a
+  # regular language, so that list has no end, and a gate whose coverage is
+  # "whatever the regex happens to know this week" is not a gate.
+  #
+  # Replaced by two statements that are TOTAL:
+  #
+  #   1. the reference is pinned literally — the same move `expected_quick_start`
+  #      above already makes for the quick start; and
+  #   2. the file is allowed EXACTLY ONE raw `<img>`, counted at the byte level.
+  #
+  # Together those say something the old scanner could only approximate: every
+  # raw image reference in this README is the pinned one. A second `<img>`
+  # anywhere — including inside a fenced example, terminated or not — turns
+  # this red and has to be gated deliberately rather than slipping through a
+  # blind spot.
+  #
+  # Attributes are then read with Nokogiri, already a runtime dependency of this
+  # gem (see the gemspec), so unquoted values, `>` inside a value and `data-src`
+  # are PARSED rather than pattern-matched. What that scope does and does not
+  # promise is written down in the monorepo's gate inventory,
+  # docs/examples/getting-started/README.md § "What is still outside both gates".
+  def expected_demo_img
+    <<~HTML
+      <img src="https://ruact.dev/readme-write-verify.gif" width="800"
+           alt="An ERB template holding a &lt;LikeButton likes=&#123;@likes&#125; /&gt; tag, and the &quot;use client&quot; React component that tag resolves to. The component renders in a browser and its count changes when it is clicked. Children are then put inside the tag — the JSX habit — and the next request stops server-side with Ruact::ChildrenNotSupportedError, which names the component, the template file and line, and the fix. The children come out again and the page renders." />
+    HTML
   end
 
-  def img_tags(markdown)
-    outside_code_fences(markdown).scan(img_tag_re)
-  end
-
-  # `\bsrc=` also matches the `src=` inside `data-src=` — and `data-src` is not
-  # a thing GitHub renders, so a tag carrying only that would satisfy a gate
-  # about an image nobody sees. Require the attribute to start a token.
-  def attr(tag, name)
-    m = tag.match(/(?:\A<img|\s)#{name}=(?:"([^"]*)"|'([^']*)')/m)
-    m && (m[1] || m[2])
-  end
-
-  def html_img_targets(markdown)
-    img_tags(markdown).filter_map { |tag| attr(tag, "src") }
-  end
-
-  # The one `<img>` this story owns, found by its src rather than by position.
   def demo_src
     "https://ruact.dev/readme-write-verify.gif"
   end
 
-  def demo_img(markdown)
-    img_tags(markdown).find { |tag| attr(tag, "src") == demo_src }
+  # Parsed from the pinned literal, exactly as `expected_quick_start` is the
+  # authority for the quick start: one example asserts the README contains
+  # these bytes, and the rest read meaning off them. The chain is
+  # README -> literal -> parser, and the first link is what makes it honest.
+  def demo_node
+    Nokogiri::HTML5.fragment(expected_demo_img).at_css("img")
+  end
+
+  # Byte-level and case-insensitive on purpose: no parser, no markdown, nothing
+  # to have a blind spot. `<IMG`, `<img\n`, an `<img` inside a fence — all count.
+  def raw_img_count(markdown)
+    markdown.scan(/<img\b/i).length
   end
 
   # Absolute URLs, anchors and mailto: links are somebody else's problem; on-disk
@@ -148,7 +147,7 @@ RSpec.describe "README.md", :story_5_14 do
   end
 
   it "links only to files that exist in this repository" do
-    targets = relative(markdown_link_targets(readme) + html_img_targets(readme))
+    targets = relative(markdown_link_targets(readme) + [demo_node["src"]])
     missing = targets.reject { |target| root.join(target.split("#").first.to_s).exist? }
 
     expect(targets).not_to be_empty, "expected the README to link at least one repo-relative file"
@@ -162,9 +161,25 @@ RSpec.describe "README.md", :story_5_14 do
   # an absolute URL cannot be resolved on disk here — the monorepo puts it in
   # `website/scripts/verify-urls.mjs`'s PATHS, checked against the deployed
   # site, so a dead image goes red there instead of rotting silently.
-  it "carries the write→verify demo, hosted with the site rather than committed here" do
-    expect(demo_img(readme)).not_to be_nil,
-                                    "no <img> in README.md points at #{demo_src}"
+  it "carries the write→verify demo reference, byte for byte" do
+    expect(readme).to include(expected_demo_img),
+                      "the demo reference in README.md drifted from the literal this spec pins. " \
+                      "Change both or neither — and if the recording itself changed, see " \
+                      "readme_demo_message_spec.rb."
+  end
+
+  # The other half of the pin: because there is exactly ONE raw `<img>` and the
+  # example above proves it is the pinned one, "the pinned literal is present"
+  # and "every raw image in this file is checked" are the same statement.
+  it "carries exactly one raw <img>, so the pin covers every raw image in the file" do
+    expect(raw_img_count(readme)).to eq(1),
+                                     "README.md has #{raw_img_count(readme)} raw <img> tags. This gate is " \
+                                     "written for exactly one — the demo, pinned literally. A second image " \
+                                     "must be gated deliberately, not left to a scanner's blind spots."
+  end
+
+  it "keeps the demo hosted with the site rather than committed here" do
+    expect(demo_node["src"]).to eq(demo_src)
 
     # `git ls-files` and not a filesystem glob, because that is precisely what
     # `spec.files` packages (ruact.gemspec) — untracked build output is not the
@@ -182,13 +197,9 @@ RSpec.describe "README.md", :story_5_14 do
   # The alt text is the only thing a screen-reader user — or an agent reading
   # the README as text — gets. "demo" is not a description.
   it "describes the demo's arc in its alt text" do
-    # Read off the demo's OWN tag. Reading the first `<img>` in the file would
-    # let a second image satisfy this while the demo shipped `alt="demo"`.
-    tag = demo_img(readme)
-
-    expect(tag).not_to be_nil, "no <img> in README.md points at #{demo_src}"
-
-    alt = attr(tag, "alt").to_s
+    # Nokogiri resolves the entities, so this reads what a screen reader reads:
+    # `&lt;LikeButton` is the tag the demo shows, not four literal characters.
+    alt = demo_node["alt"].to_s
 
     expect(alt.split.length).to be > 40, "the demo's alt text does not describe the arc: #{alt.inspect}"
     expect(alt).to include("Ruact::ChildrenNotSupportedError")
@@ -198,20 +209,27 @@ RSpec.describe "README.md", :story_5_14 do
   end
 
   # Story 5.2, learned the expensive way: YARD parses README.md as the docs'
-  # main file and reads `{@likes}` as a link macro it cannot resolve, which
-  # `--fail-on-warning` turns into a red REQUIRED check — for a README edit, in
-  # a job whose output says nothing about READMEs. Write braces as `&#123;`/
-  # `&#125;` in prose (GitHub renders them; YARD never sees them). Deliberately
-  # narrow: `{ post: … }` and `{ title: [...] }` also live in this file's prose
-  # and YARD is right not to linkify those.
-  it "carries no YARD link macro in prose, where a README edit would redden the docs job" do
+  # main file and read `{@likes}` in the demo's alt text as a link macro it
+  # could not resolve — and `--fail-on-warning` turned that into a red REQUIRED
+  # check, for a README edit, in a job whose output says nothing about READMEs.
+  # Braces belong in prose as `&#123;`/`&#125;`: GitHub renders them, YARD never
+  # sees them.
+  #
+  # SCOPE, deliberately: this checks the pinned demo block, not the whole file.
+  # Knowing which parts of a markdown document YARD linkifies means knowing
+  # where the fenced blocks are, and this gate no longer recognises fences —
+  # that is the trade this redesign makes. `yard --fail-on-warning` in this
+  # repository's own CI is the TOTAL gate; this example exists so the one line
+  # that actually tripped it fails locally, in the suite that owns the README,
+  # naming the cause.
+  it "keeps YARD link macros out of the demo block, which is what reddened the docs job" do
     # `{@ivar}`, `{Class}`, `{Class::Nested}`, `{Class#method}`, `{Class.method}`
-    # — every shape YARD tries to resolve. It does NOT try to resolve something
-    # with a space in it, which is why the prose's `{ post: … }` is safe.
-    macros = outside_code_fences(readme).scan(/\{(?:@\w+|[A-Z][\w:.#]*)\}/)
+    # — the shapes YARD resolves. It does not try to resolve anything with a
+    # space in it, which is why the prose's `{ post: … }` elsewhere is safe.
+    macros = expected_demo_img.scan(/\{(?:@\w+|[A-Z][\w:.#]*)\}/)
 
     expect(macros).to be_empty,
-                      "README.md prose contains #{macros.inspect}, which YARD tries to resolve as a " \
+                      "the demo block contains #{macros.inspect}, which YARD tries to resolve as a " \
                       "link and `yard --fail-on-warning` fails on. Use &#123; / &#125;."
   end
 
