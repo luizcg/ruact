@@ -178,6 +178,21 @@ RSpec.describe "README.md", :story_5_14 do
                        "see Story 5.2 AC4"
   end
 
+  # Story 5.2, learned the expensive way: YARD parses README.md as the docs'
+  # main file and reads `{@likes}` as a link macro it cannot resolve, which
+  # `--fail-on-warning` turns into a red REQUIRED check — for a README edit, in
+  # a job whose output says nothing about READMEs. Write braces as `&#123;`/
+  # `&#125;` in prose (GitHub renders them; YARD never sees them). Deliberately
+  # narrow: `{ post: … }` and `{ title: [...] }` also live in this file's prose
+  # and YARD is right not to linkify those.
+  it "carries no YARD link macro in prose, where a README edit would redden the docs job" do
+    macros = outside_code_fences(readme).scan(/\{(?:@\w+|[A-Z]\w*(?:::|#|\.)\w+)\}/)
+
+    expect(macros).to be_empty,
+                      "README.md prose contains #{macros.inspect}, which YARD tries to resolve as a " \
+                      "link and `yard --fail-on-warning` fails on. Use &#123; / &#125;."
+  end
+
   it "shows no harness-only `path:` gem source a reader could copy" do
     offenders = path_gem_sources.filter_map { |pattern| pattern.source if readme.match?(pattern) }
 
