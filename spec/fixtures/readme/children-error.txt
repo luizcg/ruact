@@ -1,0 +1,1 @@
+ruact: <LikeButton> at app/views/home/index.html.erb:3 children are not supported — pass content as a prop, e.g. `<LikeButton content={...} />`.

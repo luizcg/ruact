@@ -4,7 +4,14 @@
 
 [![CI](https://github.com/luizcg/ruact/actions/workflows/ci.yml/badge.svg)](https://github.com/luizcg/ruact/actions/workflows/ci.yml) [![Gem Version](https://badge.fury.io/rb/ruact.svg)](https://badge.fury.io/rb/ruact) [![codecov](https://codecov.io/gh/luizcg/ruact/branch/main/graph/badge.svg?flag=gem)](https://codecov.io/gh/luizcg/ruact)
 
-<!-- SLOT: Story 5.2 owns this line — the write→verify demo GIF goes here, above the quick start. Story 5.14 commits no media. -->
+<!-- Packaging (Story 5.2): the demo is a documentation asset, published with the site
+     rather than committed here — so neither `gem install ruact` nor a clone of this
+     repository carries a multi-megabyte file, permanently, for a picture. The URL belongs
+     to the site's URL contract and cannot quietly start 404ing, the capture sources are
+     scripted and live with the project's other capture harnesses, and the message the demo
+     shows is pinned here by `spec/readme_demo_message_spec.rb`. -->
+<img src="https://ruact.dev/readme-write-verify.gif" width="800"
+     alt="An ERB template holding a &lt;LikeButton likes=&#123;@likes&#125; /&gt; tag, and the &quot;use client&quot; React component that tag resolves to. The component renders in a browser and its count changes when it is clicked. Children are then put inside the tag — the JSX habit — and the next request stops server-side with Ruact::ChildrenNotSupportedError, which names the component, the template file and line, and the fix. The children come out again and the page renders." />
 
 ## Quick start
 
