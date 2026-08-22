@@ -75,12 +75,40 @@ RSpec.describe "README.md", :story_5_14 do
     markdown.scan(/\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/).flatten
   end
 
+  # A fenced block is a picture OF markup, not markup. Anything inside one is
+  # displayed, never rendered, so it must not be mistaken for a real reference.
+  def outside_code_fences(markdown)
+    markdown.gsub(/^```.*?^```/m, "")
+  end
+
   # Story 5.2 — GitHub's sanitizer allows raw `<img>`, and `width` is the only
   # lever it gives for sizing a README image, so the demo is HTML rather than
   # markdown. The regex above cannot see an HTML attribute, which left the one
   # reference the README most needs checked entirely ungated. This closes that.
+  #
+  # Returns whole tags, not just `src`: an attribute is only meaningful together
+  # with the tag it belongs to. Checking "some `<img>` has the right src" and
+  # "the first `<img>` has good alt text" as two independent facts passes a
+  # README where those are two different images.
+  def img_tags(markdown)
+    outside_code_fences(markdown).scan(/<img\b[^>]*?>/m)
+  end
+
+  def attr(tag, name)
+    tag[/\b#{name}=(?:"([^"]*)"|'([^']*)')/m, 1] || tag[/\b#{name}=(?:"([^"]*)"|'([^']*)')/m, 2]
+  end
+
   def html_img_targets(markdown)
-    markdown.scan(/<img\b[^>]*?\bsrc=["']([^"']+)["']/m).flatten
+    img_tags(markdown).filter_map { |tag| attr(tag, "src") }
+  end
+
+  # The one `<img>` this story owns, found by its src rather than by position.
+  def demo_src
+    "https://ruact.dev/readme-write-verify.gif"
+  end
+
+  def demo_img(markdown)
+    img_tags(markdown).find { |tag| attr(tag, "src") == demo_src }
   end
 
   # Absolute URLs, anchors and mailto: links are somebody else's problem; on-disk
@@ -116,7 +144,8 @@ RSpec.describe "README.md", :story_5_14 do
   # `website/scripts/verify-urls.mjs`'s PATHS, checked against the deployed
   # site, so a dead image goes red there instead of rotting silently.
   it "carries the write→verify demo, hosted with the site rather than committed here" do
-    expect(html_img_targets(readme)).to include("https://ruact.dev/readme-write-verify.gif")
+    expect(demo_img(readme)).not_to be_nil,
+                                    "no <img> in README.md points at #{demo_src}"
 
     # `git ls-files` and not a filesystem glob, because that is precisely what
     # `spec.files` packages (ruact.gemspec) — untracked build output is not the
@@ -134,7 +163,13 @@ RSpec.describe "README.md", :story_5_14 do
   # The alt text is the only thing a screen-reader user — or an agent reading
   # the README as text — gets. "demo" is not a description.
   it "describes the demo's arc in its alt text" do
-    alt = readme[/<img\b[^>]*?\balt=["']([^"']+)["']/m, 1].to_s
+    # Read off the demo's OWN tag. Reading the first `<img>` in the file would
+    # let a second image satisfy this while the demo shipped `alt="demo"`.
+    tag = demo_img(readme)
+
+    expect(tag).not_to be_nil, "no <img> in README.md points at #{demo_src}"
+
+    alt = attr(tag, "alt").to_s
 
     expect(alt.split.length).to be > 40, "the demo's alt text does not describe the arc: #{alt.inspect}"
     expect(alt).to include("Ruact::ChildrenNotSupportedError")
