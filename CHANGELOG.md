@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A demo at the top of `README.md` — the write→verify loop, recorded rather than described.** The README could argue the mechanism in prose and code but could not show what happens when the boundary is used wrong, which is the part a reader of *"React rendered from Rails templates"* actually doubts. The recording is one loop: an ERB template with `<LikeButton likes={@likes} />` beside the `"use client"` component it resolves to; the component rendering in a browser, its count changing on click; children put inside the tag — the JSX habit — and the next request stopping **server-side, while the template is being processed, before anything reaches the browser**, with `Ruact::ChildrenNotSupportedError` naming the component, the template file and line, and the fix; then the children removed and the page rendering again. Every frame is a capture of the gem running; the loud error is the one shipped in 0.0.9.
+
+  It is referenced by absolute URL and **nothing binary is committed here** — so neither `gem install ruact` nor a clone of this repository carries a multi-megabyte file, permanently, for a picture. Two things keep it from aging into a lie: the URL belongs to the site's URL contract, and `spec/readme_demo_message_spec.rb` pins the message the recording shows against a fixture the gem itself produced. If the wording changes, that spec goes red and names the recording as the thing to redo.
+
 - **`LICENSE.txt`** — the gemspec has declared `spec.license = "MIT"` since the first commit while the repository contained no licence file, so both GitHub and the packaged gem shipped a promise with nothing behind it.
 - **`spec.description` and `metadata["documentation_uri"]` in the gemspec** — RubyGems rendered the one-line `summary` as the whole description and fell through to rubydoc.info for documentation.
 

@@ -70,12 +70,23 @@ RSpec.describe "README.md", :story_5_14 do
     BASH
   end
 
-  # `[text](target)`, inline-title form allowed. Absolute URLs, anchors and
-  # mailto: links are somebody else's problem; on-disk targets are ours.
-  def relative_link_targets(markdown)
-    markdown.scan(/\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/).flatten.reject do |target|
-      target.start_with?("http://", "https://", "#", "mailto:")
-    end
+  # `[text](target)` and `![alt](target)`, inline-title form allowed.
+  def markdown_link_targets(markdown)
+    markdown.scan(/\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/).flatten
+  end
+
+  # Story 5.2 — GitHub's sanitizer allows raw `<img>`, and `width` is the only
+  # lever it gives for sizing a README image, so the demo is HTML rather than
+  # markdown. The regex above cannot see an HTML attribute, which left the one
+  # reference the README most needs checked entirely ungated. This closes that.
+  def html_img_targets(markdown)
+    markdown.scan(/<img\b[^>]*?\bsrc=["']([^"']+)["']/m).flatten
+  end
+
+  # Absolute URLs, anchors and mailto: links are somebody else's problem; on-disk
+  # targets are ours.
+  def relative(targets)
+    targets.reject { |target| target.start_with?("http://", "https://", "#", "mailto:") }
   end
 
   def bash_blocks(markdown)
@@ -90,12 +101,46 @@ RSpec.describe "README.md", :story_5_14 do
   end
 
   it "links only to files that exist in this repository" do
-    targets = relative_link_targets(readme)
+    targets = relative(markdown_link_targets(readme) + html_img_targets(readme))
     missing = targets.reject { |target| root.join(target.split("#").first.to_s).exist? }
 
     expect(targets).not_to be_empty, "expected the README to link at least one repo-relative file"
     expect(missing).to be_empty,
                        "README.md links files that do not exist in the gem repository: #{missing.inspect}"
+  end
+
+  # Story 5.2 — the demo GIF is a documentation asset hosted with the site, so
+  # this repository stays free of binaries: no `.gem` download and no clone
+  # pays for it. The consequence is that the reference is an absolute URL, and
+  # an absolute URL cannot be resolved on disk here — the monorepo puts it in
+  # `website/scripts/verify-urls.mjs`'s PATHS, checked against the deployed
+  # site, so a dead image goes red there instead of rotting silently.
+  it "carries the write→verify demo, hosted with the site rather than committed here" do
+    expect(html_img_targets(readme)).to include("https://ruact.dev/readme-write-verify.gif")
+
+    # `git ls-files` and not a filesystem glob, because that is precisely what
+    # `spec.files` packages (ruact.gemspec) — untracked build output is not the
+    # question here, and coverage/ is full of it.
+    tracked = IO.popen(%w[git ls-files -z], chdir: root.to_s, err: IO::NULL) do |ls|
+      ls.readlines("\x0", chomp: true)
+    end
+    committed_media = tracked.grep(/\.(gif|mp4|webm|webp)\z/i)
+
+    expect(committed_media).to be_empty,
+                               "media committed under gem/ ships inside every `.gem` and stays in the " \
+                               "clone history forever: #{committed_media.inspect}"
+  end
+
+  # The alt text is the only thing a screen-reader user — or an agent reading
+  # the README as text — gets. "demo" is not a description.
+  it "describes the demo's arc in its alt text" do
+    alt = readme[/<img\b[^>]*?\balt=["']([^"']+)["']/m, 1].to_s
+
+    expect(alt.split.length).to be > 40, "the demo's alt text does not describe the arc: #{alt.inspect}"
+    expect(alt).to include("Ruact::ChildrenNotSupportedError")
+    expect(alt).not_to match(/\bbuild\b/i),
+                       "the failure the demo shows happens server-side at render, not at build — " \
+                       "see Story 5.2 AC4"
   end
 
   it "shows no harness-only `path:` gem source a reader could copy" do
