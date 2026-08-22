@@ -77,8 +77,16 @@ RSpec.describe "README.md", :story_5_14 do
 
   # A fenced block is a picture OF markup, not markup. Anything inside one is
   # displayed, never rendered, so it must not be mistaken for a real reference.
+  # CommonMark allows up to three spaces of indent, `~~~` as well as backticks,
+  # and runs longer than three that only a run of the same length can close —
+  # so the backreference is what keeps ```` ``` ```` from closing a ```` ~~~ ````
+  # block, and vice versa.
+  def fence_re
+    /^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n.*?^[ \t]{0,3}\1[ \t]*$/m
+  end
+
   def outside_code_fences(markdown)
-    markdown.gsub(/^```.*?^```/m, "")
+    markdown.gsub(fence_re, "")
   end
 
   # Story 5.2 — GitHub's sanitizer allows raw `<img>`, and `width` is the only
@@ -90,12 +98,23 @@ RSpec.describe "README.md", :story_5_14 do
   # with the tag it belongs to. Checking "some `<img>` has the right src" and
   # "the first `<img>` has good alt text" as two independent facts passes a
   # README where those are two different images.
-  def img_tags(markdown)
-    outside_code_fences(markdown).scan(/<img\b[^>]*?>/m)
+  # `[^>]*` would end the tag at a `>` sitting inside a quoted attribute value —
+  # and this story's own alt text is full of them (`&gt;` is safe, a literal is
+  # not). Consume quoted runs whole instead.
+  def img_tag_re
+    /<img\b(?:[^>"']|"[^"]*"|'[^']*')*>/m
   end
 
+  def img_tags(markdown)
+    outside_code_fences(markdown).scan(img_tag_re)
+  end
+
+  # `\bsrc=` also matches the `src=` inside `data-src=` — and `data-src` is not
+  # a thing GitHub renders, so a tag carrying only that would satisfy a gate
+  # about an image nobody sees. Require the attribute to start a token.
   def attr(tag, name)
-    tag[/\b#{name}=(?:"([^"]*)"|'([^']*)')/m, 1] || tag[/\b#{name}=(?:"([^"]*)"|'([^']*)')/m, 2]
+    m = tag.match(/(?:\A<img|\s)#{name}=(?:"([^"]*)"|'([^']*)')/m)
+    m && (m[1] || m[2])
   end
 
   def html_img_targets(markdown)
@@ -186,7 +205,10 @@ RSpec.describe "README.md", :story_5_14 do
   # narrow: `{ post: … }` and `{ title: [...] }` also live in this file's prose
   # and YARD is right not to linkify those.
   it "carries no YARD link macro in prose, where a README edit would redden the docs job" do
-    macros = outside_code_fences(readme).scan(/\{(?:@\w+|[A-Z]\w*(?:::|#|\.)\w+)\}/)
+    # `{@ivar}`, `{Class}`, `{Class::Nested}`, `{Class#method}`, `{Class.method}`
+    # — every shape YARD tries to resolve. It does NOT try to resolve something
+    # with a space in it, which is why the prose's `{ post: … }` is safe.
+    macros = outside_code_fences(readme).scan(/\{(?:@\w+|[A-Z][\w:.#]*)\}/)
 
     expect(macros).to be_empty,
                       "README.md prose contains #{macros.inspect}, which YARD tries to resolve as a " \
