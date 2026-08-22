@@ -129,6 +129,16 @@ RSpec.describe "README.md", :story_5_14 do
     markdown.scan(/<img\b/i).length
   end
 
+  # …and the same parser turned on the README ITSELF, because the two byte-level
+  # facts above are about bytes, not about rendering: wrap the pinned block in
+  # an HTML comment and the literal is still present and the raw count is still
+  # one, while GitHub shows nothing at all (verified — `include`=true, raw=1,
+  # live nodes=0). Nokogiri is what decides whether a tag is an element or a
+  # comment, so it is what the "it renders" half of this gate has to ask.
+  def readme_img_nodes
+    Nokogiri::HTML5.fragment(readme).css("img")
+  end
+
   # Absolute URLs, anchors and mailto: links are somebody else's problem; on-disk
   # targets are ours.
   def relative(targets)
@@ -176,6 +186,20 @@ RSpec.describe "README.md", :story_5_14 do
                                      "README.md has #{raw_img_count(readme)} raw <img> tags. This gate is " \
                                      "written for exactly one — the demo, pinned literally. A second image " \
                                      "must be gated deliberately, not left to a scanner's blind spots."
+  end
+
+  # And the demo is LIVE, not merely present. Bytes inside an HTML comment
+  # satisfy both statements above and render nothing; only a parser can tell
+  # the difference, so the README itself is parsed and the node it yields must
+  # be the pinned one, attribute for attribute.
+  it "renders the demo as a real element, not as bytes inside a comment" do
+    nodes = readme_img_nodes
+
+    expect(nodes.length).to eq(1),
+                            "README.md parses to #{nodes.length} live <img> element(s); the demo must be " \
+                            "exactly one, and must not be commented out."
+    expect(nodes.first.attributes.transform_values(&:value))
+      .to eq(demo_node.attributes.transform_values(&:value))
   end
 
   it "keeps the demo hosted with the site rather than committed here" do
