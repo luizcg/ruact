@@ -9,6 +9,13 @@ Gem::Specification.new do |spec|
   spec.email = ["luizcg@gmail.com"]
 
   spec.summary = "React Server Components for Rails — render React components from ERB using the Flight wire format."
+  spec.description = <<~DESC
+    ruact renders React components straight from your ERB views: write a PascalCase
+    tag, pass a Ruby value as a prop, and React hydrates it in the browser over the
+    Flight wire format. Server functions and queries are drawn from your existing
+    route table, so there is no hand-written JSON layer to keep in sync and no Node
+    process in production.
+  DESC
   spec.homepage = "https://ruact.dev/"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.2.0"
@@ -18,6 +25,7 @@ Gem::Specification.new do |spec|
   spec.metadata["source_code_uri"] = "https://github.com/luizcg/ruact"
   spec.metadata["changelog_uri"] = "https://github.com/luizcg/ruact/blob/main/CHANGELOG.md"
   spec.metadata["bug_tracker_uri"] = "https://github.com/luizcg/ruact/issues"
+  spec.metadata["documentation_uri"] = "https://ruact.dev"
   spec.metadata["rubygems_mfa_required"] = "true"
 
   # Re-run-5 (2026-05-15) — the `vendor/javascript/**` tree is part of

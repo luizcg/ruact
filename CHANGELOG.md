@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`README.md` — the gem's public face is no longer `bundle gem` boilerplate.** The file GitHub renders on `github.com/luizcg/ruact`, the file `spec.files` packages *inside* the built `.gem`, and the destination of `source_code_uri` still said *"TODO: Delete this and the text below"*, told the reader to `bundle add UPDATE_WITH_YOUR_GEM_NAME_IMMEDIATELY_AFTER_RELEASE_TO_RUBYGEMS_ORG`, and pointed contributors at `https://github.com/[USERNAME]/ruact`. It is now a first-contact README for v0.0.9: the four-command greenfield quick start (the same sequence the site's landing puts on the clipboard), the ERB-tag/`"use client"` pair, `include Ruact::Server` with its generated typed accessor, a list where every bullet names a shipped artifact, a compatibility table sourced from the CI matrix rather than from optimism, and links out to `ruact.dev` instead of second copies of the guides.
+
+  It also carries the **AI-tools section deferred here from the docs work** — the one-requirement rule (`"use client"` at the top; a PascalCase *named* export is the thing to check rather than add), the four-step walkthrough, and a pointer to the canonical page — plus one line naming the shipped agent context: the `AGENTS.md` `rails generate ruact:install` writes, `ruact.dev/llms.txt`, and the experimental `-- --json` output of `ruact:doctor` / `ruact:routes`.
+
+  Two gates now watch it, because nothing did before: `spec/readme_spec.rb` runs inside this repo's own `rspec` job (no boilerplate literals, every relative link resolves on disk, no `path:` gem source a reader could copy, and the quick-start block pinned literally), and the monorepo's command-spine check treats `README.md` as a declared artifact of the one canonical greenfield sequence.
+
+### Added
+
+- **`LICENSE.txt`** — the gemspec has declared `spec.license = "MIT"` since the first commit while the repository contained no licence file, so both GitHub and the packaged gem shipped a promise with nothing behind it.
+- **`spec.description` and `metadata["documentation_uri"]` in the gemspec** — RubyGems rendered the one-line `summary` as the whole description and fell through to rubydoc.info for documentation.
+
+### Fixed
+
+- **`SECURITY.md` named a version that has never existed.** Its supported-versions table listed `0.1.x`; the released gem is `0.0.9`. Corrected to `0.0.x`.
+
 ## [0.0.9] - 2026-08-12
 
 ### Added

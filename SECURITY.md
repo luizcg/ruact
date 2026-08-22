@@ -6,7 +6,7 @@ Only the latest patch release of the current minor version is actively maintaine
 
 | Version | Supported |
 |---------|-----------|
-| 0.1.x   | ✅ Yes    |
+| 0.0.x   | ✅ Yes    |
 
 Once a new minor version is released, the previous minor version receives security fixes for **90 days** after the new release, then it is no longer supported.
 
