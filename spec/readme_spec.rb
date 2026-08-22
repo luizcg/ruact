@@ -87,17 +87,21 @@ RSpec.describe "README.md", :story_5_14 do
   # regular language, so that list has no end, and a gate whose coverage is
   # "whatever the regex happens to know this week" is not a gate.
   #
-  # Replaced by two statements that are TOTAL:
+  # Replaced by three statements that are TOTAL:
   #
   #   1. the reference is pinned literally — the same move `expected_quick_start`
-  #      above already makes for the quick start; and
-  #   2. the file is allowed EXACTLY ONE raw `<img>`, counted at the byte level.
+  #      above already makes for the quick start;
+  #   2. the file is allowed EXACTLY ONE raw `<img>`, counted at the byte level;
+  #      and
+  #   3. the parsed document holds exactly one LIVE `<img>` element, equal to
+  #      the pinned one attribute for attribute.
   #
-  # Together those say something the old scanner could only approximate: every
-  # raw image reference in this README is the pinned one. A second `<img>`
+  # (1) and (2) together say something the old scanner could only approximate:
+  # every raw image reference in this README is the pinned one. A second `<img>`
   # anywhere — including inside a fenced example, terminated or not — turns
   # this red and has to be gated deliberately rather than slipping through a
-  # blind spot.
+  # blind spot. (3) says the thing bytes cannot: that it renders. The pinned
+  # block wrapped in an HTML comment satisfies (1) and (2) and shows nothing.
   #
   # Attributes are then read with Nokogiri, already a runtime dependency of this
   # gem (see the gemspec), so unquoted values, `>` inside a value and `data-src`
