@@ -72,10 +72,10 @@ end
 ```tsx
 import { createPost } from "@/.ruact/server-functions";
 
-const post = await createPost({ post: { title: "Hi", body: "…" } });
+await createPost({ post: { title: "Hi", body: "…" } });
 ```
 
-The verb decides — there is no per-action DSL and no second endpoint. The export name is derived from the route (`posts#create` → `createPost`), and ruact's Vite plugin regenerates the module whenever your routes change. Reading works the same way: a `Ruact::Query` class mounted with `ruact_queries` draws one named `GET` route per public method, and React reads it with `useQuery`. Both are documented in [Server functions & queries](https://ruact.dev/docs/api/server-actions).
+The verb decides — there is no per-action DSL and no second endpoint. The export name is derived from the route (`posts#create` → `createPost`), and ruact's Vite plugin regenerates the module whenever your routes change. What the call *resolves* is decided by the action you already wrote: this one redirects, so ruact follows the redirect and the call resolves `null`; an action that assigns `@post` instead resolves `{ post: … }`, through the same `ruact_props` allowlist as everything else. Reading works the same way: a `Ruact::Query` class mounted with `ruact_queries` draws one named `GET` route per public method, and React reads it with `useQuery`. Both are documented in [Server functions & queries](https://ruact.dev/docs/api/server-actions).
 
 ## What you get
 
