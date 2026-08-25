@@ -73,7 +73,7 @@ module Ruact
         open = nil
 
         lines.each_with_index do |line, index|
-          match = line.match(/\A([ \t]*)(`{3,}|~{3,})(.*)\Z/)
+          match = line.match(/\A( {0,3})(`{3,}|~{3,})(.*)\Z/)
 
           if open.nil?
             next unless match
@@ -109,7 +109,7 @@ module Ruact
         fenced = fenced_regions(markdown).flat_map { |region| (region[:first]..region[:last]).to_a }
         kept = markdown.lines.each_with_index.reject { |_, index| fenced.include?(index) }
 
-        kept.map(&:first).join.gsub(/<!--.*?-->/m, "")
+        kept.map(&:first).join
       end
 
       def self.fences_left_open(markdown)

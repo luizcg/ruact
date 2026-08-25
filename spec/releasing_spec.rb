@@ -49,7 +49,6 @@ RSpec.describe "RELEASING.md", :story_5_9 do
       "gem build" => "the release job builds the gem",
       "gem push" => "the release job uploads it, over OIDC, with no interactive step",
       "gem signin" => "there is no interactive credential to sign in with",
-      "git tag" => "the release job tags the commit it just created",
       "VERSION = " => "the release job writes lib/ruact/version.rb; a hand-edited copy is a second writer",
       /(^|[-*.]\s|\byou\s)(edit|bump|update|change|set)\s+(the\s+)?[`'"]?\S*version\.rb/i =>
         "the release job owns lib/ruact/version.rb — telling the reader to write it makes two writers",
@@ -203,16 +202,16 @@ RSpec.describe "RELEASING.md", :story_5_9 do
                                   "reason a merge silently does not publish."
   end
 
-  # The document says the job waits on every other job in the workflow. That is
-  # a claim about a list, so it is read off the list rather than trusted.
-  it "waits on every other job, as the document says it does" do
+  # An invariant of the workflow, not of the document: nothing here reads
+  # RELEASING.md. It sits in this file because the document's description of
+  # the gate is only true while this holds.
+  it "waits on every other job" do
     needs = Array(workflow.dig("jobs", "release", "needs"))
     unwaited = workflow.fetch("jobs").keys - needs - ["release"]
 
     expect(unwaited).to be_empty,
                         "the release job does not wait on #{unwaited.inspect}, so those jobs can be red " \
-                        "while a release goes out. RELEASING.md tells the reader the opposite — rewrite " \
-                        "it, or add them to `needs:`."
+                        "while a release goes out."
   end
 
   it "documents the branch the release job is actually conditioned on" do

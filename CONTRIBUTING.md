@@ -193,8 +193,8 @@ Every destination below is one you can reach.
 | the documentation site at `ruact.dev` | not in this repository — [open an issue](https://github.com/luizcg/ruact/issues) |
 | roadmap, architecture decisions, design | not in this repository — [open an issue](https://github.com/luizcg/ruact/issues) or a discussion |
 
-**About the Vite plugin.** There is an older, separate `luizcg/vite-plugin-ruact` repository, and an
-`vite-plugin-ruact` package on npm last published in May 2026. Both are **superseded**: nothing in ruact
+**About the Vite plugin.** There is a `vite-plugin-ruact` package on npm, last published in May 2026. It is
+**superseded**: nothing in ruact
 installs them, and the plugin that actually runs is the vendored one in this repository. A pull request
 opened there would land in an artifact nobody uses, so send plugin changes here.
 

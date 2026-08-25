@@ -192,16 +192,18 @@ stays open: any *other* merge in it publishes too, because the variable is globa
 **The tag is on `main` and the gem is not on RubyGems.** The last step commits, tags and pushes *before* it
 uploads, so an upload that fails leaves the bump and the tag behind. Tell it apart from the cache case above by
 asking the remote rather than the API: `git ls-remote --tags` shows `vX.Y.Z` while §6 still shows the previous
-version. **Do not re-run this one** — the re-run starts from the pre-bump commit, recreates a tag that now
-exists, and cannot push. Delete the tag, revert the bump commit, then re-run. Nothing here goes red on its own:
-the record and `version.rb` agree, so the suite stays green while the release is half done.
+version. **Do not re-run this one**: a re-run replays the same commit, so it recreates a tag that now exists
+and cannot push. Delete the tag and revert the bump commit — and let that revert's own push be the next
+attempt, giving it a message that does **not** repeat `[skip ci]`, or it produces no run either. Nothing here
+goes red on its own: the record and `version.rb` agree, so the suite stays green while the release is half
+done.
 
 **Trusted Publishing rejected the run.** Nothing was committed, nothing was tagged and nothing was published —
 this step runs before any of that (§4). Fix the trust configuration and re-run; there is no state to unwind.
 
 **The workflow's push to `main` failed because `main` moved underneath it.** Nothing was published, the bump
-commit went away with the runner, and `lib/ruact/version.rb` on `main` is untouched. Re-run rather than repair
-by hand — the job recomputes everything from the file it reads.
+commit went away with the runner, and `lib/ruact/version.rb` on `main` is untouched. The merge that moved
+`main` runs the job again on its own.
 
 **The suite is red on `main` because the record and the code disagree.** The changelog checks run inside the
 same job the release job waits on, so once `lib/ruact/version.rb` and `CHANGELOG.md` stop agreeing — a version

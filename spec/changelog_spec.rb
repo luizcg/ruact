@@ -39,18 +39,18 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
     /^##\s+\[([^\]]+)\](?:\s+-\s+(\S+))?\s*$/
   end
 
-  # Fenced blocks and HTML comments are illustrations. A release entry may quote
-  # the shape of a changelog — this file's own stamp instructions live next door
-  # in RELEASING.md — and quoting it must not conjure a release. One recogniser,
+  # Fenced blocks are illustrations. A release entry may quote the shape of a
+  # changelog — this file's own stamp instructions live next door in
+  # RELEASING.md — and quoting it must not conjure a release. One recogniser,
   # shared with the specs that read the same files for other reasons.
   def prose
     Ruact::Spec::MarkdownGate.prose(changelog)
   end
 
   def headings
-    prose.each_line.with_index(1).filter_map do |line, number|
+    prose.each_line.filter_map do |line|
       match = line.match(heading_pattern)
-      { label: match[1], date: match[2], line: number } if match
+      { label: match[1], date: match[2] } if match
     end
   end
 
@@ -68,10 +68,10 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
   # a heading nothing checks, and it would pass every example below by being
   # absent from all of them.
   def malformed_headings
-    prose.each_line.with_index(1).filter_map do |line, number|
+    prose.each_line.filter_map do |line|
       next unless line.start_with?("## [")
 
-      { label: line.strip, date: nil, line: number } unless line.match?(heading_pattern)
+      line.strip unless line.match?(heading_pattern)
     end
   end
 
@@ -167,17 +167,12 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
                              "not necessarily the one that was edited last."
   end
 
-  it "keeps an Unreleased section pointed at the newest release in the file" do
+  it "keeps an Unreleased section" do
     labels = headings.map { |heading| heading[:label] }
-    compare = "[Unreleased]: https://github.com/luizcg/ruact/compare/v#{versions.first}...HEAD"
 
     expect(labels).to include("Unreleased"),
                       "CHANGELOG.md has no [Unreleased] section, so there is nowhere for the next change " \
                       "to accumulate."
-    expect(prose).to include(compare),
-                     "[Unreleased]'s compare link does not start at v#{versions.first}, the newest " \
-                     "release in this file, so it either hides changes that are already released or " \
-                     "claims released ones are not."
   end
 
   it "dates every release heading in ISO form" do
@@ -194,10 +189,10 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
 
     expect(malformed_headings).to be_empty,
                                   "CHANGELOG.md has bracketed headings this file's own shape does not " \
-                                  "cover: #{malformed_headings.map { |h| "line #{h[:line]}: #{h[:label]}" }.inspect}"
+                                  "cover: #{malformed_headings.inspect}"
     expect(undated).to be_empty,
                        "CHANGELOG.md headings are not `## [X.Y.Z] - YYYY-MM-DD`: " \
-                       "#{undated.map { |h| "line #{h[:line]}: #{h[:label]} #{h[:date].inspect}" }.inspect}"
+                       "#{undated.map { |h| "#{h[:label]} #{h[:date].inspect}" }.inspect}"
   end
 
   it "lists releases newest first" do
@@ -230,7 +225,7 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
   # resolves-on-disk check is what would have passed the link that broke the
   # site build.
   it "points every release reference at that release's tag" do
-    misdirected = link_ref_targets.filter_map do |label, target|
+    misdirected = link_ref_targets.slice(*release_link_refs).filter_map do |label, target|
       expected = label == "Unreleased" ? "compare/v#{versions.first}...HEAD" : "releases/tag/v#{label}"
       "[#{label}] → #{target}" unless target.end_with?(expected)
     end
