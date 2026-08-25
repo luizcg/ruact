@@ -2,12 +2,12 @@
 
 A release publishes exactly one artifact: the `ruact` gem, to RubyGems.
 
-The Vite plugin is not a second artifact. It ships **inside** the gem at
-`vendor/javascript/vite-plugin-ruact/`, a generated app imports it by filesystem path off the installed gem, and
-its `package.json` carries a deliberate non-version rather than a stale one. There is nothing to co-version and
-nothing to publish alongside. The standalone `vite-plugin-ruact` package on npm is a superseded artifact from
-before the plugin was vendored; no ruact release touches it, and nothing this document describes puts anything
-on npm.
+The Vite plugin is not a second artifact. It ships **inside** the gem, under `vendor/javascript/`, together with
+the browser runtime; a generated app imports the plugin by filesystem path off the installed gem. Neither
+bundled package is published, so neither is co-versioned with anything — whatever version number their
+`package.json` files carry is internal to the gem and is not a release. The standalone `vite-plugin-ruact`
+package on npm is a superseded artifact from before the plugin was vendored; no ruact release touches it, and
+nothing this document describes puts anything on npm.
 
 **The release is performed by GitHub Actions, not by you.** You decide whether a merge publishes and what the
 entry says; the workflow decides the number, writes it, tags it, builds and uploads. That split is the whole of
@@ -40,8 +40,9 @@ backwards-compatible feature is a minor; everything else is a patch.
 You do not write that number anywhere. The `release` job computes it from the current one:
 
 - **patch** by default;
-- **minor** when the merge-commit message contains `[epic-done]`;
-- **major** is not automated — it is a deliberate act and there is no marker for it.
+- **minor** when the message of the commit at the tip of the push contains `[epic-done]`, case-insensitively;
+- **major** is not automated. There is no marker for it, and there is no hand path either: cutting one means
+  changing the workflow's bump logic, which is not something you do from this document.
 
 > ⚠️ **You are stamping a heading for a version that does not exist yet.** The CHANGELOG entry is written in the
 > pull request; the number is computed after the merge. With the default that prediction is right, because a
@@ -111,14 +112,22 @@ do not leave it on while you go and fix something.
 ## 4. Merge
 
 Merge the pull request. On the resulting push to `main`, the `release` job — which waits on every other job in
-the workflow — does all of this and nothing else:
+the workflow — does this, in this order:
 
 1. recomputes the version from `lib/ruact/version.rb` and writes the new one back into that file;
 2. re-resolves `Gemfile.lock` against it, because a bumped version with a stale lock reddens every
    frozen-mode job on the next push;
-3. commits both as `Release vX.Y.Z [skip ci]`, tags `vX.Y.Z`, and pushes the commit and the tag to `main`;
-4. authenticates to RubyGems through Trusted Publishing (OIDC) — a short-lived credential minted for that run,
-   no stored secret and nothing interactive — then builds and uploads the gem.
+3. authenticates to RubyGems through Trusted Publishing (OIDC) — a short-lived credential minted for that run,
+   no stored secret and nothing interactive;
+4. commits the bump as `Release vX.Y.Z [skip ci]`, tags `vX.Y.Z`, pushes the commit and the tag to `main`, then
+   builds and uploads the gem.
+
+**The order of 3 and 4 is the useful part.** Credentials are established *before* anything is committed, so a
+failure there leaves `main` and the tags exactly as they were and the whole run is free to repeat. Only step 4
+writes anything you would have to reason about afterwards.
+
+A merge is not the only thing that reaches step 1: the job runs on **any** push to `main` while publication is
+on. Nothing in this repository prevents a direct one.
 
 **Why the workflow owns the bump.** One writer for `lib/ruact/version.rb` means no pull request can carry a
 stale one and two pull requests cannot claim the same number. Two costs come with it, and both are real: the
@@ -167,6 +176,9 @@ gh run rerun <run-id> --failed
 variable is global.
 
 **The version is on RubyGems but the API still shows the old one.** CDN cache; see §6.
+
+**Trusted Publishing rejected the run.** Nothing was committed, nothing was tagged and nothing was published —
+this step runs before any of that (§4). Fix the trust configuration and re-run; there is no state to unwind.
 
 **The workflow's push to `main` failed because `main` moved underneath it.** Nothing was published, the bump
 commit went away with the runner, and `lib/ruact/version.rb` on `main` is untouched. Re-run rather than repair

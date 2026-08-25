@@ -38,10 +38,6 @@ RSpec.describe "RELEASING.md", :story_5_9 do
   let(:workflow) { YAML.safe_load_file(root.join(".github/workflows/ci.yml").to_s, aliases: true) }
   let(:release_condition) { workflow.dig("jobs", "release", "if").to_s }
 
-  # Two lists are shared with `spec/contributing_spec.rb` and read straight off
-  # `Ruact::Spec::MarkdownGate`, where the rationale for each is written beside
-  # it: PRIVATE_SIDE and ENFORCEMENT_CLAIMS.
-
   # Steps this process does not perform, mapped to what performs them instead.
   # Every one of these was a numbered instruction in the file this replaced.
   let(:hand_steps) do
@@ -53,6 +49,8 @@ RSpec.describe "RELEASING.md", :story_5_9 do
       "gem signin" => "there is no interactive credential to sign in with",
       "git tag" => "the release job tags the commit it just created",
       "VERSION = " => "the release job writes lib/ruact/version.rb; a hand-edited copy is a second writer",
+      /(edit|bump|update|change|set)\s+(the\s+)?[`'"]?\S*version\.rb/i =>
+        "the release job owns lib/ruact/version.rb — telling the reader to write it makes two writers",
       "release/v" => "there is no release branch — a release is a merge to main with the variable on"
     }
   end
@@ -97,12 +95,33 @@ RSpec.describe "RELEASING.md", :story_5_9 do
   # however it spells it — the `gh variable` commands a reader copies and any
   # workflow-expression reference.
   def documented_gates
-    (releasing.scan(/gh variable (?:set|delete)\s+([A-Z0-9_]+)/).flatten +
-     releasing.scan(/(?:vars|secrets)\.([A-Z0-9_]+)/).flatten).uniq
+    (releasing.scan(/gh variable (?:set|delete)(?:\s+-\w+\s+\S+)*\s+([A-Z0-9_]+)/).flatten +
+     releasing.scan(/vars\.([A-Z0-9_]+)/).flatten).uniq.sort
   end
 
   def workflow_gates
-    release_condition.scan(/vars\.([A-Z0-9_]+)/).flatten.uniq
+    release_condition.scan(/vars\.([A-Z0-9_]+)/).flatten.uniq.sort
+  end
+
+  # The comparison, not only the name. `== 'true'` and `!= 'false'` name the
+  # same variable and mean opposite things — under the second, an unset
+  # variable publishes. The document tells the reader to SET the variable to
+  # turn publication on, so the value it writes has to be the value the
+  # workflow tests for, and the test has to be an equality.
+  def gate_comparison
+    release_condition.match(/vars\.[A-Z0-9_]+\s*(==|!=)\s*'([^']*)'/)&.captures
+  end
+
+  def documented_gate_value
+    releasing[/gh variable set\s+[A-Z0-9_]+\s+-b\s+(\S+)/, 1]
+  end
+
+  # Every conjunct of the release job's `if:`, by its left-hand operand. The
+  # document explains three things a reader has to know before believing that a
+  # merge publishes; a fourth conjunct is a gate they have never been told
+  # about.
+  def condition_operands
+    release_condition.split("&&").filter_map { |clause| clause.strip[/\A[A-Za-z_][\w.]*/] }
   end
 
   it "exists and has substance" do
@@ -149,18 +168,61 @@ RSpec.describe "RELEASING.md", :story_5_9 do
                                 "exist, or missing the one that does, publishes by surprise."
   end
 
+  # AC5(4)'s other half: the name alone is not the gate. `== 'true'` and
+  # `!= 'false'` name the same variable and mean opposite things, and the
+  # inversion is a change a later story is expected to make.
+  it "turns the gate on in the sense the workflow tests it" do
+    operator, value = gate_comparison
+
+    expect(operator).to eq("=="),
+                        "the release job tests the gate with #{operator.inspect}, not equality " \
+                        "(#{release_condition.inspect}). RELEASING.md describes setting the variable as " \
+                        "the way to turn publication ON; under an inverted test, setting it turns " \
+                        "publication OFF and an unset variable publishes."
+    expect(documented_gate_value).to eq(value),
+                                     "RELEASING.md tells the reader to set the gate to " \
+                                     "#{documented_gate_value.inspect}; the workflow publishes when it " \
+                                     "is #{value.inspect}. Following the document would not publish."
+  end
+
+  # And nothing else: a path filter, a tag condition or a second variable is a
+  # gate the reader has never been told about, and they would believe a merge
+  # publishes when it does not.
+  it "is gated on nothing the document does not explain" do
+    explained = ["github.event_name", "github.ref", "vars.#{workflow_gates.first}"]
+
+    expect(condition_operands).to match_array(explained),
+                                  "the release job is conditioned on " \
+                                  "#{condition_operands.inspect}; RELEASING.md explains " \
+                                  "#{explained.inspect}. A condition the document does not mention is a " \
+                                  "reason a merge silently does not publish."
+  end
+
+  # The document says the job waits on every other job in the workflow. That is
+  # a claim about a list, so it is read off the list rather than trusted.
+  it "waits on every other job, as the document says it does" do
+    unwaited = workflow.fetch("jobs").keys - workflow.dig("jobs", "release", "needs") - ["release"]
+
+    expect(unwaited).to be_empty,
+                        "the release job does not wait on #{unwaited.inspect}, so those jobs can be red " \
+                        "while a release goes out. RELEASING.md tells the reader the opposite — rewrite " \
+                        "it, or add them to `needs:`."
+  end
+
   it "documents the branch the release job is actually conditioned on" do
     branch = release_condition[%r{refs/heads/(\S+?)'}, 1]
 
     expect(branch).not_to be_nil,
                           "the release job's `if:` no longer names a branch (#{release_condition.inspect})."
-    expect(releasing).to match(/\b#{Regexp.escape(branch)}\b/),
+    expect(releasing).to include("`#{branch}`"),
                          "the release job runs on pushes to #{branch.inspect}, which RELEASING.md never " \
                          "names — so the reader does not know what act publishes."
   end
 
   it "prescribes no step the release process does not perform" do
-    offenders = hand_steps.keys.select { |step| releasing.include?(step) }
+    offenders = hand_steps.keys.select do |step|
+      step.is_a?(Regexp) ? releasing.match?(step) : releasing.include?(step)
+    end
     explanations = offenders.map { |step| "#{step.inspect} — #{hand_steps.fetch(step)}" }
 
     expect(offenders).to be_empty,
@@ -174,7 +236,7 @@ RSpec.describe "RELEASING.md", :story_5_9 do
   # document is republished with every release, so it would be false inside
   # the gem that made it false.
   it "names no concrete version, only the placeholder" do
-    literals = releasing.scan(/\b\d+\.\d+\.(?:\d+|x)\b/).uniq
+    literals = releasing.scan(/(?<![\w.])v?\d+\.\d+\.(?:\d+|x)(?![\w.])/).uniq
 
     expect(literals).to be_empty,
                         "RELEASING.md names concrete versions (#{literals.inspect}). Write X.Y.Z: this " \
@@ -207,6 +269,34 @@ RSpec.describe "RELEASING.md", :story_5_9 do
       expect(got).to eq(want),
                      "the #{name} block in RELEASING.md drifted from the literal this spec pins."
     end
+  end
+
+  it "pins the CHANGELOG templates a maintainer copies" do
+    expected = [
+      <<~MD,
+        ## [Unreleased]
+
+        ## [X.Y.Z] - YYYY-MM-DD
+
+        ### Added
+        ### Changed
+        ### Fixed
+        ### Removed
+      MD
+      <<~MD
+        [Unreleased]: https://github.com/luizcg/ruact/compare/vX.Y.Z...HEAD
+        [X.Y.Z]: https://github.com/luizcg/ruact/releases/tag/vX.Y.Z
+      MD
+    ]
+
+    expect(releasing.scan(/^```markdown[ \t]*\n(.*?)^```/m).flatten).to eq(expected),
+                                                                        "the stamp templates in " \
+                                                                        "RELEASING.md drifted. The " \
+                                                                        "compare line is the literal " \
+                                                                        "spec/changelog_spec.rb asserts; " \
+                                                                        "a maintainer copying a drifted " \
+                                                                        "one reddens the suite on the " \
+                                                                        "push that was meant to release."
   end
 
   it "is reachable from both documents that promise it" do

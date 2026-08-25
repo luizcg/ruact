@@ -3,12 +3,11 @@
 module Ruact
   module Spec
     # Shared vocabulary for the specs that guard this repository's public
-    # markdown — `spec/contributing_spec.rb`, `spec/releasing_spec.rb`.
+    # markdown.
     #
-    # It lives here because the alternative is a second copy of a
-    # forbidden-word list, and two lists that are supposed to say the same
-    # thing and are edited in different files is the same drift bug the
-    # documents themselves have. One list, two readers.
+    # It lives here because the alternative is a copy per gate, and lists that
+    # are supposed to say the same thing but are edited in different files are
+    # the same drift bug the documents themselves have.
     #
     # Each gate still states its own promises in its own examples. Nothing
     # here asserts anything.
@@ -29,7 +28,8 @@ module Ruact
 
       # The false claim these documents are one edit away from making. `main`
       # has no branch protection and no rulesets, so nothing is enforced at
-      # merge time — the honest phrasing is "runs on every pull request".
+      # merge time — the honest phrasing names what the workflow does (it runs)
+      # rather than what it decides (nothing).
       # These are the shapes that would break that. `required` on its own is
       # deliberately NOT among them: the word has an ordinary sense — a tool a
       # step needs — and banning it would cost the documents more than it
@@ -45,8 +45,7 @@ module Ruact
         /branch protection/i
       ].freeze
 
-      # `[text](target)` and `![alt](target)`, inline-title form allowed. Same
-      # recogniser `spec/readme_spec.rb` uses, for the same reason.
+      # `[text](target)` and `![alt](target)`, inline-title form allowed.
       def self.link_targets(markdown)
         markdown.scan(/\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/).flatten
       end
@@ -57,10 +56,13 @@ module Ruact
         targets.reject { |target| target.start_with?("http://", "https://", "#", "mailto:") }
       end
 
-      # ```jsx, ```erb, ```ruby and ```markdown blocks are illustrations, not
-      # commands, and are deliberately out of scope.
+      # Every shell block a reader could copy, however the fence is spelled and
+      # wherever it sits — indented under a list item counts, and so does an
+      # info string after the language. ```jsx, ```erb, ```ruby and ```markdown
+      # blocks are illustrations, not commands, and are deliberately out of
+      # scope.
       def self.bash_blocks(markdown)
-        markdown.scan(/^```bash[ \t]*\n(.*?)^```/m).flatten
+        markdown.scan(/^[ \t]*```(?:bash|sh|shell|console)\b[^\n]*\n(.*?)^[ \t]*```/m).flatten
       end
     end
   end

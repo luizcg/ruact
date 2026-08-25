@@ -179,8 +179,8 @@ RSpec.describe "CONTRIBUTING.md", :story_5_8 do
     expect(offenders).to be_empty,
                          "CONTRIBUTING.md claims a check gates merging (#{offenders.inspect}). This " \
                          "repository's `main` has no branch protection and no rulesets — the workflow's " \
-                         "own \"Required status check\" comments are aspirational. Say \"runs on every " \
-                         "pull request\"."
+                         "own \"Required status check\" comments are aspirational. Say what the " \
+                         "workflow does, not what it decides."
   end
 
   # Not "each pinned block appears somewhere" — that is satisfied by one hidden

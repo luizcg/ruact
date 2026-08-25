@@ -55,8 +55,8 @@ The first install is not decoration: the plugin's test run reaches into the runt
 
 ## Running the checks
 
-These are the jobs in [`.github/workflows/ci.yml`](.github/workflows/ci.yml), which runs on every pull
-request. Running them locally first is the difference between one round and four.
+These are the jobs in [`.github/workflows/ci.yml`](.github/workflows/ci.yml), which runs on every push and
+every pull request. Running them locally first is the difference between one round and four.
 
 <!-- ci-jobs:begin -->
 

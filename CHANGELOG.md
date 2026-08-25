@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   `spec/changelog_spec.rb` is the first check this file has ever had: the current `Ruact::VERSION` has a heading, every heading has a link reference and every reference a heading, `[Unreleased]` starts at the current version, dates are ISO, releases are newest first, no version block opens the same section twice, and no link leaves the repository. Two of those catch bugs that were already here, and one catches a bug that has not happened yet — a merge carrying the minor marker produces a minor while the heading written beforehand predicted a patch.
 
-- **The changelog stopped linking into a repository its readers do not have.** Fifty-four links pointed at story files by relative path outside this repository — dead for anyone reading the file on GitHub, dead inside the packaged gem, and dead on the documentation site the page is generated from. The labels stay as plain text, so the record still says which story did what; only the targets are gone. What is already published stays as it was published.
+- **The changelog stopped linking into a repository its readers do not have.** Fifty-four links pointed at story files by relative path outside this repository — dead for anyone reading the file on GitHub, dead inside the packaged gem, and dead on the documentation site the page is generated from. The labels stay as plain text, so the record still says which story did what; only the targets are gone. The gems already on RubyGems keep the text they shipped with; this file is corrected from here on.
 
 - **`## [0.1.0]` was a release that never happened.** It had no tag, no link reference, nothing on RubyGems, sat below the `0.0.x` entries, and was dated a month before the first publish — while `0.1.0` is the version this project has reserved for a milestone it has not reached. It is now a plainly-labelled section for the work that predates the first published version, content unchanged.
 
@@ -269,6 +269,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Not a release, and deliberately not a version heading. This section records what the
 > project could already do before anything of it was published; the first versions on
 > RubyGems were 0.0.1 and 0.0.2, in April 2026.
+>
+> The entries below are left as they were written, so they describe the plan of the time —
+> including a `vite-plugin-ruact` published to npm and co-versioned with the gem. That never
+> became how ruact ships: the plugin is vendored inside the gem and published nowhere. See
+> [RELEASING.md](RELEASING.md).
 
 ### Added
 
