@@ -79,8 +79,13 @@ RSpec.describe "CONTRIBUTING.md", :story_5_8 do
   # The false claim this document is one edit away from making. `main` has no
   # branch protection and no rulesets, so nothing here is enforced at merge time
   # — the honest phrasing is "runs on every pull request". These are the shapes
-  # that would break that; `required` on its own is not, because a sentence like
-  # "Node is required only for the JavaScript suite" is both true and useful.
+  # that would break that. `required` on its own is deliberately NOT among them:
+  # the word has an ordinary sense — a tool a step needs — and banning it would
+  # cost the document more than it buys. What is banned is the SHAPE that asserts
+  # a merge gate. (This comment used to illustrate the point by quoting a
+  # sentence from the guide; two review rounds later that sentence had gone stale
+  # and the comment was blessing a claim the guide no longer made. Describing the
+  # shape leaves nothing to rot.)
   let(:enforcement_claims) do
     [
       /required[- ](status )?check/i,
