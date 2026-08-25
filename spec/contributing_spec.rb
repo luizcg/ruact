@@ -38,7 +38,8 @@ require "yaml"
 #   - it never claims a check is "required", because none of them is: this
 #     repository's `main` has no branch protection and no rulesets, whatever the
 #     aspirational comments in the workflow say;
-#   - the five command blocks a contributor copies are pinned byte for byte;
+#   - the bash blocks a contributor copies ARE the blocks this spec pins, in
+#     order — no unpinned sixth block, no hidden copy;
 #   - `README.md` links it, so it is reachable from the page GitHub renders.
 #
 # WHAT IT DOES NOT PROMISE
@@ -119,6 +120,9 @@ RSpec.describe "CONTRIBUTING.md", :story_5_8 do
         npm test
         npm run typecheck
       BASH
+      "matrix cell" => <<~BASH,
+        RAILS_VERSION=7.2 bundle install && bundle exec rspec
+      BASH
       # Single-quoted delimiter: `\n`, `%s` and `$RUACT` are literal bytes the
       # reader copies, not things Ruby should expand on the way past.
       "working-tree trial in a real app" => <<~'BASH'
@@ -144,6 +148,12 @@ RSpec.describe "CONTRIBUTING.md", :story_5_8 do
   # on-disk targets are ours.
   def relative(targets)
     targets.reject { |target| target.start_with?("http://", "https://", "#", "mailto:") }
+  end
+
+  # Same recogniser `spec/readme_spec.rb` uses. ```jsx and ```erb blocks are
+  # illustrations, not commands, and are deliberately out of scope.
+  def bash_blocks(markdown)
+    markdown.scan(/^```bash[ \t]*\n(.*?)^```/m).flatten
   end
 
   # The job table is delimited in the document itself, so this reads the list the
@@ -213,21 +223,25 @@ RSpec.describe "CONTRIBUTING.md", :story_5_8 do
                          "pull request\"."
   end
 
-  # Presence alone would be satisfied by a stale second copy sitting anywhere in
-  # the file — including inside an HTML comment — while the block the reader
-  # actually reaches drifts away from it. Counting says the stronger thing: the
-  # pinned bytes are in the document, and there is no other copy for the reader
-  # to be sent to.
-  it "pins the command spine a contributor copies, and pins the only copy of it" do
-    command_spine.each do |name, block|
-      occurrences = contributing.scan("```bash\n#{block}```").length
+  # Not "each pinned block appears somewhere" — that is satisfied by one hidden
+  # exact copy while the block the reader actually reaches says something else.
+  # The statement is the total one: THE bash blocks in this document ARE these
+  # blocks, in this order. A sixth block cannot appear unpinned, a pinned block
+  # cannot be edited, and no copy can hide behind another.
+  it "pins every bash block a contributor could copy, in the order they appear" do
+    actual = bash_blocks(contributing)
+    expected = command_spine.values
 
-      expect(occurrences).to eq(1),
-                             "CONTRIBUTING.md holds #{occurrences} copies of the #{name} block; this spec " \
-                             "pins exactly one. Zero means it drifted from the literal here — these are " \
-                             "commands a contributor copies, so change both or neither, and re-run the " \
-                             "block before you do. More than one means the reader can reach a copy this " \
-                             "gate is not watching."
+    expect(actual.length).to eq(expected.length),
+                             "CONTRIBUTING.md has #{actual.length} ```bash block(s); this spec pins " \
+                             "#{expected.length}. A block a reader can copy and this gate does not watch " \
+                             "is exactly how the commands drift. Pin it or drop it."
+
+    actual.zip(expected, command_spine.keys).each do |got, want, name|
+      expect(got).to eq(want),
+                     "the #{name} block in CONTRIBUTING.md drifted from the literal this spec pins. These " \
+                     "are commands a contributor copies; change both or neither, and re-run the block " \
+                     "before you do."
     end
   end
 

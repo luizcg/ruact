@@ -92,10 +92,11 @@ npm test
 npm run typecheck
 ```
 
-To reproduce one matrix cell — a Rails version other than the default:
+To reproduce one matrix cell other than the default — `RAILS_VERSION` is what the eight `rspec` cells vary,
+and unset means 8.0:
 
 ```bash
-RAILS_VERSION=8.0 bundle install && bundle exec rspec
+RAILS_VERSION=7.2 bundle install && bundle exec rspec
 ```
 
 ## Trying your working tree in a real app
