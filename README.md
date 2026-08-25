@@ -144,6 +144,8 @@ Everything lives at [ruact.dev](https://ruact.dev):
 
 Bug reports and pull requests are welcome at [github.com/luizcg/ruact/issues](https://github.com/luizcg/ruact/issues).
 
+Setup, the checks a PR runs, and how to try your working tree in a real Rails app: [CONTRIBUTING.md](CONTRIBUTING.md).
+
 Release process: [RELEASING.md](RELEASING.md). Security policy and private reporting: [SECURITY.md](SECURITY.md).
 
 ## License
