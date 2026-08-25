@@ -194,16 +194,19 @@ uploads, so an upload that fails leaves the bump and the tag behind. Tell it apa
 asking the remote rather than the API: `git ls-remote --tags` shows `vX.Y.Z` while §6 still shows the previous
 version. **Do not re-run this one**: a re-run replays the same commit, so it recreates a tag that now exists
 and cannot push. Delete the tag and revert the bump commit — and let that revert's own push be the next
-attempt, giving it a message that does **not** repeat `[skip ci]`, or it produces no run either. Nothing here
-goes red on its own: the record and `version.rb` agree, so the suite stays green while the release is half
-done.
+attempt. Its message decides two things: it must **not** repeat `[skip ci]`, or there is no run at all, and it
+must repeat `[epic-done]` if that is what the release you are recovering was — the bump kind is read from the
+commit at the tip of the push (§1), which is now the revert and no longer the merge. Get that wrong and the
+recovery republishes a patch where a minor was intended. Nothing here goes red on its own: the record and
+`version.rb` agree, so the suite stays green while the release is half done.
 
 **Trusted Publishing rejected the run.** Nothing was committed, nothing was tagged and nothing was published —
 this step runs before any of that (§4). Fix the trust configuration and re-run; there is no state to unwind.
 
 **The workflow's push to `main` failed because `main` moved underneath it.** Nothing was published, the bump
 commit went away with the runner, and `lib/ruact/version.rb` on `main` is untouched. The merge that moved
-`main` runs the job again on its own.
+`main` runs the job again on its own — as an ordinary merge, so if the lost release was a minor, say so in
+that merge's message or it comes back as a patch.
 
 **The suite is red on `main` because the record and the code disagree.** The changelog checks run inside the
 same job the release job waits on, so once `lib/ruact/version.rb` and `CHANGELOG.md` stop agreeing — a version

@@ -193,10 +193,9 @@ Every destination below is one you can reach.
 | the documentation site at `ruact.dev` | not in this repository — [open an issue](https://github.com/luizcg/ruact/issues) |
 | roadmap, architecture decisions, design | not in this repository — [open an issue](https://github.com/luizcg/ruact/issues) or a discussion |
 
-**About the Vite plugin.** There is a `vite-plugin-ruact` package on npm, last published in May 2026. It is
-**superseded**: nothing in ruact
-installs them, and the plugin that actually runs is the vendored one in this repository. A pull request
-opened there would land in an artifact nobody uses, so send plugin changes here.
+**About the Vite plugin.** There is a `vite-plugin-ruact` package on npm. It is **superseded**: nothing in
+ruact installs it, and the plugin that actually runs is the vendored one in this repository. Send plugin
+changes here.
 
 ## Where the design work happens
 

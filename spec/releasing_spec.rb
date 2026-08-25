@@ -300,13 +300,8 @@ RSpec.describe "RELEASING.md", :story_5_9 do
                                        .select { |block| block.include?("[X.Y.Z]") }
 
     expect(stamped).to eq(expected),
-                       "the stamp templates in " \
-                       "RELEASING.md drifted. The " \
-                       "compare line is the literal " \
-                       "spec/changelog_spec.rb asserts; " \
-                       "a maintainer copying a drifted " \
-                       "one reddens the suite on the " \
-                       "push that was meant to release."
+                       "the stamp templates in RELEASING.md drifted. A maintainer copying a drifted one " \
+                       "reddens the suite on the push that was meant to release."
   end
 
   it "is reachable from both documents that promise it" do

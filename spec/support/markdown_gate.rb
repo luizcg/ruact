@@ -67,13 +67,19 @@ module Ruact
       #
       # Returns one entry per fence: its info string, the body lines with the
       # opening fence's indent removed, and whether it was ever closed.
+      #
+      # Indentation is deliberately unbounded, where CommonMark stops at three
+      # spaces and calls the fourth an indented code block. Over-inclusive is
+      # the safe side for a gate whose job is that no copyable block escapes:
+      # a block nested in a list item sits at four, renders as a normal block,
+      # and is precisely what a maintainer copies.
       def self.fenced_regions(markdown)
         lines = markdown.lines
         regions = []
         open = nil
 
         lines.each_with_index do |line, index|
-          match = line.match(/\A( {0,3})(`{3,}|~{3,})(.*)\Z/)
+          match = line.match(/\A([ \t]*)(`{3,}|~{3,})(.*)\Z/)
 
           if open.nil?
             next unless match
