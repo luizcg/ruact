@@ -1,1 +1,12 @@
-{"typical_allocations":1623,"heavy_allocations":7764}
+{
+  "typical_allocations": 1792,
+  "heavy_allocations": 8669,
+  "_measured_on": "2026-08-25, Ruby 3.4.5 / Rails 8.1, gem at v0.0.10",
+  "_history": {
+    "2026-04-19": {
+      "typical_allocations": 1623,
+      "heavy_allocations": 7764,
+      "note": "Original baseline, written by the spec's first run at the initial commit. Superseded 2026-08-25: four months of pipeline work (route-driven codegen, contract validation, error suggestion) grew the typical render past the 20% tolerance measured against April's code. The overshoot was cumulative and legitimate, not a regression from any single change; it surfaced as an intermittently red matrix cell because ONE global baseline cannot absorb the ~9% spread between Ruby/Rails combinations (Ruby 3.3 / Rails 7.1 measured ~1958 while Ruby 3.4 / Rails 8.1 measured 1792). Growth since April: typical +10.4%, heavy +11.7%."
+    }
+  }
+}

@@ -1,6 +1,6 @@
 # ruact
 
-**Real React, right in your Rails views.** Write a PascalCase tag in ERB, pass `@post` as a prop, and a React component renders — no hand-written JSON layer, no Node process in production.
+**Real React, right in your Rails views.** Write `<LikeButton likes={@likes} />` in an ERB template and a React component renders, with a Ruby value passed straight in — no hand-written JSON layer, no Node process in production.
 
 [![CI](https://github.com/luizcg/ruact/actions/workflows/ci.yml/badge.svg)](https://github.com/luizcg/ruact/actions/workflows/ci.yml) [![Gem Version](https://badge.fury.io/rb/ruact.svg)](https://badge.fury.io/rb/ruact) [![codecov](https://codecov.io/gh/luizcg/ruact/branch/main/graph/badge.svg?flag=gem)](https://codecov.io/gh/luizcg/ruact)
 
@@ -88,7 +88,7 @@ The verb decides — there is no per-action DSL and no second endpoint. The expo
 
 Every item below is shipped in this gem at v0.0.9:
 
-- **ERB as server components** — `include Ruact::Controller`, then write PascalCase tags in your existing views. [Docs](https://ruact.dev/docs/concepts/erb-as-server-components)
+- **ERB as server components** — `include Ruact::Controller`, then use your components by name in the views you already have: capitalized is React, lowercase stays HTML. [Docs](https://ruact.dev/docs/concepts/erb-as-server-components)
 - **`"use client"`** — the one directive that marks a file as client-side. The bundled Vite plugin scans for it and writes the manifest. [Docs](https://ruact.dev/docs/concepts/use-client)
 - **Server functions and queries** — `include Ruact::Server` and `Ruact::Query` + `useQuery`, both reachable through a typed module generated from your route table. [Docs](https://ruact.dev/docs/api/server-actions)
 - **Props are an allowlist** — `include Ruact::Serializable` + `ruact_props :id, :title`; other columns never cross. [Docs](https://ruact.dev/docs/api/serializable)
