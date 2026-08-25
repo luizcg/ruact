@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-08-25
+
 ### Changed
 
 - **`README.md` — the gem's public face is no longer `bundle gem` boilerplate.** The file GitHub renders on `github.com/luizcg/ruact`, the file `spec.files` packages *inside* the built `.gem`, and the destination of `source_code_uri` still said *"TODO: Delete this and the text below"*, told the reader to `bundle add UPDATE_WITH_YOUR_GEM_NAME_IMMEDIATELY_AFTER_RELEASE_TO_RUBYGEMS_ORG`, and pointed contributors at `https://github.com/[USERNAME]/ruact`. It is now a first-contact README for v0.0.9: the four-command greenfield quick start (the same sequence the site's landing puts on the clipboard), the ERB-tag/`"use client"` pair, `include Ruact::Server` with its generated typed accessor, a list where every bullet names a shipped artifact, a compatibility table sourced from the CI matrix rather than from optimism, and links out to `ruact.dev` instead of second copies of the guides.
@@ -245,7 +247,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI matrix** — GitHub Actions: RSpec across Ruby 3.2 × 3.3 × Rails 7.0 × 7.1 × 7.2 × 8.0; RuboCop; YARD docs; memory benchmark; E2E system tests against React 19.0.0 and 19.x (Capybara + Cuprite); non-blocking React@next job with auto-issue on failure.
 - **E2E test app** — `e2e/` Rails app (no DB, in-memory Post model) with full CRUD system tests validating the complete request cycle.
 
-[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.9...HEAD
+[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.10...HEAD
+[0.0.10]: https://github.com/luizcg/ruact/releases/tag/v0.0.10
 [0.0.9]: https://github.com/luizcg/ruact/releases/tag/v0.0.9
 [0.0.8]: https://github.com/luizcg/ruact/releases/tag/v0.0.8
 [0.0.7]: https://github.com/luizcg/ruact/releases/tag/v0.0.7
