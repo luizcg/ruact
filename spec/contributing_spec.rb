@@ -50,40 +50,11 @@ RSpec.describe "CONTRIBUTING.md", :story_5_8 do
   let(:contributing_path) { root.join("CONTRIBUTING.md") }
   let(:workflow) { YAML.safe_load_file(root.join(".github/workflows/ci.yml").to_s, aliases: true) }
 
-  # Everything that exists only on the private side of this project. A public
-  # guide naming any of these is either leaking structure or sending its reader
-  # somewhere they cannot go — both are the same bug from the reader's chair.
-  let(:private_side) do
-    [
-      /ruact-dev/i,
-      /_bmad-output/i,
-      %r{playgrounds/}i,
-      %r{website/}i,
-      %r{docs/examples/}i,
-      /bmad/i,
-      /sprint-status/i
-    ]
-  end
-
-  # The false claim this document is one edit away from making. `main` has no
-  # branch protection and no rulesets, so nothing here is enforced at merge time
-  # — the honest phrasing is "runs on every pull request". These are the shapes
-  # that would break that. `required` on its own is deliberately NOT among them:
-  # the word has an ordinary sense — a tool a step needs — and banning it would
-  # cost the document more than it buys. What is banned is the SHAPE that asserts
-  # a merge gate. (This comment used to illustrate the point by quoting a
-  # sentence from the guide; two review rounds later that sentence had gone stale
-  # and the comment was blessing a claim the guide no longer made. Describing the
-  # shape leaves nothing to rot.)
-  let(:enforcement_claims) do
-    [
-      /required[- ](status )?check/i,
-      /must pass (before|to merge|for)/i,
-      /cannot be merged/i,
-      /blocked from merging/i,
-      /branch protection/i
-    ]
-  end
+  # Both lists live in `spec/support/markdown_gate.rb`, shared with
+  # `spec/releasing_spec.rb`. The rationale for each is written there, beside
+  # the list, so there is one copy of both.
+  let(:private_side) { Ruact::Spec::MarkdownGate::PRIVATE_SIDE }
+  let(:enforcement_claims) { Ruact::Spec::MarkdownGate::ENFORCEMENT_CLAIMS }
 
   # The command spine, byte for byte. A contributor copies these; a drifted
   # block is a broken promise that only shows up on somebody else's machine.
@@ -132,22 +103,17 @@ RSpec.describe "CONTRIBUTING.md", :story_5_8 do
     }
   end
 
-  # `[text](target)` and `![alt](target)`, inline-title form allowed. Same
-  # recogniser `spec/readme_spec.rb` uses, for the same reason.
+  # Shared recognisers; see `spec/support/markdown_gate.rb`.
   def markdown_link_targets(markdown)
-    markdown.scan(/\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/).flatten
+    Ruact::Spec::MarkdownGate.link_targets(markdown)
   end
 
-  # Absolute URLs, anchors and mailto: links are somebody else's problem;
-  # on-disk targets are ours.
   def relative(targets)
-    targets.reject { |target| target.start_with?("http://", "https://", "#", "mailto:") }
+    Ruact::Spec::MarkdownGate.relative(targets)
   end
 
-  # Same recogniser `spec/readme_spec.rb` uses. ```jsx and ```erb blocks are
-  # illustrations, not commands, and are deliberately out of scope.
   def bash_blocks(markdown)
-    markdown.scan(/^```bash[ \t]*\n(.*?)^```/m).flatten
+    Ruact::Spec::MarkdownGate.bash_blocks(markdown)
   end
 
   # The job table is delimited in the document itself, so this reads the list the
