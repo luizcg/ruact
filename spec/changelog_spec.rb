@@ -39,11 +39,12 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
     /^##\s+\[([^\]]+)\](?:\s+-\s+(\S+))?\s*$/
   end
 
-  # Fenced blocks are illustrations. A release entry may quote the shape of a
-  # changelog — this file's own stamp instructions live next door in
-  # RELEASING.md — and quoting it must not conjure a release.
+  # Fenced blocks and HTML comments are illustrations. A release entry may quote
+  # the shape of a changelog — this file's own stamp instructions live next door
+  # in RELEASING.md — and quoting it must not conjure a release. One recogniser,
+  # shared with the specs that read the same files for other reasons.
   def prose
-    changelog.gsub(/^```.*?^```[^\n]*\n?/m, "")
+    Ruact::Spec::MarkdownGate.prose(changelog)
   end
 
   def headings
@@ -86,6 +87,11 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
     link_refs.select { |label| label == "Unreleased" || label.match?(/\A\d+\.\d+\.\d+\z/) }
   end
 
+  # `[label]: target`, as pairs.
+  def link_ref_targets
+    prose.scan(/^\[([^\]]+)\]:\s+(\S+)/).to_h
+  end
+
   # The `###` sections inside each `##` block, as pairs rather than a Hash:
   # keying on the heading text would let a duplicated block overwrite the one
   # before it and take its sections out of scope — which is exactly the damage
@@ -102,6 +108,9 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
 
   # The numbers the release job can produce from `version`: patch, minor, major.
   def successors_of(version)
+    raise "Ruact::VERSION is #{version.inspect}; this gate assumes X.Y.Z, which is all the release job emits" \
+      unless version.match?(/\A\d+\.\d+\.\d+\z/)
+
     major, minor, patch = semver(version)
     ["#{major}.#{minor}.#{patch + 1}", "#{major}.#{minor + 1}.0", "#{major + 1}.0.0"]
   end
@@ -220,8 +229,32 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
   # one. This is total rather than a resolves-on-disk check, because a
   # resolves-on-disk check is what would have passed the link that broke the
   # site build.
+  it "points every release reference at that release's tag" do
+    misdirected = link_ref_targets.filter_map do |label, target|
+      expected = label == "Unreleased" ? "compare/v#{versions.first}...HEAD" : "releases/tag/v#{label}"
+      "[#{label}] → #{target}" unless target.end_with?(expected)
+    end
+
+    expect(misdirected).to be_empty,
+                           "CHANGELOG.md release references point somewhere other than their own release " \
+                           "(#{misdirected.inspect}). A reference whose label and target disagree is the " \
+                           "re-stamp seam: the heading is right, the link is a release old, and both halves " \
+                           "look fine on their own."
+  end
+
+  it "closes every fence it opens" do
+    open = Ruact::Spec::MarkdownGate.fences_left_open(changelog)
+
+    expect(open).to be_empty,
+                    "CHANGELOG.md leaves a fenced block open at line " \
+                    "#{open.map { |region| region[:first] + 1 }.inspect}. Everything after it reads as " \
+                    "code, so headings, links and sections below are invisible to every check here."
+  end
+
   it "carries no relative link, because its readers are not all in this repository" do
-    targets = Ruact::Spec::MarkdownGate.relative(Ruact::Spec::MarkdownGate.link_targets(prose))
+    targets = Ruact::Spec::MarkdownGate.relative(
+      Ruact::Spec::MarkdownGate.link_targets(prose) + link_ref_targets.values
+    )
 
     expect(targets).to be_empty,
                        "CHANGELOG.md links relative targets (#{targets.uniq.first(3).inspect}, " \
@@ -233,7 +266,7 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
   # Stripping the target is the treatment this file's private links got. The
   # path can come back as prose or as a code span, which no link check sees.
   it "does not name the private side at all" do
-    offenders = [/_bmad-output/i, /ruact-dev/i].filter_map do |pattern|
+    offenders = Ruact::Spec::MarkdownGate::PRIVATE_SIDE.filter_map do |pattern|
       pattern.source if changelog.match?(pattern)
     end
 

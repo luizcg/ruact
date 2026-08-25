@@ -38,7 +38,7 @@ RSpec.describe "RELEASING.md", :story_5_9 do
   let(:root) { Pathname.new(File.expand_path("..", __dir__)) }
   let(:releasing_path) { root.join("RELEASING.md") }
   let(:workflow) { YAML.safe_load_file(root.join(".github/workflows/ci.yml").to_s, aliases: true) }
-  let(:release_condition) { workflow.dig("jobs", "release", "if").to_s }
+  let(:release_condition) { workflow.dig("jobs", "release", "if").to_s.sub(/\A\s*\$\{\{/, "").sub(/\}\}\s*\z/, "") }
 
   # Steps this process does not perform, mapped to what performs them instead.
   # Every one of these was a numbered instruction in the file this replaced.
@@ -51,7 +51,7 @@ RSpec.describe "RELEASING.md", :story_5_9 do
       "gem signin" => "there is no interactive credential to sign in with",
       "git tag" => "the release job tags the commit it just created",
       "VERSION = " => "the release job writes lib/ruact/version.rb; a hand-edited copy is a second writer",
-      /(edit|bump|update|change|set)\s+(the\s+)?[`'"]?\S*version\.rb/i =>
+      /(^|[-*.]\s|\byou\s)(edit|bump|update|change|set)\s+(the\s+)?[`'"]?\S*version\.rb/i =>
         "the release job owns lib/ruact/version.rb — telling the reader to write it makes two writers",
       "release/v" => "there is no release branch — a release is a merge to main with the variable on"
     }
@@ -62,6 +62,9 @@ RSpec.describe "RELEASING.md", :story_5_9 do
   # block here costs a version nobody asked for.
   let(:command_spine) do
     {
+      "ask what the gate is set to" => <<~BASH,
+        gh variable list -R luizcg/ruact
+      BASH
       "turn publication on" => <<~BASH,
         gh variable set RUACT_AUTO_RELEASE -b true -R luizcg/ruact
       BASH
@@ -191,7 +194,7 @@ RSpec.describe "RELEASING.md", :story_5_9 do
   # gate the reader has never been told about, and they would believe a merge
   # publishes when it does not.
   it "is gated on nothing the document does not explain" do
-    explained = ["github.event_name", "github.ref", "vars.#{workflow_gates.first}"]
+    explained = ["github.event_name", "github.ref", *workflow_gates.map { |name| "vars.#{name}" }]
 
     expect(condition_operands).to match_array(explained),
                                   "the release job is conditioned on " \
@@ -217,9 +220,11 @@ RSpec.describe "RELEASING.md", :story_5_9 do
 
     expect(branch).not_to be_nil,
                           "the release job's `if:` no longer names a branch (#{release_condition.inspect})."
-    expect(releasing).to include("`#{branch}`"),
-                         "the release job runs on pushes to #{branch.inspect}, which RELEASING.md never " \
-                         "names — so the reader does not know what act publishes."
+    expect(releasing).to include("push to `#{branch}`"),
+                         "the release job runs on pushes to #{branch.inspect}, and RELEASING.md never " \
+                         "says so in those words. Naming the branch somewhere in the file is not enough — " \
+                         "this one spans `release` five times as the job's name — so what is asserted is " \
+                         "the sentence the reader acts on: \"push to `#{branch}`\"."
   end
 
   it "prescribes no step the release process does not perform" do
@@ -239,7 +244,7 @@ RSpec.describe "RELEASING.md", :story_5_9 do
   # document is republished with every release, so it would be false inside
   # the gem that made it false.
   it "names no concrete version, only the placeholder" do
-    literals = releasing.scan(/(?<![\w.])v?\d+\.\d+\.(?:\d+|x)(?![\w.])/).uniq
+    literals = releasing.scan(/(?<![\w.])v?\d+\.\d+\.(?:\d+|x)\b/).uniq
 
     expect(literals).to be_empty,
                         "RELEASING.md names concrete versions (#{literals.inspect}). Write X.Y.Z: this " \
@@ -292,14 +297,17 @@ RSpec.describe "RELEASING.md", :story_5_9 do
       MD
     ]
 
-    expect(releasing.scan(/^```markdown[ \t]*\n(.*?)^```/m).flatten).to eq(expected),
-                                                                        "the stamp templates in " \
-                                                                        "RELEASING.md drifted. The " \
-                                                                        "compare line is the literal " \
-                                                                        "spec/changelog_spec.rb asserts; " \
-                                                                        "a maintainer copying a drifted " \
-                                                                        "one reddens the suite on the " \
-                                                                        "push that was meant to release."
+    stamped = Ruact::Spec::MarkdownGate.markdown_blocks(releasing)
+                                       .select { |block| block.include?("[X.Y.Z]") }
+
+    expect(stamped).to eq(expected),
+                       "the stamp templates in " \
+                       "RELEASING.md drifted. The " \
+                       "compare line is the literal " \
+                       "spec/changelog_spec.rb asserts; " \
+                       "a maintainer copying a drifted " \
+                       "one reddens the suite on the " \
+                       "push that was meant to release."
   end
 
   it "is reachable from both documents that promise it" do

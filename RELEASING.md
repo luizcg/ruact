@@ -59,10 +59,11 @@ pull request that stamps the CHANGELOG; nothing checks it.
 
 ## 2. Stamp the CHANGELOG
 
-[CHANGELOG.md](CHANGELOG.md) is the release record and it is also the source of the changelog page on the
-website, which is generated from it. Write every entry for a reader who has this repository and nothing else:
-no path that resolves only somewhere private, and no link that leaves the repository except to a URL a stranger
-can open.
+[CHANGELOG.md](CHANGELOG.md) is the release record. It is also packaged inside the gem, and it is the source
+of the changelog page on the website, which is generated from it verbatim. Those three readers share no
+directory, so an entry may name a file but must not **link** one relatively — `[CONTRIBUTING.md](CONTRIBUTING.md)`
+resolves here and 404s in the other two. Absolute URLs only, or no link at all. And no path that exists only on
+the private side, whether it is a link or plain text.
 
 In the pull request, move the accumulated `[Unreleased]` content under a dated heading, open a fresh empty
 `[Unreleased]` above it, and update the link-reference footer at the bottom of the file:
@@ -95,7 +96,14 @@ not care and neither should the document.
 
 ## 3. Turn publication on
 
-Publication is off. The `release` job runs only when a repository variable is exactly `true`:
+Publication is off. The `release` job runs only when a repository variable is exactly `true`. Ask first — this
+is a global switch and the answer is not always what you left it at:
+
+```bash
+gh variable list -R luizcg/ruact
+```
+
+Empty means off. Then:
 
 ```bash
 gh variable set RUACT_AUTO_RELEASE -b true -R luizcg/ruact
@@ -143,7 +151,11 @@ gh variable delete RUACT_AUTO_RELEASE -R luizcg/ruact
 ```
 
 **This is the step that is dangerous to forget**, and forgetting it is silent — the next merge, days later and
-by someone else, publishes a version nobody asked for. Do it as soon as the run finishes, before you verify.
+by someone else, publishes a version nobody asked for. Do it as soon as the run has **published**, before you
+verify.
+
+If the run went red instead, leave the variable on and go to §7: the re-run reads it again, so deleting it now
+means the second attempt is skipped too, for the same invisible reason as the first.
 
 ---
 
@@ -172,10 +184,17 @@ gh run list --branch main -L 3
 gh run rerun <run-id> --failed
 ```
 
-**While you are re-running, publication is still on.** Any other merge in that window publishes. See §3 — the
-variable is global.
+**Leave the gate on until the re-run publishes** — it is re-read on every attempt. The cost is that the window
+stays open: any *other* merge in it publishes too, because the variable is global (§3). Serialise.
 
 **The version is on RubyGems but the API still shows the old one.** CDN cache; see §6.
+
+**The tag is on `main` and the gem is not on RubyGems.** The last step commits, tags and pushes *before* it
+uploads, so an upload that fails leaves the bump and the tag behind. Tell it apart from the cache case above by
+asking the remote rather than the API: `git ls-remote --tags` shows `vX.Y.Z` while §6 still shows the previous
+version. **Do not re-run this one** — the re-run starts from the pre-bump commit, recreates a tag that now
+exists, and cannot push. Delete the tag, revert the bump commit, then re-run. Nothing here goes red on its own:
+the record and `version.rb` agree, so the suite stays green while the release is half done.
 
 **Trusted Publishing rejected the run.** Nothing was committed, nothing was tagged and nothing was published —
 this step runs before any of that (§4). Fix the trust configuration and re-run; there is no state to unwind.

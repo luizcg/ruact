@@ -56,13 +56,82 @@ module Ruact
         targets.reject { |target| target.start_with?("http://", "https://", "#", "mailto:") }
       end
 
+      # One definition of what a fence is, because two recognisers that disagree
+      # about it disagree about what is code and what is prose — and a gate
+      # reading one while its neighbour reads the other is how a block ends up
+      # pinned by nobody. Follows CommonMark on the three things a regex gets
+      # wrong: the closing run must be at least as long as the opening one (so
+      # a ````four-backtick block can contain a ```three-backtick one), tildes
+      # fence too, and an unterminated fence runs to the end of the document
+      # rather than pairing with the next opening fence it happens to meet.
+      #
+      # Returns one entry per fence: its info string, the body lines with the
+      # opening fence's indent removed, and whether it was ever closed.
+      def self.fenced_regions(markdown)
+        lines = markdown.lines
+        regions = []
+        open = nil
+
+        lines.each_with_index do |line, index|
+          match = line.match(/\A([ \t]*)(`{3,}|~{3,})(.*)\Z/)
+
+          if open.nil?
+            next unless match
+
+            open = { indent: match[1], marker: match[2], info: match[3].strip, first: index }
+          elsif closing?(match, open)
+            regions << open.merge(last: index, closed: true)
+            open = nil
+          end
+        end
+        regions << open.merge(last: lines.length, closed: false) if open
+
+        regions.each { |region| region[:body] = body_of(lines, region) }
+      end
+
+      # A closing fence is the same character, at least as long, and carries no
+      # info string of its own.
+      def self.closing?(match, open)
+        return false unless match
+
+        match[2][0] == open[:marker][0] && match[2].length >= open[:marker].length && match[3].strip.empty?
+      end
+      private_class_method :closing?
+
+      def self.body_of(lines, region)
+        lines[(region[:first] + 1)...region[:last]].to_a.map { |line| line.sub(/\A#{region[:indent]}/, "") }.join
+      end
+      private_class_method :body_of
+
+      # The document with every fenced block removed. What is left is prose —
+      # the part where a heading is a heading and a link is a link.
+      def self.prose(markdown)
+        fenced = fenced_regions(markdown).flat_map { |region| (region[:first]..region[:last]).to_a }
+        kept = markdown.lines.each_with_index.reject { |_, index| fenced.include?(index) }
+
+        kept.map(&:first).join.gsub(/<!--.*?-->/m, "")
+      end
+
+      def self.fences_left_open(markdown)
+        fenced_regions(markdown).reject { |region| region[:closed] }
+      end
+
+      # Blocks whose info string starts with one of `languages`.
+      def self.code_blocks(markdown, *languages)
+        fenced_regions(markdown).filter_map do |region|
+          region[:body] if languages.include?(region[:info][/\A\S+/])
+        end
+      end
+
       # Every shell block a reader could copy, however the fence is spelled and
-      # wherever it sits — indented under a list item counts, and so does an
-      # info string after the language. ```jsx, ```erb, ```ruby and ```markdown
-      # blocks are illustrations, not commands, and are deliberately out of
-      # scope.
+      # wherever it sits. ```jsx, ```erb and ```ruby blocks are illustrations,
+      # not commands, and are deliberately out of scope.
       def self.bash_blocks(markdown)
-        markdown.scan(/^[ \t]*```(?:bash|sh|shell|console)\b[^\n]*\n(.*?)^[ \t]*```/m).flatten
+        code_blocks(markdown, "bash", "sh", "shell", "console")
+      end
+
+      def self.markdown_blocks(markdown)
+        code_blocks(markdown, "markdown", "md")
       end
     end
   end
