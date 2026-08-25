@@ -206,22 +206,21 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
                          "a section that is already there."
   end
 
-  it "links nothing the reader cannot reach" do
+  # Three readers see this file from three different places: the repository
+  # page, a `.gem` unpacked on somebody's disk, and a generated page on the
+  # documentation site. No relative target resolves in all three — one that
+  # works here 404s there — so the only link that is not a trap is an absolute
+  # one. This is total rather than a resolves-on-disk check, because a
+  # resolves-on-disk check is what would have passed the link that broke the
+  # site build.
+  it "carries no relative link, because its readers are not all in this repository" do
     targets = Ruact::Spec::MarkdownGate.relative(Ruact::Spec::MarkdownGate.link_targets(prose))
-    escaping = targets.reject do |target|
-      resolved = File.expand_path(target.split("#").first.to_s, root.to_s)
-      resolved == root.to_s || resolved.start_with?("#{root}/")
-    end
-    missing = (targets - escaping).reject { |target| root.join(target.split("#").first.to_s).exist? }
 
-    expect(escaping).to be_empty,
-                        "CHANGELOG.md links out of this repository (#{escaping.uniq.first(3).inspect}, " \
-                        "#{escaping.length} in total). This file is packaged inside every published gem " \
-                        "and mirrored onto the documentation site; a target that resolves only in a " \
-                        "checkout the reader does not have is a dead link everywhere it is read. Keep " \
-                        "the label, drop the target — or link something a stranger can open."
-    expect(missing).to be_empty,
-                       "CHANGELOG.md links files that do not exist in this repository: #{missing.inspect}"
+    expect(targets).to be_empty,
+                       "CHANGELOG.md links relative targets (#{targets.uniq.first(3).inspect}, " \
+                       "#{targets.length} in total). Whatever they resolve to here, they do not resolve " \
+                       "for a reader who unpacked the gem or who is on ruact.dev, where this file is " \
+                       "republished verbatim. Use an absolute URL, or name the file without linking it."
   end
 
   # Stripping the target is the treatment this file's private links got. The

@@ -273,7 +273,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > The entries below are left as they were written, so they describe the plan of the time —
 > including a `vite-plugin-ruact` published to npm and co-versioned with the gem. That never
 > became how ruact ships: the plugin is vendored inside the gem and published nowhere. See
-> [RELEASING.md](RELEASING.md).
+> `RELEASING.md` for the release this project actually performs.
 
 ### Added
 
