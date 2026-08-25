@@ -205,8 +205,7 @@ this step runs before any of that (§4). Fix the trust configuration and re-run;
 
 **The workflow's push to `main` failed because `main` moved underneath it.** Nothing was published, the bump
 commit went away with the runner, and `lib/ruact/version.rb` on `main` is untouched. The merge that moved
-`main` runs the job again on its own — as an ordinary merge, so if the lost release was a minor, say so in
-that merge's message or it comes back as a patch.
+`main` runs the job again on its own — as an ordinary merge, so a lost minor comes back as a patch.
 
 **The suite is red on `main` because the record and the code disagree.** The changelog checks run inside the
 same job the release job waits on, so once `lib/ruact/version.rb` and `CHANGELOG.md` stop agreeing — a version
