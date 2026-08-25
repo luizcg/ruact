@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The README no longer claims props are an allowlist.** It said *"Props are an allowlist — other columns never cross"*, describing the opt-in rather than the default. The default is `as_json`: every attribute of a model prop crosses to the client, and the gem says so in the log (`ALL attributes exposed to client`). A reader who took the bullet at face value would have believed the safe behaviour was already on. The bullet now leads with what actually happens, then names `ruact_props` as the thing that makes it an allowlist and `strict_serialization` as what turns the permissive path into an error in production.
+- **The server-functions bullet no longer calls the whole generated module "typed".** Only queries carry an exact signature (one property per declared keyword, since 0.0.5). An action's accessor is typed to be callable and to satisfy `<form action>`, but its arguments and resolved value are `Record<string, unknown>` and `unknown` — useful, and not the autocomplete the word "typed" promises. Both are now described as what they are.
+- **The mechanism is stated where the reader meets it.** "Capitalized tag means React. Lowercase stays HTML." now sits directly under the ERB/TSX pair, and the paragraph that follows explains the wire in plain terms — the view renders server-side as it always did, the result travels as a React tree in the format React uses for Server Components, the data is inlined so React renders without a fetch, and Node builds the bundle and does nothing else.
+
+### Added
+
+- **A "Where ruact fits" section — including where it does not.** The README described what ruact does without once naming what it cannot do. It now says plainly that pages needing to render without JavaScript, or content search engines must read out of the HTML, are not a fit: ruact renders client-side from an inlined payload and there is no server-rendered HTML for the React tree. The honest alternative is named rather than implied — keep that page in ERB, which coexists per-view in the same app, or use something that server-renders.
+
 ## [0.0.11] - 2026-08-25
 
 ### Changed
