@@ -23,9 +23,11 @@ require "pathname"
 #
 #   That an entry is accurate, complete, or written for anybody in particular.
 #
-#   Nor anything about content inside fenced code blocks, which is stripped
-#   before parsing. An entry is allowed to *show* a changelog heading as an
-#   example without that example being read as a release.
+#   Nor that a fenced code block is well-formed. Fences are stripped before the
+#   structure is parsed, so an entry may *show* a changelog heading as an
+#   example without that example being read as a release. The private-path
+#   check is the deliberate exception: it reads the whole file, because a path
+#   shipped inside a code span is still shipped.
 RSpec.describe "CHANGELOG.md", :story_5_9 do
   subject(:changelog) { changelog_path.read }
 
@@ -145,7 +147,7 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
   # both are invisible to a set difference, and the second definition of a
   # reference is the one Markdown throws away.
   it "says each release exactly once" do
-    repeated_headings = versions.tally.select { |_, count| count > 1 }.keys
+    repeated_headings = headings.map { |heading| heading[:label] }.tally.select { |_, count| count > 1 }.keys
     repeated_refs = link_refs.tally.select { |_, count| count > 1 }.keys
 
     expect(repeated_headings).to be_empty,
@@ -163,17 +165,22 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
     expect(labels).to include("Unreleased"),
                       "CHANGELOG.md has no [Unreleased] section, so there is nowhere for the next change " \
                       "to accumulate."
-    expect(changelog).to include(compare),
-                         "[Unreleased]'s compare link does not start at v#{versions.first}, the newest " \
-                         "release in this file, so it either hides changes that are already released or " \
-                         "claims released ones are not."
+    expect(prose).to include(compare),
+                     "[Unreleased]'s compare link does not start at v#{versions.first}, the newest " \
+                     "release in this file, so it either hides changes that are already released or " \
+                     "claims released ones are not."
   end
 
   it "dates every release heading in ISO form" do
     undated = version_headings.reject do |heading|
-      Date.iso8601(heading[:date].to_s)
-    rescue ArgumentError, TypeError
-      false
+      date = heading[:date].to_s
+      next false unless date.match?(/\A\d{4}-\d{2}-\d{2}\z/)
+
+      begin
+        Date.iso8601(date)
+      rescue ArgumentError, TypeError
+        false
+      end
     end
 
     expect(malformed_headings).to be_empty,

@@ -16,10 +16,12 @@ require "yaml"
 # the same work. Following it end to end would have hand-edited a file CI
 # rewrites and hand-published a version CI had already published.
 #
-# So the statements here are derived from artifacts that cannot drift
-# independently of what they describe — the workflow for the trigger, this
-# repository's own files for the links — rather than from a word-presence grep,
-# which a false document passes as easily as a true one.
+# So the claims that can be derived are derived, from artifacts that cannot
+# drift independently of what they describe: the workflow for the trigger and
+# the gate, this repository's own files for the links. The rest are absences —
+# a step nobody performs, a version literal, a merge-gate claim — which is the
+# weaker kind of statement and is used only where there is nothing to derive
+# from.
 #
 # WHAT IT DOES NOT PROMISE
 #
@@ -121,7 +123,7 @@ RSpec.describe "RELEASING.md", :story_5_9 do
   # merge publishes; a fourth conjunct is a gate they have never been told
   # about.
   def condition_operands
-    release_condition.split("&&").filter_map { |clause| clause.strip[/\A[A-Za-z_][\w.]*/] }
+    release_condition.split("&&").map { |clause| clause.strip[/\A[A-Za-z_][\w.]*/] || clause.strip }
   end
 
   it "exists and has substance" do
@@ -201,7 +203,8 @@ RSpec.describe "RELEASING.md", :story_5_9 do
   # The document says the job waits on every other job in the workflow. That is
   # a claim about a list, so it is read off the list rather than trusted.
   it "waits on every other job, as the document says it does" do
-    unwaited = workflow.fetch("jobs").keys - workflow.dig("jobs", "release", "needs") - ["release"]
+    needs = Array(workflow.dig("jobs", "release", "needs"))
+    unwaited = workflow.fetch("jobs").keys - needs - ["release"]
 
     expect(unwaited).to be_empty,
                         "the release job does not wait on #{unwaited.inspect}, so those jobs can be red " \

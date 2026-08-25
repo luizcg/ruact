@@ -37,7 +37,7 @@ SemVer, against the public API: a breaking change to what consumers call (a rena
 signature, a removed configuration option, an incompatible change to the Flight wire format) is a major; a
 backwards-compatible feature is a minor; everything else is a patch.
 
-You do not write that number anywhere. The `release` job computes it from the current one:
+You never write that number into `lib/ruact/version.rb`. The `release` job computes it from the current one:
 
 - **patch** by default;
 - **minor** when the message of the commit at the tip of the push contains `[epic-done]`, case-insensitively;
@@ -122,12 +122,12 @@ the workflow — does this, in this order:
 4. commits the bump as `Release vX.Y.Z [skip ci]`, tags `vX.Y.Z`, pushes the commit and the tag to `main`, then
    builds and uploads the gem.
 
-**The order of 3 and 4 is the useful part.** Credentials are established *before* anything is committed, so a
-failure there leaves `main` and the tags exactly as they were and the whole run is free to repeat. Only step 4
-writes anything you would have to reason about afterwards.
+**Credentials come before anything is committed**, and that is the useful part: a failure there leaves `main`
+and the tags exactly as they were, and the whole run is free to repeat. Only the last step writes anything you
+would have to reason about afterwards.
 
-A merge is not the only thing that reaches step 1: the job runs on **any** push to `main` while publication is
-on. Nothing in this repository prevents a direct one.
+A merge is not the only thing that starts this. The job runs on **any** push to `main` while publication is on,
+and nothing in this repository prevents a direct one.
 
 **Why the workflow owns the bump.** One writer for `lib/ruact/version.rb` means no pull request can carry a
 stale one and two pull requests cannot claim the same number. Two costs come with it, and both are real: the
@@ -184,6 +184,12 @@ this step runs before any of that (§4). Fix the trust configuration and re-run;
 commit went away with the runner, and `lib/ruact/version.rb` on `main` is untouched. Re-run rather than repair
 by hand — the job recomputes everything from the file it reads.
 
+**The suite is red on `main` because the record and the code disagree.** The changelog checks run inside the
+same job the release job waits on, so once `lib/ruact/version.rb` and `CHANGELOG.md` stop agreeing — a version
+published without its entry, or an entry stamped for a number the job did not produce — **every** later release
+is skipped too, not just this one. The failure names which of the two moved. Stamp the missing heading and its
+link reference, or correct the one that predicted wrong; nothing else unblocks it.
+
 **A release was prepared and should not go out.** Un-stamp before it merges: return the content to
 `[Unreleased]`, delete the version heading and its link reference, and point `[Unreleased]`'s compare link back
 at the current version. Consolidate the sections you moved back — this is the path that leaves a duplicate
@@ -198,6 +204,11 @@ If a published version has a critical defect:
 ```bash
 gem yank ruact -v X.Y.Z
 ```
+
+This is the one RubyGems command still run by a person rather than by the workflow, and it is the one place the
+"nothing interactive" of §4 does not apply: the gem declares `rubygems_mfa_required`, so yanking needs your own
+RubyGems credential and a one-time code. The workflow's OIDC credential is minted for its own run and is no
+help here.
 
 Then cut a patch release with the fix immediately. A yanked version with no replacement leaves anyone who
 pinned it with nothing to move to. There is nothing to unpublish anywhere else — this process publishes to
