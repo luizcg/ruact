@@ -79,8 +79,8 @@ RSpec.describe "CONTRIBUTING.md", :story_5_8 do
   # The false claim this document is one edit away from making. `main` has no
   # branch protection and no rulesets, so nothing here is enforced at merge time
   # — the honest phrasing is "runs on every pull request". These are the shapes
-  # that would break that; `required` on its own is not, because "Rails is not
-  # required to run the suite" is both true and useful.
+  # that would break that; `required` on its own is not, because a sentence like
+  # "Node is required only for the JavaScript suite" is both true and useful.
   let(:enforcement_claims) do
     [
       /required[- ](status )?check/i,
