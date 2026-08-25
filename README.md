@@ -58,7 +58,9 @@ export function PostCard({ post, author }) {
 }
 ```
 
-Rails serializes `@post` and `@author` as Ruby values, sends the component tree as a [Flight](https://ruact.dev/docs/concepts/flight-wire-format) payload, and React hydrates it in the browser. No JSON ceremony, no duplicate routes, no Node.js in production.
+Capitalized tag means React. Lowercase stays HTML. `"use client"` is the only directive you need to learn.
+
+Your ERB view renders on the server the way it always did, and ruact sends the result to the browser as a React tree — in the same [wire format](https://ruact.dev/docs/concepts/flight-wire-format) React uses for Server Components, implemented in Ruby. The data the view needs is inlined in the page, so React renders immediately, without a fetch. Node builds the bundle with Vite and is needed nowhere else.
 
 ## Call Rails from React
 
@@ -86,12 +88,12 @@ The verb decides — there is no per-action DSL and no second endpoint. The expo
 
 ## What you get
 
-Every item below is shipped in this gem at v0.0.9:
+Every item below is shipped in this gem at v0.0.11:
 
 - **ERB as server components** — `include Ruact::Controller`, then use your components by name in the views you already have: capitalized is React, lowercase stays HTML. [Docs](https://ruact.dev/docs/concepts/erb-as-server-components)
 - **`"use client"`** — the one directive that marks a file as client-side. The bundled Vite plugin scans for it and writes the manifest. [Docs](https://ruact.dev/docs/concepts/use-client)
-- **Server functions and queries** — `include Ruact::Server` and `Ruact::Query` + `useQuery`, both reachable through a typed module generated from your route table. [Docs](https://ruact.dev/docs/api/server-actions)
-- **Props are an allowlist** — `include Ruact::Serializable` + `ruact_props :id, :title`; other columns never cross. [Docs](https://ruact.dev/docs/api/serializable)
+- **Server functions and queries** — `include Ruact::Server` and `Ruact::Query` + `useQuery`, both reachable through a module generated from your route table. A query's declared keywords become an exact TypeScript signature; an action's accessor is typed to accept an object or a `FormData` and resolve whatever the action answers. [Docs](https://ruact.dev/docs/api/server-actions)
+- **An opt-in allowlist for props** — by default a model prop is serialized with `as_json`, so every attribute crosses and the log says so. `include Ruact::Serializable` + `ruact_props :id, :title` makes it an allowlist, and `strict_serialization` (on in production) turns the permissive path into an error rather than a warning. [Docs](https://ruact.dev/docs/api/serializable)
 - **Validation errors round-trip** — `ruact_errors(record)` hands React `{ title: ["can't be blank"] }` without a serializer. [Docs](https://ruact.dev/docs/api/server-actions)
 - **Signed record references** — `Ruact.signed_global_id(record, for:, expires_in:)` out, `Ruact.locate_signed(token, for:)` back in; a tampered token is a `400`, not a lookup. [Docs](https://ruact.dev/docs/api/server-actions)
 - **Client-side navigation** — link interception, scroll restoration and redirect-after-POST, derived from your Rails routes. [Docs](https://ruact.dev/docs/concepts/navigation)
@@ -111,6 +113,12 @@ Every item below is shipped in this gem at v0.0.9:
 That is the whole adaptation, and it holds for any tool that outputs standard React components — nothing here is pinned to one vendor. The worked example, the traps and the real error messages are on [AI Tools & Agents](https://ruact.dev/docs/guides/ai-tools).
 
 For agents driving the app rather than writing one component: `rails generate ruact:install` writes an `AGENTS.md` into your app, [ruact.dev/llms.txt](https://ruact.dev/llms.txt) serves the same context to tools that fetch from the web, and `bin/rails ruact:doctor -- --json` / `bin/rails ruact:routes -- --json` emit machine-readable output (experimental — `schema_version: 0`, and the `--` separator is required).
+
+## Where ruact fits
+
+**A good fit:** a Rails monolith that needs real React on real screens — dashboards, editors, admin tools, anything with interaction that ERB alone makes painful — with one team shipping both sides and no appetite for a second application to keep in sync.
+
+**Not a fit yet:** pages that must render without JavaScript, or content search engines need to read out of the HTML. ruact renders client-side from a payload inlined in the page; there is no server-rendered HTML for the React tree. That is a real gap, not a roadmap wink — if the page is your SEO surface, keep it in ERB (the two coexist in the same app, per-view) or use something that server-renders.
 
 ## Compatibility
 
