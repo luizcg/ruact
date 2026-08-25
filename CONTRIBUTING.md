@@ -166,13 +166,16 @@ Most of CI fails where you expect. These four do not, so they are worth knowing 
    When it fails, read the header comment at the top of that file before doing anything: it explains how to
    tell a real regression from accumulated drift, and how to regenerate the baseline if it is drift.
 
-4. **Three custom RuboCop cops**, in `lib/rubocop/cop/ruact/` and enabled in `.rubocop.yml`. Custom cops are
-   the least discoverable failure a newcomer can hit, so they are named here rather than left to the error
-   message:
-   - `Ruact/NoSharedState` — no `Thread.current`, no class variables.
-   - `Ruact/NoIoInFlight` — no file I/O under `lib/ruact/flight/**`; the serializer stays pure Ruby.
-   - `Ruact/NoExtendSelf` — no `extend self`, and no bare `module_function` either, despite the name. Use
-     explicit class methods (`def self.…`) or a class with an `initialize`.
+4. **Three custom RuboCop cops**, in `lib/rubocop/cop/ruact/` and enabled in `.rubocop.yml` —
+   `Ruact/NoSharedState`, `Ruact/NoIoInFlight` and `Ruact/NoExtendSelf`. Between them they say that data
+   flows through explicit arguments rather than shared mutable state, that `lib/ruact/flight/**` stays a
+   pure value transformation, and that modules expose explicit class methods.
+
+   Custom cops are the least discoverable failure a newcomer can hit, which is why they are named here —
+   but **the cop source is the authority for what each one actually detects**, and each detects a subset of
+   the rule it is named for rather than the rule entire. `Ruact/NoExtendSelf` also rejects a bare
+   `module_function`, which its name does not suggest. Read the file before assuming a pattern is either
+   caught or allowed.
 
 And one habit rather than a gate: run `yard` after `rm -rf .yardoc doc`, as the block above does. A warm
 cache hides warnings that CI, which checks out fresh, still reports.
