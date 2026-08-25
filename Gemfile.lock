@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    ruact (0.0.9)
+    ruact (0.0.10)
       nokogiri (~> 1.15)
 
 GEM
