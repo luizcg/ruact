@@ -7,6 +7,23 @@ require "json"
 
 BENCHMARK_BASELINE_FILE = File.expand_path("baseline.json", __dir__)
 
+# The baseline is a SINGLE measurement shared by every matrix cell, while the
+# same render allocates differently per Ruby/Rails combination — measured at
+# ~9% spread (Ruby 3.4/Rails 8.1: 1792; Ruby 3.3/Rails 7.1: ~1958). The x1.20
+# tolerance therefore absorbs two different things at once: that cross-version
+# spread AND real growth. When the two together cross the limit, ONE cell goes
+# red while the rest stay green, which reads like flakiness and is not — rerunning
+# does not fix it.
+#
+# Before rebaselining, check WHICH it is. A number that moved with a code change
+# is a regression and belongs in the diff, not in this file. A number that drifted
+# across many changes has outgrown its anchor, and the honest move is to rebaseline
+# and record the growth in baseline.json's `_history` (see the 2026-08-25 entry).
+#
+# To regenerate: delete baseline.json and run this file TWICE (the first run writes
+# `typical_allocations`, the second fills `heavy_allocations`), then restore the
+# `_measured_on` / `_history` keys, which the spec does not write.
+
 RSpec.describe "RenderPipeline benchmark" do
   include RSpec::Benchmark::Matchers
 

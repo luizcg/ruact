@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   The Concepts pages and the API reference are deliberately **unchanged** — a reader there is asking exactly how resolution works, and naming the convention is the right answer in that position.
 
+### Fixed
+
+- **The render-pipeline allocation baseline was still the one written on the first commit.** `spec/benchmarks/baseline.json` had held April's numbers (1623 typical / 7764 heavy) since the initial commit, so the ×1.20 tolerance was being measured against a pipeline that predates route-driven codegen, contract validation and error suggestion. Four months of that work grew the typical render by 10.4% — legitimate growth, not a regression from any one change — and it finally crossed the limit. Because a single global baseline also has to absorb the ~9% spread between matrix cells (Ruby 3.4 / Rails 8.1 measures 1792 where Ruby 3.3 / Rails 7.1 measures ~1958), the overshoot surfaced as one intermittently red cell while twelve stayed green — which reads as flakiness and is not: rerunning did not fix it. Rebaselined to today's measurement, with April's numbers kept in a `_history` key rather than overwritten, and the spec now documents how to tell a regression from drift and how to regenerate the file.
+
 ## [0.0.10] - 2026-08-25
 
 ### Changed
