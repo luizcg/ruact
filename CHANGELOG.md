@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11] - 2026-08-25
+
+### Changed
+
+- **The README's first sentence shows the tag instead of naming its casing convention.** It read *"Write a PascalCase tag in ERB, pass `@post` as a prop"* — which put a mechanism in the slot where the reader is still asking what they get. It also worked against the thing it was selling: for anyone arriving from React, a capitalized component tag is not a new rule, it is exactly how JSX already behaves, so naming the convention turned the familiar into a ritual to comply with. The line now shows `<LikeButton likes={@likes} />` and lets the capital letter speak for itself, with the Ruby value passed in demonstrating the no-serializer claim the sentence used to only assert. The `ERB as server components` bullet states the same mechanism one beat later, where it lands as reassurance rather than a requirement: capitalized is React, lowercase stays HTML.
+
+  The Concepts pages and the API reference are deliberately **unchanged** — a reader there is asking exactly how resolution works, and naming the convention is the right answer in that position.
+
 ## [0.0.10] - 2026-08-25
 
 ### Changed
@@ -247,7 +255,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI matrix** — GitHub Actions: RSpec across Ruby 3.2 × 3.3 × Rails 7.0 × 7.1 × 7.2 × 8.0; RuboCop; YARD docs; memory benchmark; E2E system tests against React 19.0.0 and 19.x (Capybara + Cuprite); non-blocking React@next job with auto-issue on failure.
 - **E2E test app** — `e2e/` Rails app (no DB, in-memory Post model) with full CRUD system tests validating the complete request cycle.
 
-[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.10...HEAD
+[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.11...HEAD
+[0.0.11]: https://github.com/luizcg/ruact/releases/tag/v0.0.11
 [0.0.10]: https://github.com/luizcg/ruact/releases/tag/v0.0.10
 [0.0.9]: https://github.com/luizcg/ruact/releases/tag/v0.0.9
 [0.0.8]: https://github.com/luizcg/ruact/releases/tag/v0.0.8
