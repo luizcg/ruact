@@ -26,21 +26,10 @@ require "yaml"
 # shape used here: statements that are TOTAL, derived from artifacts that cannot
 # drift independently of what they describe.
 #
-# WHAT THIS GATE PROMISES
-#
-#   - the file exists and has substance;
-#   - every repo-relative link in it resolves on disk;
-#   - it leaks no private-side vocabulary and sends the reader to exactly one
-#     repository — this one;
-#   - the CI jobs it names are exactly the CI jobs that run on a pull request,
-#     read out of `.github/workflows/ci.yml` rather than from a list maintained
-#     by hand. Add or rename a job and this goes red BY CONSTRUCTION;
-#   - it never claims a check is "required", because none of them is: this
-#     repository's `main` has no branch protection and no rulesets, whatever the
-#     aspirational comments in the workflow say;
-#   - the bash blocks a contributor copies ARE the blocks this spec pins, in
-#     order — no unpinned sixth block, no hidden copy;
-#   - `README.md` links it, so it is reachable from the page GitHub renders.
+# What each example promises is stated by its own name and its own failure
+# message; this comment deliberately does not restate them, because prose beside
+# a gate, saying what the gate already guarantees, is an ungated second copy that
+# drifts.
 #
 # WHAT IT DOES NOT PROMISE
 #
@@ -230,9 +219,6 @@ RSpec.describe "CONTRIBUTING.md", :story_5_8 do
 
   # Not "each pinned block appears somewhere" — that is satisfied by one hidden
   # exact copy while the block the reader actually reaches says something else.
-  # The statement is the total one: THE bash blocks in this document ARE these
-  # blocks, in this order. A sixth block cannot appear unpinned, a pinned block
-  # cannot be edited, and no copy can hide behind another.
   it "pins every bash block a contributor could copy, in the order they appear" do
     actual = bash_blocks(contributing)
     expected = command_spine.values
