@@ -71,9 +71,11 @@ RSpec.describe "README.md", :story_5_14 do
     BASH
   end
 
-  # `[text](target)` and `![alt](target)`, inline-title form allowed.
+  # Shared recognisers; see `spec/support/markdown_gate.rb`. They lived here
+  # first and the other markdown gates copied them, which is the drift this
+  # closes: the copies had already diverged on what counts as a fence.
   def markdown_link_targets(markdown)
-    markdown.scan(/\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/).flatten
+    Ruact::Spec::MarkdownGate.link_targets(markdown)
   end
 
   # Story 5.2 — the demo reference, pinned BYTE FOR BYTE.
@@ -143,14 +145,12 @@ RSpec.describe "README.md", :story_5_14 do
     Nokogiri::HTML5.fragment(readme).css("img")
   end
 
-  # Absolute URLs, anchors and mailto: links are somebody else's problem; on-disk
-  # targets are ours.
   def relative(targets)
-    targets.reject { |target| target.start_with?("http://", "https://", "#", "mailto:") }
+    Ruact::Spec::MarkdownGate.relative(targets)
   end
 
   def bash_blocks(markdown)
-    markdown.scan(/^```bash[ \t]*\n(.*?)^```/m).flatten
+    Ruact::Spec::MarkdownGate.bash_blocks(markdown)
   end
 
   it "carries none of the `bundle gem` boilerplate" do
