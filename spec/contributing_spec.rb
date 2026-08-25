@@ -213,12 +213,21 @@ RSpec.describe "CONTRIBUTING.md", :story_5_8 do
                          "pull request\"."
   end
 
-  it "pins the command spine a contributor copies" do
+  # Presence alone would be satisfied by a stale second copy sitting anywhere in
+  # the file — including inside an HTML comment — while the block the reader
+  # actually reaches drifts away from it. Counting says the stronger thing: the
+  # pinned bytes are in the document, and there is no other copy for the reader
+  # to be sent to.
+  it "pins the command spine a contributor copies, and pins the only copy of it" do
     command_spine.each do |name, block|
-      expect(contributing).to include("```bash\n#{block}```"),
-                              "the #{name} block in CONTRIBUTING.md drifted from the literal this spec " \
-                              "pins. These are commands a contributor copies; change both or neither, " \
-                              "and re-run the block before you do."
+      occurrences = contributing.scan("```bash\n#{block}```").length
+
+      expect(occurrences).to eq(1),
+                             "CONTRIBUTING.md holds #{occurrences} copies of the #{name} block; this spec " \
+                             "pins exactly one. Zero means it drifted from the literal here — these are " \
+                             "commands a contributor copies, so change both or neither, and re-run the " \
+                             "block before you do. More than one means the reader can reach a copy this " \
+                             "gate is not watching."
     end
   end
 

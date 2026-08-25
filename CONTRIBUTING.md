@@ -28,8 +28,11 @@ submodules.
 | Node.js | 20 | the JavaScript suite and the asset build only — ruact runs no Node process in production |
 | Bundler | any recent | `gem install bundler` |
 
-Rails is **not** required to run the Ruby suite. `spec/support/rails_stub.rb` supplies the pieces the
-library touches and steps aside when real Rails is already loaded, so the fast loop needs no Rails at all.
+You do not need a Rails **app** to work on this gem, and you do not install Rails by hand: the `Gemfile`
+pins it to `RAILS_VERSION`, defaulting to 8.0, so `bundle install` brings it. What keeps the suite fast is
+that `spec/support/rails_stub.rb` loads only Rails' core and adds test-only writers on top — the request
+cycle (`action_controller`, `action_view`) is loaded by the handful of specs that actually need it, and by
+nothing else.
 
 ## Setup
 
@@ -89,7 +92,7 @@ npm test
 npm run typecheck
 ```
 
-To reproduce one matrix cell against real Rails rather than the stub:
+To reproduce one matrix cell — a Rails version other than the default:
 
 ```bash
 RAILS_VERSION=8.0 bundle install && bundle exec rspec
@@ -167,7 +170,8 @@ Most of CI fails where you expect. These four do not, so they are worth knowing 
    message:
    - `Ruact/NoSharedState` — no `Thread.current`, no class variables.
    - `Ruact/NoIoInFlight` — no file I/O under `lib/ruact/flight/**`; the serializer stays pure Ruby.
-   - `Ruact/NoExtendSelf` — use `module_function` or instance methods on a class.
+   - `Ruact/NoExtendSelf` — no `extend self`, and no bare `module_function` either, despite the name. Use
+     explicit class methods (`def self.…`) or a class with an `initialize`.
 
 And one habit rather than a gate: run `yard` after `rm -rf .yardoc doc`, as the block above does. A warm
 cache hides warnings that CI, which checks out fresh, still reports.
@@ -208,6 +212,7 @@ Branch off `main`, keep one topic per pull request, and open it against `luizcg/
 - [ ] `# frozen_string_literal: true` is the first line of every new Ruby file.
 - [ ] Nothing you added lives in `Ruact::`'s way: gem code stays under `Ruact::`, wire-format code under
       `Ruact::Flight::`, and no Ruby or Rails core class is reopened.
+- [ ] No `extend self` and no bare `module_function` — explicit class methods or a class instead.
 - [ ] If you touched the Vite plugin or the runtime, `npm test` and `npm run typecheck` pass in
       `vendor/javascript/vite-plugin-ruact`.
 - [ ] [CHANGELOG.md](CHANGELOG.md) has an entry under `[Unreleased]` describing the change for a reader who
