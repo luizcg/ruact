@@ -94,8 +94,13 @@ class ReleaseGate
     Ruact::Spec::MarkdownGate.prose(show(rev, CHANGELOG).to_s)
   end
 
+  # Only headings that name a RELEASE. Any other bracketed `##` is prose a
+  # pull request is free to add, and counting it would let one satisfy Gate A
+  # without saying anything about the change it is shipping.
   def headings(prose)
-    prose.scan(/^##\s+\[([^\]]+)\]/).flatten
+    Ruact::Spec::MarkdownGate.changelog_headings(prose)
+                             .map { |heading| heading[:label] }
+                             .grep(Ruact::Spec::MarkdownGate::RELEASE_LABEL)
   end
 
   # The body of `## [Unreleased]`, up to the next `##`, blank lines dropped.

@@ -113,13 +113,21 @@ RSpec.describe "RELEASING.md", :story_5_9 do
      releasing.scan(/vars\.([A-Z0-9_]+)/).flatten).uniq.sort
   end
 
-  # Every repository variable the release job reads, WHEREVER it reads it. The
-  # `if:` is deliberately not the only place any more: a variable there produces
-  # a `skipped` job, which says nothing, so the stop moved into a step. Reading
-  # the whole job is what keeps this derived rather than maintained — put the
-  # variable back in the `if:` and it is still found.
+  # Every repository variable the release job READS, wherever it reads it —
+  # from the `if:`, and from the `env:` bindings of its steps. The `if:` is
+  # deliberately not the only place any more: a variable there produces a
+  # `skipped` job, which says nothing, so the stop moved into a step.
+  #
+  # Structured rather than a scan of the whole dumped job, and that is the
+  # point: a `vars.` reference inside a `run:` block is a shell comment at
+  # least as often as it is a wiring, so a scan would keep passing on the
+  # comment left behind by the binding it lost.
   def workflow_gates
-    YAML.dump(release_job).scan(/vars\.([A-Z0-9_]+)/).flatten.uniq.sort
+    ([release_condition] + step_environments).join("\n").scan(/vars\.([A-Z0-9_]+)/).flatten.uniq.sort
+  end
+
+  def step_environments
+    release_steps.flat_map { |step| step.to_h.fetch("env", {}).values.map(&:to_s) }
   end
 
   # And the variables in the `if:` alone, which is a different question: those
@@ -136,8 +144,16 @@ RSpec.describe "RELEASING.md", :story_5_9 do
     Array(release_job.to_h["steps"])
   end
 
+  # The step that reads the stop, identified by its `env:` binding.
   def halt_step
-    release_steps.find { |step| YAML.dump(step).match?(/vars\.[A-Z0-9_]+/) }
+    release_steps.find { |step| step.to_h.fetch("env", {}).any? { |_, v| v.to_s.match?(/vars\.[A-Z0-9_]+/) } }
+  end
+
+  # `[shell name, workflow expression]` — the two halves whose agreement is
+  # what makes the stop real. Neither alone proves anything: a binding nothing
+  # tests is dead, and a test of a name nothing binds is always false.
+  def halt_binding
+    halt_step.to_h.fetch("env", {}).find { |_, value| value.to_s.match?(/vars\.[A-Z0-9_]+/) } || [nil, nil]
   end
 
   # Every conjunct of the release job's `if:`, by its left-hand operand. The
@@ -190,24 +206,37 @@ RSpec.describe "RELEASING.md", :story_5_9 do
                                 "does, publishes by surprise."
   end
 
-  # The polarity, which the name alone does not carry. Two properties make this
-  # stop safe, and both are derivable: the `if:` does not mention it — a
-  # variable there produces a `skipped` job, and silence is what a forgotten
-  # stop would then buy — and the step tests it for NON-emptiness and exits
-  # non-zero, so unset publishes and a forgotten stop reddens `main` instead of
-  # suppressing every later release invisibly.
-  it "stops loudly, and cannot stop silently" do
+  # Half the polarity: whatever the stop is, it must not be able to SKIP the
+  # job. A variable in the `if:` produces a `skipped` job, which is
+  # indistinguishable from a merge that had nothing to publish — and a stop
+  # nobody can tell from ordinary quiet is the failure this design exists to
+  # remove.
+  it "does not let the stop skip the job" do
     expect(condition_gates).to be_empty,
-                               "the release job's `if:` gates on #{condition_gates.inspect}. A variable " \
-                               "there produces a `skipped` job, which is indistinguishable from a merge " \
-                               "that had nothing to publish."
-    expect(halt_step).not_to be_nil, "no step in the release job reads a repository variable."
-    expect(halt_step.fetch("run")).to match(/-n\s+"\$/),
-                                      "the stop is not tested for non-emptiness, so it is not true that " \
-                                      "leaving it unset publishes."
-    expect(halt_step.fetch("run")).to include("exit 1"),
-                                      "the stop does not fail the run. A stop that ends green is a stop " \
-                                      "nobody notices they left in place."
+                               "the release job's `if:` gates on #{condition_gates.inspect}, so a set " \
+                               "variable would make the job `skipped` rather than red."
+  end
+
+  # The other half, and it is asserted through the WIRING rather than through
+  # any mention of the variable: the workflow expression is bound to a shell
+  # name, that name is tested for NON-emptiness (so unset publishes), the test
+  # exits non-zero (so a forgotten stop reddens `main`), and it runs only once
+  # a publish has been decided (so it names a version it actually refused).
+  it "stops loudly, on a version it was about to publish" do
+    name, expression = halt_binding
+    run = halt_step.to_h["run"].to_s
+
+    expect(expression).to match(/\A\$\{\{\s*vars\.[A-Z0-9_]+\s*\}\}\s*\z/),
+                          "no step binds a repository variable into its environment (#{expression.inspect})."
+    expect(run).to match(/-n\s+"?\$\{?#{Regexp.escape(name.to_s)}\b/),
+                   "the step does not test #{name.inspect} for non-emptiness, so it is not true that " \
+                   "leaving the variable unset publishes."
+    expect(run).to include("exit 1"),
+                   "the stop does not fail the run. A stop that ends green is a stop nobody notices they " \
+                   "left in place."
+    expect(halt_step.to_h["if"].to_s).to match(/steps\.\w+\.outputs\.\w+/),
+                                         "the stop is not conditioned on the publish decision, so it " \
+                                         "cannot name the version it refused."
   end
 
   # AC2's invariant, and the reason `main` can be protected at all: the job

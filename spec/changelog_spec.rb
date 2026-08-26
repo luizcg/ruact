@@ -34,9 +34,10 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
   let(:root) { Pathname.new(File.expand_path("..", __dir__)) }
   let(:changelog_path) { root.join("CHANGELOG.md") }
 
-  # `## [label]` with the optional ` - date` the released headings carry.
+  # One recogniser, shared with `bin/release-gate`; see
+  # `spec/support/markdown_gate.rb`.
   def heading_pattern
-    /^##\s+\[([^\]]+)\](?:\s+-\s+(\S+))?\s*$/
+    Ruact::Spec::MarkdownGate::CHANGELOG_HEADING
   end
 
   # Fenced blocks are illustrations. A release entry may quote the shape of a
@@ -48,14 +49,11 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
   end
 
   def headings
-    prose.each_line.filter_map do |line|
-      match = line.match(heading_pattern)
-      { label: match[1], date: match[2] } if match
-    end
+    Ruact::Spec::MarkdownGate.changelog_headings(prose)
   end
 
   def version_headings
-    headings.select { |heading| heading[:label].match?(/\A\d+\.\d+\.\d+\z/) }
+    headings.select { |heading| heading[:label].match?(Ruact::Spec::MarkdownGate::RELEASE_LABEL) }
   end
 
   def versions
@@ -84,7 +82,7 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
   # other label is an ordinary reference-style link and is none of this gate's
   # business.
   def release_link_refs
-    link_refs.select { |label| label == "Unreleased" || label.match?(/\A\d+\.\d+\.\d+\z/) }
+    link_refs.select { |label| label == "Unreleased" || label.match?(Ruact::Spec::MarkdownGate::RELEASE_LABEL) }
   end
 
   # `[label]: target`, as pairs.

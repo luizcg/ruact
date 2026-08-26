@@ -45,6 +45,26 @@ module Ruact
         /branch protection/i
       ].freeze
 
+      # A changelog `## [label]` heading, with the optional ` - date` the
+      # released ones carry. It lives here rather than in the spec that reads
+      # it because `bin/release-gate` asks the same question from outside RSpec,
+      # and two recognisers for one format is how a heading ends up counting as
+      # a release for one reader and as prose for the other.
+      CHANGELOG_HEADING = /^##\s+\[([^\]]+)\](?:\s+-\s+(\S+))?\s*$/
+
+      # A heading label that names a release, as opposed to `[Unreleased]` or
+      # anything else somebody brackets.
+      RELEASE_LABEL = /\A\d+\.\d+\.\d+\z/
+
+      # Every `## [label]` in the given PROSE (fences already stripped), as
+      # `{ label:, date: }`.
+      def self.changelog_headings(prose)
+        prose.each_line.filter_map do |line|
+          match = line.match(CHANGELOG_HEADING)
+          { label: match[1], date: match[2] } if match
+        end
+      end
+
       # `[text](target)` and `![alt](target)`, inline-title form allowed.
       def self.link_targets(markdown)
         markdown.scan(/\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/).flatten

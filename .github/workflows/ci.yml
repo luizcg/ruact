@@ -334,10 +334,15 @@ jobs:
             # RubyGems is ASKED rather than its rejection message matched —
             # the wording is upstream prose ("Repushing of gem versions is
             # not allowed" today) and a pattern chasing it would rot silently
-            # into a release that can never heal. If the query itself fails,
-            # `ruby` gets no JSON, raises, and the job stays red.
-            if curl -fsS "https://rubygems.org/api/v1/versions/ruact.json" |
-                 ruby -rjson -e 'exit(JSON.parse($stdin.read).any? { |v| v["number"] == ARGV[0] } ? 0 : 1)' "$VERSION"
+            # into a release that can never heal.
+            #
+            # `curl && ruby`, not `curl | ruby`: this shell is `bash -e`
+            # WITHOUT `pipefail`, so a pipeline reports only its last command's
+            # status and a curl that failed after emitting a usable body would
+            # be invisible. Written this way, either command failing leaves the
+            # job red with nothing tagged — which is the safe direction.
+            if curl -fsS "https://rubygems.org/api/v1/versions/ruact.json" -o versions.json &&
+               ruby -rjson -e 'exit(JSON.parse(File.read("versions.json")).any? { |v| v["number"] == ARGV[0] } ? 0 : 1)' "$VERSION"
             then
               echo "::notice::$VERSION is already on RubyGems; tagging to record it."
             else
