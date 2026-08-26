@@ -57,8 +57,9 @@ pull request; nothing checks it.
 bin/release X.Y.Z
 ```
 
-It refuses a dirty or out-of-date checkout, refuses a version that is not one step from the current one, and
-refuses one that is already tagged. Then it writes `lib/ruact/version.rb`, re-resolves `Gemfile.lock` against
+It refuses a dirty checkout, and one that is not `main` exactly as the remote has it — a branch is never
+*behind* `main` either, and cutting a release from one would put whatever it carries into the release. It
+refuses a version that is not one step from the current one, and one that is already tagged. Then it writes `lib/ruact/version.rb`, re-resolves `Gemfile.lock` against
 it, moves the accumulated `[Unreleased]` content in [CHANGELOG.md](CHANGELOG.md) under a dated heading, opens a
 fresh empty `[Unreleased]`, rewrites both link references, proves the result against the changelog checks and
 the release gate, commits, pushes, and opens the pull request.
