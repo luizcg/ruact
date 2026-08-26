@@ -205,14 +205,18 @@ jobs:
 # both the gem submodule and the e2e/ Rails app live side by side.
 
   gate:
-    # Required status check — Gates A and B, over the pull request's base..head range. Runs on BOTH
-    # events and succeeds on `push`, deliberately: a job that is `if:`-ed out
-    # shows as `skipped`, and a `skipped` job skips every job that `needs:` it —
-    # which would silently disable the release rather than gate it.
+    # Required status check — Gates A and B, over the pull request's
+    # base..head range. Runs on BOTH events and succeeds on `push`,
+    # deliberately: a job that is `if:`-ed out shows as `skipped`, and a
+    # `skipped` job skips every job that `needs:` it — which would silently
+    # disable the release rather than gate it.
     #
-    # The id has no hyphen. `spec/releasing_spec.rb` parses the left-hand
-    # operand of each `if:` conjunct as `[A-Za-z_][\w.]*`, so a hyphenated id
-    # truncates inside a `needs.<id>.outputs.x` reference.
+    # The id has no hyphen so that it stays referenceable from an `if:`:
+    # `spec/releasing_spec.rb` reads the left-hand operand of each conjunct as
+    # `[A-Za-z_][\w.]*`, and a hyphen would truncate a future
+    # `needs.<id>.outputs.<name>` mid-word. Nothing references it that way
+    # today; the constraint costs a character to honour and a review round to
+    # rediscover.
     name: Release gate (record + version discipline)
     runs-on: ubuntu-latest
     steps:
