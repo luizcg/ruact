@@ -59,11 +59,18 @@ class Release
     die("usage: bin/release X.Y.Z  (given: #{@version.inspect})")
   end
 
+  # Not merely "up to date": a feature branch is never BEHIND `origin/main`
+  # either, and cutting a release from one puts whatever it carries into the
+  # release pull request. What is required is that HEAD and `origin/main` are
+  # the same commit.
   def check_checkout
     die("working tree is dirty — commit or clean it first") unless capture("git status --porcelain").empty?
     run!("git fetch --quiet origin main --tags")
-    behind = capture("git rev-list --count HEAD..origin/main").strip
-    die("this checkout is #{behind} commit(s) behind origin/main — rebase first") unless behind == "0"
+    behind, ahead = capture("git rev-list --left-right --count origin/main...HEAD").split
+    return if [behind, ahead] == %w[0 0]
+
+    die("this checkout is #{behind} behind and #{ahead} ahead of origin/main. A release is cut from main " \
+        "as it is — check main out and pull, or merge what you are holding first.")
   end
 
   def check_version

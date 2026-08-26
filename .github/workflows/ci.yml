@@ -328,8 +328,22 @@ jobs:
             cat push.log
           else
             cat push.log
-            grep -qi 'has already been pushed\|already exists' push.log || exit 1
-            echo "::notice::$VERSION was already on RubyGems; tagging to record it."
+            # A rejected upload is tolerable for exactly one reason: this
+            # version is already on RubyGems, which is what a re-run meets
+            # after an upload that succeeded and a tag push that did not.
+            # RubyGems is ASKED rather than its rejection message matched —
+            # the wording is upstream prose ("Repushing of gem versions is
+            # not allowed" today) and a pattern chasing it would rot silently
+            # into a release that can never heal. If the query itself fails,
+            # `ruby` gets no JSON, raises, and the job stays red.
+            if curl -fsS "https://rubygems.org/api/v1/versions/ruact.json" |
+                 ruby -rjson -e 'exit(JSON.parse($stdin.read).any? { |v| v["number"] == ARGV[0] } ? 0 : 1)' "$VERSION"
+            then
+              echo "::notice::$VERSION is already on RubyGems; tagging to record it."
+            else
+              echo "::error::gem push failed and $VERSION is not on RubyGems. Nothing was tagged."
+              exit 1
+            fi
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
