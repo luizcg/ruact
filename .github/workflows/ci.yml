@@ -277,7 +277,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          # Tags are the trigger. Without them every version looks unpublished.
+          # Full clone. Not load-bearing for the trigger — the publish decision
+          # below asks the REMOTE, not this checkout — but `git tag` and
+          # `gem build` are simpler against an ordinary repository.
           fetch-depth: 0
       - uses: ruby/setup-ruby@v1
         with:
@@ -288,10 +290,17 @@ jobs:
         run: |
           VERSION=$(ruby -e 'print File.read("lib/ruact/version.rb")[/VERSION = "([^"]+)"/, 1]')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+          # Asked of the remote rather than of this checkout. Whether tags are
+          # present locally is a property of how the checkout action was
+          # configured, and the one direction that fails there — tags missing —
+          # makes an already-published version look unpublished, which is the
+          # direction that tries to publish. `git ls-remote` cannot be wrong
+          # about it, and it fails the step outright if it cannot ask.
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
             echo "due=false" >> "$GITHUB_OUTPUT"
             echo "::notice::v$VERSION is already tagged — nothing to publish."
           else
+            git ls-remote --tags origin >/dev/null
             echo "due=true" >> "$GITHUB_OUTPUT"
             echo "::notice::v$VERSION has no tag — publishing."
           fi
