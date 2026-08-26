@@ -48,7 +48,7 @@ class ReleaseGate
 
     gate_a
     gate_b
-    report
+    passed? ? 0 : 1
   end
 
   private
@@ -72,7 +72,7 @@ class ReleaseGate
         this branch changes #{packaged_changes.length} file(s) that go inside the published gem, and
         #{CHANGELOG} gained nothing between #{@base} and #{@head}.
 
-        First few: #{packaged_changes.first(5).join(", ")}
+        First few: #{packaged_changes.first(5).join(', ')}
 
         Add a bullet under `## [Unreleased]` saying what a reader of the gem would notice, or — if this
         is the release itself — run `bin/release X.Y.Z`, which stamps the heading for you.
@@ -133,7 +133,7 @@ class ReleaseGate
 
     fail_with("Gate B (1/3)", <<~MSG)
       #{VERSION_FILE} moved #{from} → #{to}, which is not one semver step.
-      From #{from} the next version is one of: #{successors(from).join(", ")}.
+      From #{from} the next version is one of: #{successors(from).join(', ')}.
     MSG
   end
 
@@ -162,7 +162,7 @@ class ReleaseGate
 
   # ── Plumbing ──────────────────────────────────────────────────────────────
 
-  def report
+  def passed?
     @failures.each { |failure| warn("\n\e[31m#{failure}\e[0m") }
     return true if @failures.empty?
 
@@ -196,4 +196,4 @@ class ReleaseGate
   end
 end
 
-exit(ReleaseGate.new(ARGV[0] || "origin/main", ARGV[1] || "HEAD").run ? 0 : 1)
+exit(ReleaseGate.new(ARGV[0] || "origin/main", ARGV[1] || "HEAD").run)

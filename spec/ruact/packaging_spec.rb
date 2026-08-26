@@ -42,7 +42,7 @@ RSpec.describe Ruact::Packaging, :story_5_10 do
       expect(described_class).to be_packaged("README.md")
       expect(described_class).to be_packaged("LICENSE.txt")
       expect(described_class).to be_packaged("SOMETHING-NOBODY-HAS-WRITTEN-YET.md"),
-                                "a new top-level document has to ship without anyone editing the predicate"
+                                 "a new top-level document has to ship without anyone editing the predicate"
     end
 
     it "refuses the top-level files that are not documents" do
@@ -100,7 +100,7 @@ RSpec.describe Ruact::Packaging, :story_5_10 do
                               .select { |path| path.start_with?("spec/", "bench/", "docs/", ".github/", "bin/") }
 
       expect(leaked).to be_empty,
-                       "these tracked paths would ship inside the gem: #{leaked.first(5).inspect}"
+                        "these tracked paths would ship inside the gem: #{leaked.first(5).inspect}"
     end
   end
 end

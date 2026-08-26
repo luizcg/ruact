@@ -1,0 +1,206 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Prepare a release.
+#
+#   bin/release X.Y.Z
+#
+# There is no release checklist document in this repository, and that is
+# deliberate: a checklist is a second copy of the process written in the
+# imperative, and it goes stale the way every other second copy does. This
+# script is the executable half — it performs the preparation — and the
+# checklist is the pull-request body it generates, with the version already
+# substituted, produced from the process on every release.
+#
+# What it does NOT do is publish. Merging the pull request does that, because
+# the bump inside it is what the `release` job reacts to. Until then nothing has
+# been released and the whole thing can be closed.
+
+require "English"
+require "date"
+require "tmpdir"
+
+require_relative "../lib/ruact/version"
+
+# Writes the version, the lock and the changelog stamp, then opens the PR.
+class Release
+  SEMVER = /\A\d+\.\d+\.\d+\z/
+  VERSION_FILE = "lib/ruact/version.rb"
+  CHANGELOG = "CHANGELOG.md"
+  REPO = "https://github.com/luizcg/ruact"
+  LATEST_JSON = "https://rubygems.org/api/v1/versions/ruact/latest.json"
+
+  def initialize(version)
+    @version = version.to_s
+    @from = Ruact::VERSION
+    @date = Date.today.iso8601
+    @branch = "release-v#{@version}"
+  end
+
+  def run
+    check_arguments
+    check_checkout
+    check_version
+    check_changelog_has_content
+    write_version
+    resync_lock
+    stamp_changelog
+    verify
+    commit_and_open
+  end
+
+  private
+
+  # ── Refusals, before anything is written ──────────────────────────────────
+
+  def check_arguments
+    return if @version.match?(SEMVER)
+
+    die("usage: bin/release X.Y.Z  (given: #{@version.inspect})")
+  end
+
+  def check_checkout
+    die("working tree is dirty — commit or clean it first") unless capture("git status --porcelain").empty?
+    run!("git fetch --quiet origin main --tags")
+    behind = capture("git rev-list --count HEAD..origin/main").strip
+    die("this checkout is #{behind} commit(s) behind origin/main — rebase first") unless behind == "0"
+  end
+
+  def check_version
+    die("v#{@version} is already tagged — that version is released") if tag?("v#{@version}")
+    return if successors.include?(@version)
+
+    die("#{@from} → #{@version} is not one semver step. From #{@from}: #{successors.join(', ')}")
+  end
+
+  def successors
+    major, minor, patch = @from.split(".").map(&:to_i)
+    ["#{major}.#{minor}.#{patch + 1}", "#{major}.#{minor + 1}.0", "#{major + 1}.0.0"]
+  end
+
+  def check_changelog_has_content
+    return unless unreleased_body.strip.empty?
+
+    die("#{CHANGELOG}'s [Unreleased] section is empty — there is nothing to release")
+  end
+
+  # ── Writing ───────────────────────────────────────────────────────────────
+
+  def write_version
+    File.write(VERSION_FILE, File.read(VERSION_FILE).sub(/VERSION = "[^"]+"/, %(VERSION = "#{@version}")))
+    say("wrote #{VERSION_FILE} → #{@version}")
+  end
+
+  def resync_lock
+    run!("bundle lock --local")
+    say("re-resolved Gemfile.lock")
+  end
+
+  # Block form on both substitutions: the replacement text is arbitrary
+  # markdown a human wrote, and `String#sub` reads `\\1` and friends out of a
+  # string replacement.
+  def stamp_changelog
+    stamped = "## [Unreleased]\n\n## [#{@version}] - #{@date}\n#{unreleased_body}"
+    refs = "[Unreleased]: #{REPO}/compare/v#{@version}...HEAD\n" \
+           "[#{@version}]: #{REPO}/releases/tag/v#{@version}"
+    text = changelog.sub(unreleased_block) { stamped }.sub(/^\[Unreleased\]: \S+$/) { refs }
+    File.write(CHANGELOG, text)
+    say("stamped #{CHANGELOG} → ## [#{@version}] - #{@date}")
+  end
+
+  def changelog
+    @changelog ||= File.read(CHANGELOG)
+  end
+
+  def unreleased_block
+    changelog[/^##\s+\[Unreleased\][^\n]*\n.*?(?=^##\s)/m] ||
+      die("#{CHANGELOG} has no [Unreleased] section followed by a release heading")
+  end
+
+  def unreleased_body
+    unreleased_block.sub(/\A^##\s+\[Unreleased\][^\n]*\n/, "")
+  end
+
+  # ── Proving it before pushing it ──────────────────────────────────────────
+
+  def verify
+    run!("bundle exec rspec spec/changelog_spec.rb --format progress")
+    say("changelog gate green")
+  end
+
+  def commit_and_open
+    run!("git checkout -b #{@branch}")
+    run!("git add #{VERSION_FILE} Gemfile.lock #{CHANGELOG}")
+    run!("git commit -m #{shell_quote("Release v#{@version}")}")
+    run!("bin/release-gate origin/main HEAD")
+    run!("git push --quiet -u origin #{@branch}")
+    open_pull_request
+  end
+
+  def open_pull_request
+    File.write(body_path, pr_body)
+    if system("gh", "pr", "create", "--title", "Release v#{@version}", "--body-file", body_path)
+      say("pull request opened. Merging it publishes #{@version}; closing it publishes nothing.")
+    else
+      say("could not open the pull request. Its body is in #{body_path} — open it by hand.")
+    end
+  end
+
+  def body_path
+    @body_path ||= File.join(Dir.tmpdir, "ruact-release-v#{@version}.md")
+  end
+
+  # The checklist. It is generated here rather than kept as a document, so the
+  # steps and the process cannot drift apart, and the version is already
+  # substituted so there is nothing to translate while reading.
+  def pr_body
+    <<~BODY
+      **Merging this publishes `#{@version}` to RubyGems.** The bump below is the release decision — a
+      pull request without one publishes nothing, and closing this one releases nothing.
+
+      | | |
+      |---|---|
+      | `#{VERSION_FILE}` | #{@from} → **#{@version}** |
+      | `Gemfile.lock` | re-resolved against the bump |
+      | `#{CHANGELOG}` | `## [#{@version}] - #{@date}`, both link references rewritten |
+
+      After the merge, in this order:
+
+      1. Watch the `release` job on the push to `main`. It publishes because `#{@version}` has no tag yet;
+         once it has, a re-run of the same push does nothing.
+      2. Confirm the published version — `curl -s #{LATEST_JSON}` — rather than the tab, which caches.
+      3. If the job went red before uploading, nothing was published and nothing was tagged: fix the cause and
+         let the next green push to `main` reconcile it. There is no state to unwind.
+    BODY
+  end
+
+  # ── Plumbing ──────────────────────────────────────────────────────────────
+
+  def capture(command)
+    `#{command}`.to_s
+  end
+
+  def run!(command)
+    say("$ #{command}")
+    die("`#{command}` failed") unless system(command)
+  end
+
+  def tag?(name)
+    system("git", "rev-parse", "-q", "--verify", "refs/tags/#{name}", out: IO::NULL, err: IO::NULL)
+  end
+
+  def shell_quote(text)
+    "'#{text.gsub("'", %q('"'"'))}'"
+  end
+
+  def say(message)
+    warn("release: #{message}")
+  end
+
+  def die(message)
+    warn("release: #{message}")
+    exit 1
+  end
+end
+
+Release.new(ARGV[0]).run
