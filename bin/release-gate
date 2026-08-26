@@ -1,0 +1,208 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Gates A and B, as CI runs them and as you can run them here.
+#
+#   bin/release-gate [BASE [HEAD]]        # defaults: origin/main HEAD
+#
+# Gate A — the record moves when the shipped bytes move. If this branch changes
+# anything that goes inside the published gem, `CHANGELOG.md` has to have gained
+# something: a bullet under `[Unreleased]`, or a new version heading. Touching
+# the file is not enough.
+#
+# Gate B — when `lib/ruact/version.rb` moves, it moves correctly: one semver
+# step, to a version nothing has released, with `Gemfile.lock` in step. A branch
+# that does not touch it is subject to none of this.
+#
+# Nothing here forces a bump. The bump in the pull request IS the release
+# decision, and a merge without one accumulates under `[Unreleased]` until
+# somebody cuts a release with `bin/release`.
+#
+# WHOSE DEFINITION WINS. `spec/support/markdown_gate.rb` is the single
+# recogniser for markdown in this repository, and this script requires it rather
+# than carrying a second one — two recognisers that disagree about what a fence
+# is disagree about what is prose, and the changelog specs read it through that
+# module too.
+
+require "English"
+
+require_relative "../lib/ruact/packaging"
+require_relative "../spec/support/markdown_gate"
+
+# Gates A and B over a base..head range.
+class ReleaseGate
+  VERSION_FILE = "lib/ruact/version.rb"
+  LOCKFILE = "Gemfile.lock"
+  CHANGELOG = "CHANGELOG.md"
+  SEMVER = /\A(\d+)\.(\d+)\.(\d+)\z/
+
+  def initialize(base, head)
+    @base = base
+    @head = head
+    @failures = []
+  end
+
+  def run
+    abort "release-gate: #{@base} is not a commit this checkout can see" unless commit?(@base)
+    abort "release-gate: #{@head} is not a commit this checkout can see" unless commit?(@head)
+
+    gate_a
+    gate_b
+    passed? ? 0 : 1
+  end
+
+  private
+
+  def changed
+    @changed ||= capture("git", "diff", "--name-only", "#{@base}...#{@head}").split("\n").reject(&:empty?)
+  end
+
+  def packaged_changes
+    @packaged_changes ||= Ruact::Packaging.packaged_paths(changed)
+  end
+
+  # ── Gate A ────────────────────────────────────────────────────────────────
+
+  def gate_a
+    return say("Gate A: no packaged file changed — nothing to record.") if packaged_changes.empty?
+
+    gained = new_headings + new_unreleased_lines
+    if gained.empty?
+      fail_with("Gate A", <<~MSG)
+        this branch changes #{packaged_changes.length} file(s) that go inside the published gem, and
+        #{CHANGELOG} gained nothing between #{@base} and #{@head}.
+
+        First few: #{packaged_changes.first(5).join(', ')}
+
+        Add a bullet under `## [Unreleased]` saying what a reader of the gem would notice, or — if this
+        is the release itself — run `bin/release X.Y.Z`, which stamps the heading for you.
+      MSG
+    else
+      say("Gate A: #{CHANGELOG} gained #{gained.length} line(s)/heading(s) — record moved with the bytes.")
+    end
+  end
+
+  def new_headings
+    headings(changelog_at(@head)) - headings(changelog_at(@base))
+  end
+
+  def new_unreleased_lines
+    unreleased_lines(changelog_at(@head)) - unreleased_lines(changelog_at(@base))
+  end
+
+  def changelog_at(rev)
+    Ruact::Spec::MarkdownGate.prose(show(rev, CHANGELOG).to_s)
+  end
+
+  # Only headings that name a RELEASE. Any other bracketed `##` is prose a
+  # pull request is free to add, and counting it would let one satisfy Gate A
+  # without saying anything about the change it is shipping.
+  def headings(prose)
+    Ruact::Spec::MarkdownGate.changelog_headings(prose)
+                             .map { |heading| heading[:label] }
+                             .grep(Ruact::Spec::MarkdownGate::RELEASE_LABEL)
+  end
+
+  # The body of `## [Unreleased]`, up to the next `##`, blank lines dropped.
+  def unreleased_lines(prose)
+    block = prose[/^##\s+\[Unreleased\][^\n]*\n(.*?)(?=^##\s|\z)/m, 1].to_s
+    block.each_line.map(&:strip).reject(&:empty?)
+  end
+
+  # ── Gate B ────────────────────────────────────────────────────────────────
+
+  def gate_b
+    return say("Gate B: #{VERSION_FILE} is untouched — no version discipline to enforce.") unless bumped?
+
+    from = version_at(@base)
+    to = version_at(@head)
+    before = @failures.length
+    check_single_step(from, to)
+    check_untagged(to)
+    check_lockfile(to)
+    return unless @failures.length == before
+
+    say("Gate B: #{from} → #{to}, one step, untagged, lock in step — merging this publishes #{to}.")
+  end
+
+  def bumped?
+    changed.include?(VERSION_FILE)
+  end
+
+  def version_at(rev)
+    show(rev, VERSION_FILE).to_s[/VERSION\s*=\s*"([^"]+)"/, 1].to_s
+  end
+
+  def check_single_step(from, to)
+    unless from.match?(SEMVER) && to.match?(SEMVER)
+      return fail_with("Gate B (1/3)", "#{VERSION_FILE} moved #{from.inspect} → #{to.inspect}; " \
+                                       "this gate and the release job both read X.Y.Z and nothing else.")
+    end
+    return if successors(from).include?(to)
+
+    fail_with("Gate B (1/3)", <<~MSG)
+      #{VERSION_FILE} moved #{from} → #{to}, which is not one semver step.
+      From #{from} the next version is one of: #{successors(from).join(', ')}.
+    MSG
+  end
+
+  def successors(from)
+    major, minor, patch = from.split(".").map(&:to_i)
+    ["#{major}.#{minor}.#{patch + 1}", "#{major}.#{minor + 1}.0", "#{major + 1}.0.0"]
+  end
+
+  def check_untagged(to)
+    return unless tag?("v#{to}")
+
+    fail_with("Gate B (2/3)", <<~MSG)
+      v#{to} is already tagged, so that version is already released and this bump would publish nothing.
+      If another pull request took the number, rebase onto main and bump again: `bin/release X.Y.Z`.
+    MSG
+  end
+
+  def check_lockfile(to)
+    return if show(@head, LOCKFILE).to_s.include?("ruact (#{to})")
+
+    fail_with("Gate B (3/3)", <<~MSG)
+      #{LOCKFILE} does not resolve the path gem at #{to}, so every frozen-mode job goes red on the next push.
+      Fix it with: bundle lock --local
+    MSG
+  end
+
+  # ── Plumbing ──────────────────────────────────────────────────────────────
+
+  def passed?
+    @failures.each { |failure| warn("\n\e[31m#{failure}\e[0m") }
+    return true if @failures.empty?
+
+    warn("\nrelease-gate: #{@failures.length} gate(s) failed.")
+    false
+  end
+
+  def fail_with(gate, message)
+    @failures << "#{gate} failed.\n\n#{message.rstrip}"
+  end
+
+  def say(message)
+    warn("release-gate: #{message}")
+  end
+
+  def show(rev, path)
+    out = IO.popen(["git", "show", "#{rev}:#{path}"], err: IO::NULL, &:read)
+    $CHILD_STATUS&.success? ? out : nil
+  end
+
+  def capture(*argv)
+    IO.popen(argv, err: IO::NULL, &:read).to_s
+  end
+
+  def commit?(rev)
+    system("git", "rev-parse", "-q", "--verify", "#{rev}^{commit}", out: IO::NULL, err: IO::NULL)
+  end
+
+  def tag?(name)
+    system("git", "rev-parse", "-q", "--verify", "refs/tags/#{name}", out: IO::NULL, err: IO::NULL)
+  end
+end
+
+exit(ReleaseGate.new(ARGV[0] || "origin/main", ARGV[1] || "HEAD").run)

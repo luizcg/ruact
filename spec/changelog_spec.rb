@@ -34,9 +34,10 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
   let(:root) { Pathname.new(File.expand_path("..", __dir__)) }
   let(:changelog_path) { root.join("CHANGELOG.md") }
 
-  # `## [label]` with the optional ` - date` the released headings carry.
+  # One recogniser, shared with `bin/release-gate`; see
+  # `spec/support/markdown_gate.rb`.
   def heading_pattern
-    /^##\s+\[([^\]]+)\](?:\s+-\s+(\S+))?\s*$/
+    Ruact::Spec::MarkdownGate::CHANGELOG_HEADING
   end
 
   # Fenced blocks are illustrations. A release entry may quote the shape of a
@@ -48,14 +49,11 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
   end
 
   def headings
-    prose.each_line.filter_map do |line|
-      match = line.match(heading_pattern)
-      { label: match[1], date: match[2] } if match
-    end
+    Ruact::Spec::MarkdownGate.changelog_headings(prose)
   end
 
   def version_headings
-    headings.select { |heading| heading[:label].match?(/\A\d+\.\d+\.\d+\z/) }
+    headings.select { |heading| heading[:label].match?(Ruact::Spec::MarkdownGate::RELEASE_LABEL) }
   end
 
   def versions
@@ -84,7 +82,7 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
   # other label is an ordinary reference-style link and is none of this gate's
   # business.
   def release_link_refs
-    link_refs.select { |label| label == "Unreleased" || label.match?(/\A\d+\.\d+\.\d+\z/) }
+    link_refs.select { |label| label == "Unreleased" || label.match?(Ruact::Spec::MarkdownGate::RELEASE_LABEL) }
   end
 
   # `[label]: target`, as pairs.
@@ -106,37 +104,18 @@ RSpec.describe "CHANGELOG.md", :story_5_9 do
     version.split(".").map(&:to_i)
   end
 
-  # The numbers the release job can produce from `version`: patch, minor, major.
-  def successors_of(version)
-    raise "Ruact::VERSION is #{version.inspect}; this gate assumes X.Y.Z, which is all the release job emits" \
-      unless version.match?(/\A\d+\.\d+\.\d+\z/)
-
-    major, minor, patch = semver(version)
-    ["#{major}.#{minor}.#{patch + 1}", "#{major}.#{minor + 1}.0", "#{major + 1}.0.0"]
-  end
-
-  it "has a heading for the version this gem currently is" do
-    expect(versions).to include(Ruact::VERSION),
-                        "lib/ruact/version.rb says #{Ruact::VERSION}, and CHANGELOG.md has no heading " \
-                        "for it (#{versions.first(3).inspect}…). Either a release was published without " \
-                        "its entry, or an entry was stamped with a version the release job did not produce."
-  end
-
-  # The one window in which the file legitimately runs ahead of the code: a
-  # release pull request stamps the heading, and the job computes the number
-  # afterwards. One step ahead is that window. Two, or sideways, is the heading
-  # having predicted wrong — which is what a merge carrying the minor marker
-  # does to a heading written for a patch.
-  it "runs at most one release ahead of the version this gem currently is" do
-    permitted = [Ruact::VERSION, *successors_of(Ruact::VERSION)]
-
-    expect(permitted).to include(versions.first),
-                         "CHANGELOG.md's newest heading is #{versions.first.inspect} while " \
-                         "lib/ruact/version.rb says #{Ruact::VERSION}. Either is fine on its own — the " \
-                         "stamp is written before the release job computes the number — but the heading " \
-                         "has to be this version or the next one it could become " \
-                         "(#{successors_of(Ruact::VERSION).inspect}). Anything else means the number was " \
-                         "predicted and the prediction was wrong."
+  # Equality, with no window either side. The file used to be allowed to run one
+  # release ahead of the code, because the heading was stamped by a person and
+  # the number was computed by CI afterwards — so between the two there was a
+  # commit where they legitimately disagreed. Both are now written in the same
+  # pull request, by the same hand, so any disagreement at all is a mistake, and
+  # the shape of the mistake no longer matters enough to enumerate.
+  it "is stamped for exactly the version this gem currently is" do
+    expect(versions.first).to eq(Ruact::VERSION),
+                              "CHANGELOG.md's newest heading is #{versions.first.inspect} and " \
+                              "lib/ruact/version.rb says #{Ruact::VERSION}. They move together, in one " \
+                              "pull request — `bin/release X.Y.Z` writes both. Whichever moved without " \
+                              "the other, the release is half-recorded."
   end
 
   it "gives every released heading a link reference, and every release reference a heading" do
