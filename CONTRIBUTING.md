@@ -68,12 +68,14 @@ every pull request. Running them locally first is the difference between one rou
 | `js` | the Vite plugin's vitest suite, including its Ruby↔JS byte-parity cases, and a type-level test over the generated accessors |
 | `benchmark` | render-pipeline allocations against a recorded baseline |
 | `name-propagation` | greps the tree for names retired before v0.1.0 |
+| `gate` | that `CHANGELOG.md` gained something if this branch changed what the published gem contains, and that a version bump is one legal semver step to a version nothing has released |
 
 <!-- ci-jobs:end -->
 
-There is one more job, `release`, which publishes to RubyGems. It is off unless a maintainer turns it on
-and never runs on a pull request; you will not need it. See [RELEASING.md](RELEASING.md) for the release
-process itself — this document deliberately describes none of it, so the two cannot drift apart.
+There is one more job, `release`, which publishes to RubyGems. It never runs on a pull request, and on a
+push to `main` it publishes only when `lib/ruact/version.rb` names a version that carries no tag — which is
+a thing a maintainer does deliberately, in a pull request of its own. See [RELEASING.md](RELEASING.md) for
+the release process itself — this document deliberately describes none of it, so the two cannot drift apart.
 
 Locally:
 
@@ -82,6 +84,7 @@ bundle exec rspec
 bundle exec rubocop --format github
 rm -rf .yardoc doc && bundle exec yard --fail-on-warning
 bundle exec rake benchmark:memory
+bin/release-gate origin/main HEAD
 ```
 
 and, for the `js` job:
@@ -218,8 +221,9 @@ Branch off `main`, keep one topic per pull request, and open it against `luizcg/
 - [ ] No `extend self` and no bare `module_function` — explicit class methods or a class instead.
 - [ ] If you touched the Vite plugin or the runtime, `npm test` and `npm run typecheck` pass in
       `vendor/javascript/vite-plugin-ruact`.
-- [ ] [CHANGELOG.md](CHANGELOG.md) has an entry under `[Unreleased]` describing the change for a reader who
-      did not see the diff.
+- [ ] `bin/release-gate origin/main HEAD` passes. If your branch changes anything that goes inside the
+      published gem, it asks [CHANGELOG.md](CHANGELOG.md) for a new bullet under `[Unreleased]` — written
+      for a reader who did not see the diff.
 
 Describe what the change does and why in the pull request body. If it fixes a reported bug, link the issue.
 

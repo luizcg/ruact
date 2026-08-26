@@ -111,9 +111,13 @@ class ReleaseGate
 
     from = version_at(@base)
     to = version_at(@head)
+    before = @failures.length
     check_single_step(from, to)
     check_untagged(to)
     check_lockfile(to)
+    return unless @failures.length == before
+
+    say("Gate B: #{from} → #{to}, one step, untagged, lock in step — merging this publishes #{to}.")
   end
 
   def bumped?

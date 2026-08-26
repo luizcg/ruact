@@ -79,6 +79,7 @@ RSpec.describe "CONTRIBUTING.md", :story_5_8 do
         bundle exec rubocop --format github
         rm -rf .yardoc doc && bundle exec yard --fail-on-warning
         bundle exec rake benchmark:memory
+        bin/release-gate origin/main HEAD
       BASH
       "JavaScript checks" => <<~BASH,
         cd vendor/javascript/vite-plugin-ruact
@@ -173,14 +174,18 @@ RSpec.describe "CONTRIBUTING.md", :story_5_8 do
                                        "`release` is excluded on purpose — it never runs on a pull request."
   end
 
-  it "does not claim a check is required, because none of them is" do
+  # Not because the claim is false — what merges and what does not is a
+  # repository setting, and this suite takes no network. Because it cannot be
+  # verified from in here, and a document asserting it would rot without ever
+  # going red. Say what each check does; what it decides is somebody else's
+  # sentence.
+  it "makes no claim about what gates merging" do
     offenders = enforcement_claims.filter_map { |pattern| pattern.source if contributing.match?(pattern) }
 
     expect(offenders).to be_empty,
-                         "CONTRIBUTING.md claims a check gates merging (#{offenders.inspect}). This " \
-                         "repository's `main` has no branch protection and no rulesets — the workflow's " \
-                         "own \"Required status check\" comments are aspirational. Say what the " \
-                         "workflow does, not what it decides."
+                         "CONTRIBUTING.md states what a check decides at merge time " \
+                         "(#{offenders.inspect}). Nothing here can verify that. Say what the workflow " \
+                         "does, not what it decides."
   end
 
   # Not "each pinned block appears somewhere" — that is satisfied by one hidden

@@ -204,28 +204,69 @@ jobs:
 # is desired in CI, host the workflow in the monorepo (luizcg/ruact-dev) where
 # both the gem submodule and the e2e/ Rails app live side by side.
 
-  release:
-    # Auto-release to RubyGems on every GREEN push to main, gated on the full
-    # required-check set via `needs:`. Versioning (source of truth:
-    # lib/ruact/version.rb): story verde -> patch; epic verde -> minor via an
-    # `[epic-done]` marker in the merge-commit message; major manual for 1.0.0.
-    # Auth is RubyGems Trusted Publishing (OIDC) — satisfies
-    # rubygems_mfa_required. The bump commit carries [skip ci] (no re-trigger).
+  gate:
+    # Required status check — Gates A and B, over the pull request's base..head range. Runs on BOTH
+    # events and succeeds on `push`, deliberately: a job that is `if:`-ed out
+    # shows as `skipped`, and a `skipped` job skips every job that `needs:` it —
+    # which would silently disable the release rather than gate it.
     #
-    # KILL SWITCH (added 2026-06-14): publishing is OFF by default. The job only
-    # runs when the repo variable RUACT_AUTO_RELEASE is exactly "true". When the
-    # variable is unset (current state), `vars.RUACT_AUTO_RELEASE` is the empty
-    # string, the `== 'true'` test is false, and this job is skipped — every
-    # other check still runs, merges stay green, nothing is published.
-    #   Turn ON :  gh variable set    RUACT_AUTO_RELEASE -b true -R luizcg/ruact
-    #   Turn OFF:  gh variable delete  RUACT_AUTO_RELEASE      -R luizcg/ruact
-    # (or GitHub UI: Settings -> Secrets and variables -> Actions -> Variables)
+    # The id has no hyphen. `spec/releasing_spec.rb` parses the left-hand
+    # operand of each `if:` conjunct as `[A-Za-z_][\w.]*`, so a hyphenated id
+    # truncates inside a `needs.<id>.outputs.x` reference.
+    name: Release gate (record + version discipline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The gate compares base against head, so it needs both.
+          fetch-depth: 0
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          # The gate is plain Ruby over two files in this repository; it loads
+          # no gems, so there is no bundle to install or cache.
+          bundler-cache: false
+      - name: Gates A and B
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: bin/release-gate "$BASE" "$HEAD"
+      - name: Nothing to gate on a push
+        if: github.event_name != 'pull_request'
+        run: echo "::notice::Gates A and B are decided on the pull request; a push has no base to compare against."
+
+  release:
+    # Publishes to RubyGems when `lib/ruact/version.rb` names a version that has
+    # no tag. That is a LEVEL trigger — a question about the repository's state,
+    # not about what this push changed — and the three properties that follow
+    # are the reason for it:
+    #
+    #   self-gating   nothing to remember, and no repository variable to leave
+    #                 switched on. The bump lives in the pull request, where it
+    #                 is reviewable, and merging it IS the decision to publish.
+    #   idempotent    a second run for the same version finds the tag and stops.
+    #   self-healing  GitHub does not always create a run for a push (observed
+    #                 here on 2026-08-25, merge commits included). An edge
+    #                 trigger loses that release permanently and silently; this
+    #                 one is repaired by the next green push to `main`.
+    #
+    # The job writes NO commit to `main` — only a tag, which is what lets `main`
+    # be protected without granting the bot a bypass. `contents: write` is still
+    # needed, for that tag push.
+    #
+    # EMERGENCY STOP: set the repository variable RUACT_RELEASE_HALT to any
+    # non-empty value. It is read INSIDE a step and FAILS the run, naming the
+    # version it refused — a variable in the `if:` would produce a `skipped`
+    # job, and a forgotten halt would then suppress releases invisibly instead
+    # of reddening `main` on the next merge.
+    #   Halt  :  gh variable set RUACT_RELEASE_HALT -b stop -R luizcg/ruact
+    #   Resume:  gh variable delete RUACT_RELEASE_HALT -R luizcg/ruact
     name: Release to RubyGems
-    needs: [name-propagation, rspec, rubocop, yard, js, benchmark]
+    needs: [name-propagation, rspec, rubocop, yard, js, benchmark, gate]
     if: >-
       github.event_name == 'push'
       && github.ref == 'refs/heads/main'
-      && vars.RUACT_AUTO_RELEASE == 'true'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -236,49 +277,61 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          # Tags are the trigger. Without them every version looks unpublished.
           fetch-depth: 0
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
           bundler-cache: true
-      - name: Decide bump kind & compute next version
-        id: bump
-        env:
-          HEAD_MSG: ${{ github.event.head_commit.message }}
+      - name: Is a publish due?
+        id: decide
         run: |
-          KIND=patch
-          printf '%s' "$HEAD_MSG" | grep -qi '\[epic-done\]' && KIND=minor
-          VERSION=$(ruby -e '
-            kind = ARGV[0]
-            path = "lib/ruact/version.rb"
-            src  = File.read(path)
-            maj, min, pat = src.match(/VERSION = "(\d+)\.(\d+)\.(\d+)"/).captures.map(&:to_i)
-            case kind
-            when "major" then maj, min, pat = maj + 1, 0, 0
-            when "minor" then min, pat = min + 1, 0
-            else pat += 1
-            end
-            v = "#{maj}.#{min}.#{pat}"
-            File.write(path, src.sub(/VERSION = "[^"]+"/, %(VERSION = "#{v}")))
-            print v
-          ' "$KIND")
+          VERSION=$(ruby -e 'print File.read("lib/ruact/version.rb")[/VERSION = "([^"]+)"/, 1]')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          # Resync Gemfile.lock to the bumped path-gem version. Without this the
-          # release commit carries a new version.rb but a stale lock, and every
-          # frozen-mode job (rubocop/yard/benchmark) goes red on the next push
-          # with bundler exit 16 ("gemspecs for path gems changed"). `git commit
-          # -am` below then picks up the updated lock alongside version.rb.
-          bundle lock --local
-          echo "::notice::Release bump $KIND -> v$VERSION"
-      - uses: rubygems/configure-rubygems-credentials@v2.0.0 # OIDC -> short-lived credential
-      - name: Commit, tag & publish
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "due=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::v$VERSION is already tagged — nothing to publish."
+          else
+            echo "due=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::v$VERSION has no tag — publishing."
+          fi
+      - name: Emergency stop
+        if: steps.decide.outputs.due == 'true'
         env:
-          VERSION: ${{ steps.bump.outputs.version }}
+          HALT: ${{ vars.RUACT_RELEASE_HALT }}
+          VERSION: ${{ steps.decide.outputs.version }}
         run: |
+          if [ -n "$HALT" ]; then
+            echo "::error::RUACT_RELEASE_HALT is set, so v$VERSION was NOT published."
+            echo "::error::Clear it to resume: gh variable delete RUACT_RELEASE_HALT -R luizcg/ruact"
+            exit 1
+          fi
+      - uses: rubygems/configure-rubygems-credentials@v2.0.0 # OIDC -> short-lived credential
+        if: steps.decide.outputs.due == 'true'
+      - name: Build, upload, then tag
+        if: steps.decide.outputs.due == 'true'
+        env:
+          VERSION: ${{ steps.decide.outputs.version }}
+        run: |
+          gem build ruact.gemspec
+          # The tag is the record of a COMPLETED publish, so it is written last:
+          # a failed upload leaves the trigger armed and the next green push
+          # tries again. The cost of that order is a re-run that finds the
+          # version already on RubyGems, which is why a duplicate-version
+          # rejection is treated as "already done" rather than as a failure.
+          #
+          # Redirected rather than piped through `tee`: the default shell here
+          # is `bash -e` WITHOUT `pipefail`, so a pipeline reports the exit
+          # status of its last command — a failed upload piped into `tee` would
+          # read as a success and this job would tag a version it never pushed.
+          if gem push "ruact-$VERSION.gem" >push.log 2>&1; then
+            cat push.log
+          else
+            cat push.log
+            grep -qi 'has already been pushed\|already exists' push.log || exit 1
+            echo "::notice::$VERSION was already on RubyGems; tagging to record it."
+          fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "Release v$VERSION [skip ci]"
           git tag "v$VERSION"
-          git push origin HEAD --tags
-          gem build ruact.gemspec
-          gem push "ruact-$VERSION.gem"
+          git push origin "v$VERSION"
