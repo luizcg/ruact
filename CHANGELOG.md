@@ -43,6 +43,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The server-functions bullet no longer calls the whole generated module "typed".** Only queries carry an exact signature (one property per declared keyword, since 0.0.5). An action's accessor is typed to be callable and to satisfy `<form action>`, but its arguments and resolved value are `Record<string, unknown>` and `unknown` — useful, and not the autocomplete the word "typed" promises. Both are now described as what they are.
 - **The mechanism is stated where the reader meets it.** "Capitalized tag means React. Lowercase stays HTML." now sits directly under the ERB/TSX pair, and the paragraph that follows explains the wire in plain terms — the view renders server-side as it always did, the result travels as a React tree in the format React uses for Server Components, the data is inlined so React renders without a fetch, and Node builds the bundle and does nothing else.
 
+### Fixed
+
+- **A list with exactly one row rendered as nothing.** A client component given a collection prop — `<PostList posts={rows} />`, the shape `rails generate ruact:scaffold` emits — received the row *itself* instead of a one-row array whenever the collection happened to hold exactly one item. Two or more worked. The payload leaving the server was always correct; the client collapsed it while rebuilding the tree, because the collapse was applied by a walker that sees values without seeing where they sit, and so could not tell a list prop from an element's children.
+
+  What this looked like is worth stating, because it did not look like a bug: the generated list rendered **neither the table nor the "none yet" message**, with nothing in the console. The first click on a column header threw. Typing in the search box fixed it, since search results come back as JSON and never pass through that code. Seed data and fixtures almost always hold more than one row, so the case that broke was the one every new application reaches first — the record you just created.
+
+  Arity is now preserved wherever an array appears. Nothing compensates for it elsewhere: the server already collapses a lone child before the wire, and React renders an array of children fine. `flight-client.js` was the only runtime module in the bundled Vite plugin without a unit test, which is what let a change to shared deserialization go unnoticed; it has one now, covering empty, one and two elements for both data props and children, driven in part by wire bytes the Ruby serializer writes.
+
 ## [0.0.11] - 2026-08-25
 
 ### Changed

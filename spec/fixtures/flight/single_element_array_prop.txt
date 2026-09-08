@@ -1,0 +1,2 @@
+1:I["/PostList.jsx","PostList",["/PostList.jsx"]]
+0:["$","$L1",null,{"posts":[{"id":1,"title":"First post"}]}]
