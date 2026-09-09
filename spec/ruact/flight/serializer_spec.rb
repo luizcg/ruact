@@ -489,6 +489,35 @@ module Ruact
           expect(Renderer.render(el, counter_manifest)).to match_flight_fixture("client_component_with_props")
         end
       end
+
+      describe "single-element array prop survives the wire (Story 17.0a)", :story_17_0a do
+        # Issue #62: a list prop holding exactly one row reached the client as
+        # the row itself. This fixture is the SERVER half of the proof — it
+        # pins that the array leaves Ruby intact, so a one-element array
+        # arriving collapsed can only have been collapsed by the client.
+        #
+        # The CLIENT half asserts the same bytes rebuild as a one-element
+        # array: vendor/javascript/vite-plugin-ruact/flight-client.test.mjs.
+        # Both sides read this one file; neither transcribes it.
+        let(:post_list_manifest) do
+          ClientManifest.from_hash({
+                                     "PostList" => {
+                                       "id" => "/PostList.jsx",
+                                       "name" => "PostList",
+                                       "chunks" => ["/PostList.jsx"]
+                                     }
+                                   })
+        end
+
+        # The title deliberately starts with "$": §7 requires ONE extra "$" on the
+        # wire, so the fixture also carries the escape, and the client half of
+        # the pair has to decode it rather than merely preserve arity.
+        it "serializes a one-element array prop as a one-element array, escape intact" do
+          ref = post_list_manifest.reference_for("PostList")
+          el  = ReactElement.new(type: ref, props: { posts: [{ id: 1, title: "$5 plan" }] })
+          expect(Renderer.render(el, post_list_manifest)).to match_flight_fixture("single_element_array_prop")
+        end
+      end
     end
   end
 end

@@ -196,9 +196,20 @@ function _buildTree(value, rows, moduleRegistry) {
       return createElement(type, props);
     }
 
-    // Plain array / fragment children
-    const items = value.map((v) => _buildTree(v, rows, moduleRegistry));
-    return items.length === 1 ? items[0] : items;
+    // Plain array — fragment children OR a data array sitting in a prop.
+    //
+    // Arity is preserved. This walker has no positional information: it cannot
+    // tell a `children` array from a list prop, so any shape change made here
+    // is made to both. It used to collapse single-element arrays (`items[0]`
+    // when `length === 1`), which silently turned a one-row list prop into the
+    // row itself — issue #62.
+    //
+    // Nothing needs to compensate: the server already collapses a lone child
+    // before it reaches the wire (`html_converter.rb:188`, and the Suspense
+    // path at `:202`), and React renders an array of children fine. If a
+    // client-side collapse is ever needed, it belongs in `buildProps` under
+    // `key === "children"`, where the position IS known.
+    return value.map((v) => _buildTree(v, rows, moduleRegistry));
   }
 
   // --- Plain objects ---
