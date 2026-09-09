@@ -98,41 +98,51 @@ module Ruact
                          after: /class ApplicationController.*\n/
       end
 
+      # Deliberately tolerant of what a real layout contains: `%w[...]` arguments
+      # (a literal `%` used to end the match early), multi-line calls, trim modes.
+      STYLESHEET_CALL = /<%=.*?\bstylesheet_link_tag\b.*?%>/m
+      private_constant :STYLESHEET_CALL
+
+      # Both comment syntaxes a layout can hide a call in. `LayoutSource` strips
+      # only the ERB form, which is the right contract for "did this template CALL
+      # the helper"; anchoring additionally needs the HTML form, because injecting
+      # beside a commented-out stylesheet link would put the helper inside the
+      # comment — inert, and then reported as wired.
+      LAYOUT_COMMENT = /<!--.*?-->/m
+      private_constant :LAYOUT_COMMENT
+
       # Story 17.0b — the `<head>` half of the asset contract.
       #
       # `ruact_head_assets` links the stylesheets Vite emitted for the client
       # components. It goes in `<head>`, ABOVE the app's own `stylesheet_link_tag`,
-      # so the app's CSS loads afterwards and wins the cascade — your code beats
-      # the gem's, and a package shipping an aggressive reset cannot flatten your
-      # design system.
+      # so the app's CSS loads afterwards — your code beats the gem's.
       #
-      # Anchored on the app's stylesheet call when there is one, and on `</head>`
-      # otherwise. Skipped when the call is already there, which is decided by
-      # `LayoutSource.head_wired?` — a real call, not a mention in a comment.
-      STYLESHEET_CALL = /<%=[^%]*\bstylesheet_link_tag\b[^%]*%>/
-      private_constant :STYLESHEET_CALL
-
+      # This does NOT use Thor's `inject_into_file`. That anchors by `gsub`, so a
+      # layout with two `stylesheet_link_tag` calls got two helpers; and it has no
+      # notion of a call that is commented out, so an injection could land INSIDE
+      # `<!-- ... -->` — inert, while `head_wired?` then reported the layout as done
+      # and the doctor passed. The position is computed here instead, against a
+      # comment-stripped view, and written exactly once.
+      #
+      # When no unambiguous position exists, this REFUSES and says so. A generator
+      # guessing wrong here produces styling that works in development and vanishes
+      # in production, which is the failure this story exists to remove.
       def inject_layout_head_assets
         layout_file = "app/views/layouts/application.html.erb"
         path = Pathname(destination_root).join(layout_file)
         return unless path.exist?
 
-        content = path.read
-        if Ruact::LayoutSource.head_wired?(content)
+        source = path.read
+        if Ruact::LayoutSource.head_wired?(source)
           say_status "skip", "ruact_head_assets already present in layout", :yellow
           return
         end
 
-        stylesheet = content[STYLESHEET_CALL]
-        if stylesheet
-          migrate_layout(layout_file, "<%= ruact_head_assets %>\n    ",
-                         before: stylesheet,
-                         success: "added ruact_head_assets above the app stylesheet")
-        else
-          migrate_layout(layout_file, "    <%= ruact_head_assets %>\n",
-                         before: "  </head>",
-                         success: "added ruact_head_assets to <head>")
-        end
+        offset = head_assets_offset(source)
+        return warn_head_assets_manual(layout_file) if offset.nil?
+
+        path.write("#{source[0...offset]}<%= ruact_head_assets %>\n    #{source[offset..]}")
+        say_status "update", "added ruact_head_assets to #{layout_file}", :green
       end
 
       # The layout owns the document: `stylesheet_link_tag`, favicons, fonts and
@@ -444,6 +454,38 @@ module Ruact
       end
 
       private
+
+      # The byte offset to write at: just before the FIRST live `stylesheet_link_tag`,
+      # else just before `</head>`. "Live" means it survives comment stripping.
+      # Blanking comments rather than deleting them keeps every offset aligned with
+      # the original source, so the position found here is the position written to.
+      def head_assets_offset(source)
+        live = blank_layout_comments(source)
+        match = live.match(STYLESHEET_CALL)
+        return match.begin(0) if match
+
+        live.index("</head>")
+      end
+
+      def blank_layout_comments(source)
+        source
+          .gsub(LAYOUT_COMMENT) { |m| " " * m.length }
+          .gsub(Ruact::LayoutSource::ERB_COMMENT) { |m| " " * m.length }
+      end
+
+      def warn_head_assets_manual(layout_file)
+        say_status "skip", "could not place ruact_head_assets automatically", :yellow
+        say <<~MSG
+          ruact could not find a safe place in #{layout_file} for the client-component
+          stylesheets. Add this inside <head>, ABOVE your own stylesheet_link_tag:
+
+              <%= ruact_head_assets %>
+
+          Without it, CSS imported by your "use client" components is built and served
+          but never linked — styling that works in development and vanishes in production.
+          `rails ruact:doctor` keeps reporting this until the line is there.
+        MSG
+      end
 
       # `inject_into_file` prints "File unchanged!" and carries on when its
       # anchor misses, so reporting success without checking would be a lie —

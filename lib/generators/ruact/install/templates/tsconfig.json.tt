@@ -9,7 +9,8 @@
     "noEmit": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "//": "vite/client is what makes a CSS side-effect import type-check. Without it a client component doing `import \"pkg/dist/pkg.css\"` fails with TS2882 (Story 17.0b).",
+    // Vite's client types. Without them a client component importing a
+    // stylesheet for its side effect has no declaration to resolve against.
     "types": ["vite/client"],
     "baseUrl": ".",
     "paths": {

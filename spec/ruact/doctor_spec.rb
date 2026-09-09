@@ -229,6 +229,59 @@ RSpec.describe Ruact::Doctor do
       end
     end
 
+    # Review round 1: the check read application.html.erb regardless of what
+    # `config.layout` names, so an app rendering through `admin` passed on a
+    # layout it never uses.
+    context "when config.layout names ANOTHER layout" do
+      before do
+        write_manifest({ "file" => "b.js", "css" => ["a.css"] })
+        write_head("<html><head><%= ruact_head_assets %></head><body></body></html>")
+        dir = tmpdir.join("app", "views", "layouts")
+        File.write(dir.join("admin.html.erb"), "<html><head></head><body></body></html>")
+        Ruact.configure { |c| c.layout = "admin" }
+      end
+
+      it "FAILS on the layout that actually renders, not on application", :aggregate_failures do
+        status, _message, remediation = doctor.send(:check_head_assets)
+
+        expect(status).to eq(:fail)
+        expect(remediation).to include("admin.html.erb")
+      end
+    end
+
+    context "when config.layout names a layout that does not exist" do
+      before do
+        write_manifest({ "file" => "b.js", "css" => ["a.css"] })
+        Ruact.configure { |c| c.layout = "missing" }
+      end
+
+      it "FAILS naming the missing file rather than claiming the shell covers it" do
+        status, message = doctor.send(:check_head_assets)
+
+        expect(status).to eq(:fail)
+        expect(message).to include("missing.html.erb")
+      end
+    end
+
+    # An unreadable manifest is not "nothing to link" — the same file is parsed
+    # at render time, where a parse error raises. A green doctor on an app that
+    # 500s is worse than no check.
+    context "when the manifest is corrupt" do
+      before do
+        dir = tmpdir.join("public", "assets", ".vite")
+        FileUtils.mkdir_p(dir)
+        File.write(dir.join("manifest.json"), "{")
+        write_head("<html><head></head><body></body></html>")
+      end
+
+      it "FAILS naming the file, instead of passing as if there were no CSS", :aggregate_failures do
+        status, message = doctor.send(:check_head_assets)
+
+        expect(status).to eq(:fail)
+        expect(message).to include("not valid JSON")
+      end
+    end
+
     it "is registered in CHECKS, so a real doctor run reaches it" do
       expect(described_class::CHECKS).to include(:head_assets)
     end

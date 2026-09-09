@@ -83,12 +83,15 @@ module Ruact
     # smuggling it through a helper named for JavaScript.
     #
     # **Cascade.** `rails generate ruact:install` places this call ABOVE the
-    # app's `stylesheet_link_tag`, so the app's own CSS is loaded afterwards and
-    # wins — your code beats the gem's.
+    # app's `stylesheet_link_tag`, so the app's own CSS is loaded afterwards.
+    # Order decides ties only — specificity, `!important` and cascade layers all
+    # outrank it — but ties are the common case, and losing them by default is
+    # what makes third-party CSS feel like it "takes over".
     #
-    # **In development this emits nothing at all**, and that is deliberate: the
-    # dev server is already injecting the CSS, and linking the file on disk would
-    # serve whatever the last build left there.
+    # **With the dev server reachable this emits nothing**, deliberately: Vite is
+    # already injecting the CSS, and linking the file on disk would serve whatever
+    # the last build left there. In development WITHOUT the dev server it falls
+    # back to the built manifest, matching what `ruact_vite_tags` does.
     #
     # It reads the SAME manifest entry as {#ruact_js_assets}, in the same render,
     # so the script and the stylesheet can never come from different builds.
@@ -185,7 +188,19 @@ module Ruact
       false
     end
 
+    # Memoized FOR THE DURATION OF ONE RENDER, which is what lets
+    # `ruact_head_assets` and `ruact_js_assets` promise they describe the same
+    # build. They are separate calls in the template, so without this a deploy
+    # landing between them serves one build's stylesheet beside another build's
+    # script — verified reachable in review, not hypothetical.
     def vite_manifest_entry(src_path)
+      @__ruact_manifest_entries ||= {}
+      return @__ruact_manifest_entries[src_path] if @__ruact_manifest_entries.key?(src_path)
+
+      @__ruact_manifest_entries[src_path] = read_vite_manifest_entry(src_path)
+    end
+
+    def read_vite_manifest_entry(src_path)
       manifest_path = Rails.root.join("public", "assets", ".vite", "manifest.json")
       return nil unless File.exist?(manifest_path)
 

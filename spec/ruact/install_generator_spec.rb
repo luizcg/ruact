@@ -1427,6 +1427,83 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(layout.scan("ruact_head_assets").length).to eq(2) # the comment + the real call
       end
 
+      # Review round 1 found the Thor-anchored version injecting INSIDE a
+      # commented-out stylesheet link — inert markup that `head_wired?` then
+      # reported as done, so the doctor passed and the next generator run
+      # skipped. Silent, and production-only.
+      it "does not anchor on a stylesheet call that is inside an HTML comment" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <!-- <%= stylesheet_link_tag :old %> -->
+              <%= stylesheet_link_tag :app %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout).to include("<%= ruact_head_assets %>")
+        expect(layout).not_to match(/<!--[^>]*ruact_head_assets/m)
+        expect(layout.index("ruact_head_assets")).to be > layout.index("-->")
+      end
+
+      it "does not anchor on a stylesheet call inside an ERB comment" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <%# <%= stylesheet_link_tag :old %> %>
+              <%= stylesheet_link_tag :app %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout.scan("ruact_head_assets").length).to eq(1)
+      end
+
+      # Thor anchors by gsub, so two identical calls got two helpers — and the
+      # second one landed AFTER the app's CSS, inverting the cascade the story
+      # exists to get right.
+      it "injects exactly once when the layout links two stylesheets" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <%= stylesheet_link_tag :app %>
+              <%= stylesheet_link_tag :app %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout.scan("ruact_head_assets").length).to eq(1)
+        expect(layout.index("ruact_head_assets")).to be < layout.index("stylesheet_link_tag")
+      end
+
+      # `%w[...]` is a normal way to write this call, and the first regex died on
+      # the literal `%`, silently falling through to the </head> branch.
+      it "anchors on a call carrying %w[] arguments" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <%= stylesheet_link_tag %w[application print] %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout.index("ruact_head_assets")).to be < layout.index("stylesheet_link_tag")
+      end
+
+      it "refuses loudly rather than guessing when there is no <head> and no stylesheet" do
+        path = File.join(app_root, "app/views/layouts/application.html.erb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, "<html><body></body></html>")
+
+        expect { build_generator(app_root).inject_layout_head_assets }
+          .to output(/could not place ruact_head_assets automatically/).to_stdout
+        expect(File.read(path)).not_to include("ruact_head_assets")
+      end
+
       it "does nothing when there is no layout to edit" do
         expect { silently { build_generator(app_root).inject_layout_head_assets } }.not_to raise_error
       end

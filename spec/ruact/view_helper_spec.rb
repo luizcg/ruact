@@ -133,6 +133,35 @@ module Ruact
             .and_return({ "file" => "b.js", "css" => ["a.css"] })
           expect(asset_helper.ruact_head_assets).to be_html_safe
         end
+
+        # Vite writes this array in dependency order. Emitting it in any other
+        # order changes which rule wins, so the order is part of the contract.
+        it "preserves the manifest's own order" do
+          allow(asset_helper).to receive(:vite_manifest_entry)
+            .and_return({ "file" => "b.js", "css" => %w[first.css second.css third.css] })
+          html = asset_helper.ruact_head_assets
+
+          expect(html.scan(%r{/assets/(\S+?\.css)}).flatten).to eq(%w[first.css second.css third.css])
+        end
+      end
+
+      # Review round 1 showed the "same build" promise was not kept: each helper
+      # did its own file read, so a deploy landing between the two calls served
+      # one build's stylesheet beside another build's script — in the same render.
+      context "when both helpers run in one render (the same-build guarantee)" do
+        before do
+          allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new("production"))
+        end
+
+        it "reads the manifest ONCE per render, so both helpers describe one build" do
+          allow(asset_helper).to receive(:read_vite_manifest_entry)
+            .and_return({ "file" => "b.js", "css" => ["a.css"] })
+
+          asset_helper.ruact_head_assets
+          asset_helper.ruact_js_assets
+
+          expect(asset_helper).to have_received(:read_vite_manifest_entry).once
+        end
       end
     end
 
