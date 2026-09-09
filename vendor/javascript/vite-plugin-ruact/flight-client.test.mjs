@@ -148,6 +148,31 @@ describe("Story 17.0a — data props keep their arity", () => {
     expect(tree.props.grid).toEqual([[1, 2], [3]]);
   });
 
+  it("a ONE-element outer array wrapping an array keeps both levels", () => {
+    // Distinct from the grid case above, whose outer array has two members: a
+    // collapse conditioned on `length === 1 && Array.isArray(items[0])` would
+    // pass that one and corrupt this one.
+    const tree = createFromFlightPayload(
+      payloadWithProps({ matrix: [[1, 2]] }),
+      MODULE_REGISTRY,
+    );
+
+    expect(tree.props.matrix).toEqual([[1, 2]]);
+  });
+
+  it("an `undefined` MEMBER is kept — Flight distinguishes it from absence", () => {
+    // `$undefined` is a wire sentinel (project-context §7), so `[undefined]` is
+    // a one-member array, not an empty one. A `.filter(v => v !== undefined)`
+    // in the walker would silently make it empty.
+    const tree = createFromFlightPayload(
+      payloadWithProps({ slots: ["$undefined"] }),
+      MODULE_REGISTRY,
+    );
+
+    expect(tree.props.slots).toHaveLength(1);
+    expect(tree.props.slots[0]).toBeUndefined();
+  });
+
   it("falsy items survive — they are values, not absences", () => {
     // `.filter(Boolean)` in the walker would drop these and still satisfy
     // every length assertion that uses truthy items.
