@@ -177,6 +177,10 @@ RSpec.describe Ruact::Doctor do
 
         expect(status).to eq(:fail)
         expect(message).to include("1 client-component stylesheet")
+        # `Doctor#run` prints MESSAGE only — remediation reaches `-- --json`
+        # alone. A reader in the terminal has to get the file from the message.
+        expect(message).to include("application.html.erb")
+        expect(message).to include("ruact_head_assets")
         expect(remediation).to include("ruact_head_assets")
         expect(remediation).to include("app/views/layouts/application.html.erb")
         # The cascade instruction is load-bearing: linking it below the app's own

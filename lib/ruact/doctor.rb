@@ -252,7 +252,8 @@ module Ruact
 
     def head_assets_no_layout_result(path)
       [:fail,
-       "the build emits client-component CSS but #{path.basename} does not exist",
+       "the build emits client-component CSS but #{path.basename} does not exist " \
+       "(Ruact.config.layout points at it)",
        "Ruact.config.layout points at #{path}, which is not there. Create it (or correct " \
        "config.layout) and add <%= ruact_head_assets %> inside its <head> — otherwise the " \
        "stylesheets Vite built for your client components are served and never referenced."]
@@ -263,14 +264,19 @@ module Ruact
     # doctor is green on an app that 500s.
     def head_assets_unreadable_result
       [:fail,
-       "public/assets/.vite/manifest.json exists but is not valid JSON",
+       "public/assets/.vite/manifest.json exists but is not valid JSON — rebuild your assets",
        "Rebuild your assets (npm run build). ruact reads this file at render time, so a " \
        "truncated or corrupt manifest raises there rather than degrading."]
     end
 
+    # The file goes in the MESSAGE, not only in the remediation: `Doctor#run`
+    # prints `message` alone, so anything a reader needs in the terminal has to
+    # be there. (Story 5.4 found the same asymmetry; the remediation reaches
+    # `-- --json` only.)
     def head_assets_missing_result(count, path)
       [:fail,
-       "the build emits #{count} client-component stylesheet(s) that nothing links",
+       "the build emits #{count} client-component stylesheet(s) that nothing links " \
+       "— add <%= ruact_head_assets %> to #{path.basename}",
        "Add <%= ruact_head_assets %> as the first thing inside <head> in #{path}, " \
        "ABOVE your stylesheet_link_tag so your own CSS is loaded last and wins ties " \
        "(or re-run rails generate ruact:install). Without it that CSS is built and served but " \
