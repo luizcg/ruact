@@ -212,6 +212,24 @@ RSpec.describe Ruact::Doctor do
       end
     end
 
+    # Under `layout = false` the built-in shell links this CSS itself, so there is
+    # no layout to check and nothing to report. Losing that early return made the
+    # doctor fail an app that was already correct.
+    context "when config.layout is false" do
+      before do
+        write_manifest({ "file" => "b.js", "css" => ["a.css"] })
+        write_head("<html><head></head><body></body></html>")
+        Ruact.configure { |c| c.layout = false }
+      end
+
+      it "passes — the built-in shell links it, and no layout is consulted" do
+        status, message = doctor.send(:check_head_assets)
+
+        expect(status).to eq(:pass)
+        expect(message).to include("shell")
+      end
+    end
+
     context "when the build emits no CSS" do
       before do
         write_manifest({ "file" => "bootstrap-abc.js" })
@@ -246,6 +264,22 @@ RSpec.describe Ruact::Doctor do
 
         expect(status).to eq(:fail)
         expect(remediation).to include("admin.html.erb")
+      end
+    end
+
+    # Rails accepts both `admin` and `layouts/admin`. Doubling the prefix looked
+    # for app/views/layouts/layouts/admin.html.erb and declared it missing.
+    context "when config.layout carries the conventional layouts/ prefix" do
+      before do
+        write_manifest({ "file" => "b.js", "css" => ["a.css"] })
+        dir = tmpdir.join("app", "views", "layouts")
+        FileUtils.mkdir_p(dir)
+        File.write(dir.join("admin.html.erb"), "<html><head><%= ruact_head_assets %></head><body></body></html>")
+        Ruact.configure { |c| c.layout = "layouts/admin" }
+      end
+
+      it "resolves to the same file as the bare name" do
+        expect(doctor.send(:check_head_assets).first).to eq(:pass)
       end
     end
 

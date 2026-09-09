@@ -233,10 +233,20 @@ module Ruact
       [:pass, "client-component CSS is linked (ruact_head_assets in #{path.basename})"]
     end
 
-    # `config.layout` is `true` (the app's own application layout) or a String
-    # naming another one. Anything else has already been handled by the caller.
+    # The layout file this check reads.
+    #
+    # A String names one explicitly, and may or may not carry the conventional
+    # `layouts/` prefix — Rails accepts both, so it is stripped rather than
+    # doubled into `app/views/layouts/layouts/...`.
+    #
+    # `true` means "whatever layout the controller normally renders", which this
+    # check CANNOT resolve: it depends on the controller handling the request, and
+    # any controller may override with `layout "admin"`. It reads the application
+    # layout, which is what the overwhelming majority of apps render, and every
+    # message names the file it read so the limit of the check is visible rather
+    # than implied.
     def head_assets_layout_path
-      name = Ruact.config.layout.is_a?(String) ? Ruact.config.layout : "application"
+      name = Ruact.config.layout.is_a?(String) ? Ruact.config.layout.sub(%r{\Alayouts/}, "") : "application"
       Rails.root.join("app", "views", "layouts", "#{name}.html.erb")
     end
 
@@ -261,7 +271,7 @@ module Ruact
     def head_assets_missing_result(count, path)
       [:fail,
        "the build emits #{count} client-component stylesheet(s) that nothing links",
-       "Add <%= ruact_head_assets %> inside <head> in #{path}, " \
+       "Add <%= ruact_head_assets %> as the first thing inside <head> in #{path}, " \
        "ABOVE your stylesheet_link_tag so your own CSS is loaded last and wins ties " \
        "(or re-run rails generate ruact:install). Without it that CSS is built and served but " \
        "never referenced - styling that works in development and vanishes in production."]

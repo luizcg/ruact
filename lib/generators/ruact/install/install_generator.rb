@@ -98,18 +98,22 @@ module Ruact
                          after: /class ApplicationController.*\n/
       end
 
-      # Deliberately tolerant of what a real layout contains: `%w[...]` arguments
-      # (a literal `%` used to end the match early), multi-line calls, trim modes.
-      STYLESHEET_CALL = /<%=.*?\bstylesheet_link_tag\b.*?%>/m
-      private_constant :STYLESHEET_CALL
+      # The opening `<head>` tag, in any of the shapes a layout writes it.
+      HEAD_OPEN = /<head\b[^>]*>/i
+      private_constant :HEAD_OPEN
 
-      # Both comment syntaxes a layout can hide a call in. `LayoutSource` strips
-      # only the ERB form, which is the right contract for "did this template CALL
-      # the helper"; anchoring additionally needs the HTML form, because injecting
-      # beside a commented-out stylesheet link would put the helper inside the
-      # comment — inert, and then reported as wired.
-      LAYOUT_COMMENT = /<!--.*?-->/m
+      # BOTH comment syntaxes in ONE alternation, so a left-to-right scan closes
+      # whichever opened first. Two sequential passes got this wrong: running the
+      # HTML pass first let a `<!--` living INSIDE `<%# ... %>` swallow through to
+      # a later `-->`, blanking a live stylesheet in between.
+      LAYOUT_COMMENT = /<!--.*?-->|<%-?#.*?-?%>/m
       private_constant :LAYOUT_COMMENT
+
+      # An opener with no closer. The blanker cannot neutralise these (there is
+      # nothing to match), so anything after one is of unknown status and the
+      # generator refuses rather than writing into it.
+      DANGLING_COMMENT = /<!--(?!.*?-->)|<%-?#(?!.*?-?%>)/m
+      private_constant :DANGLING_COMMENT
 
       # Story 17.0b — the `<head>` half of the asset contract.
       #
@@ -141,7 +145,9 @@ module Ruact
         offset = head_assets_offset(source)
         return warn_head_assets_manual(layout_file) if offset.nil?
 
-        path.write("#{source[0...offset]}<%= ruact_head_assets %>\n    #{source[offset..]}")
+        return say_status "pretend", "would add ruact_head_assets to #{layout_file}", :blue if options[:pretend]
+
+        path.write("#{source[0...offset]}\n    <%= ruact_head_assets %>#{source[offset..]}")
         say_status "update", "added ruact_head_assets to #{layout_file}", :green
       end
 
@@ -455,29 +461,46 @@ module Ruact
 
       private
 
-      # The byte offset to write at: just before the FIRST live `stylesheet_link_tag`,
-      # else just before `</head>`. "Live" means it survives comment stripping.
-      # Blanking comments rather than deleting them keeps every offset aligned with
-      # the original source, so the position found here is the position written to.
+      # Where to write: immediately AFTER the opening `<head>` tag.
+      #
+      # Earlier this hunted for the app's `stylesheet_link_tag` and inserted above
+      # it. That is the same requirement — ruact's CSS before the app's — reached
+      # by a much worse route. Matching an ERB call by regex crossed `%>` and, in a
+      # stock Rails layout with `<title><%= title %></title>`, inserted INSIDE the
+      # title element. It also could not see CSS arriving by `yield :head` or
+      # `render :styles`, and silently placed ruact after those.
+      #
+      # First position in `<head>` satisfies the ordering for EVERY shape the app's
+      # CSS can take, and only has to find one unambiguous token.
+      #
+      # Returns a CHARACTER index (the source is read and written as a String, so
+      # indices are consistent end to end), or nil when no safe position exists.
       def head_assets_offset(source)
         live = blank_layout_comments(source)
-        match = live.match(STYLESHEET_CALL)
-        return match.begin(0) if match
+        match = live.match(HEAD_OPEN)
+        return nil unless match
 
-        live.index("</head>")
+        # A comment opened and never closed leaves everything after it in an
+        # unknown state — including, possibly, the `<head>` just matched.
+        return nil if live[0...match.end(0)].match?(DANGLING_COMMENT)
+
+        match.end(0)
       end
 
+      # Blanks to spaces rather than deleting, so every index in the blanked view
+      # is the same index in the original — the position found is the position
+      # written to.
       def blank_layout_comments(source)
-        source
-          .gsub(LAYOUT_COMMENT) { |m| " " * m.length }
-          .gsub(Ruact::LayoutSource::ERB_COMMENT) { |m| " " * m.length }
+        source.gsub(LAYOUT_COMMENT) { |m| " " * m.length }
       end
 
       def warn_head_assets_manual(layout_file)
         say_status "skip", "could not place ruact_head_assets automatically", :yellow
         say <<~MSG
           ruact could not find a safe place in #{layout_file} for the client-component
-          stylesheets. Add this inside <head>, ABOVE your own stylesheet_link_tag:
+          stylesheets — there is no unambiguous <head> to write into (it may be
+          missing, or inside an unclosed comment). Add this as the first thing in
+          <head>, ABOVE your own stylesheet_link_tag:
 
               <%= ruact_head_assets %>
 

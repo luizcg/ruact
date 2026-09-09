@@ -1443,8 +1443,10 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         ERB
 
         expect(layout).to include("<%= ruact_head_assets %>")
-        expect(layout).not_to match(/<!--[^>]*ruact_head_assets/m)
-        expect(layout.index("ruact_head_assets")).to be > layout.index("-->")
+        # The call must be LIVE markup: not swallowed by the comment, and ahead of
+        # the app's real stylesheet.
+        expect(layout).not_to match(/<!--(?:(?!-->).)*ruact_head_assets/m)
+        expect(layout.index("ruact_head_assets")).to be < layout.index("stylesheet_link_tag :app")
       end
 
       it "does not anchor on a stylesheet call inside an ERB comment" do
@@ -1502,6 +1504,90 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect { build_generator(app_root).inject_layout_head_assets }
           .to output(/could not place ruact_head_assets automatically/).to_stdout
         expect(File.read(path)).not_to include("ruact_head_assets")
+      end
+
+      # Review round 2, high: the previous anchor matched an ERB call by regex and
+      # `.*?` crossed `%>`, so in a stock Rails layout it started at the FIRST `<%=`
+      # and inserted INSIDE `<title>`.
+      it "does not land inside another ERB tag when the layout has a dynamic title" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <title><%= content_for(:title) || "App" %></title>
+              <%= stylesheet_link_tag :app %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout).to include("<title><%= content_for(:title) || \"App\" %></title>")
+        expect(layout.index("ruact_head_assets")).to be < layout.index("<title>")
+      end
+
+      it "does not land inside an attribute carrying ERB" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <meta name="csrf" content="<%= form_authenticity_token %>">
+              <%= stylesheet_link_tag :app %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout).to include(%(content="<%= form_authenticity_token %>"))
+      end
+
+      # Round 2: CSS can arrive without a `stylesheet_link_tag` at all. Anchoring
+      # on the app's call could not see these and put ruact after them.
+      it "still comes first when the app's CSS arrives via yield :head" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <%= yield :head %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout.index("ruact_head_assets")).to be < layout.index("yield :head")
+      end
+
+      it "still comes first when the app's CSS arrives via a partial" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <%= render "shared/styles" %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout.index("ruact_head_assets")).to be < layout.index("render")
+      end
+
+      # Round 2: an opener with no closer leaves everything after it in an unknown
+      # state. Writing into that produced an inert helper reported as success.
+      it "refuses when a comment is opened and never closed before <head>" do
+        path = File.join(app_root, "app/views/layouts/application.html.erb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, "<html><!-- oops <head><%= stylesheet_link_tag :app %></head><body></body></html>")
+
+        expect { build_generator(app_root).inject_layout_head_assets }
+          .to output(/could not find a safe place/).to_stdout
+        expect(File.read(path)).not_to include("ruact_head_assets")
+      end
+
+      # Round 2: dropping Thor's action also dropped Thor's --pretend.
+      it "writes nothing under --pretend" do
+        path = File.join(app_root, "app/views/layouts/application.html.erb")
+        FileUtils.mkdir_p(File.dirname(path))
+        original = "<html><head><%= stylesheet_link_tag :app %></head><body></body></html>"
+        File.write(path, original)
+
+        silently { build_generator(app_root, pretend: true).inject_layout_head_assets }
+
+        expect(File.read(path)).to eq(original)
       end
 
       it "does nothing when there is no layout to edit" do

@@ -104,5 +104,35 @@ RSpec.describe Ruact::LayoutSource do
     it "does not anchor on a look-alike attribute" do
       expect(described_class::ROOT_ELEMENT).not_to match(%(<div data-id="root"></div>))
     end
+
+    # Story 17.0b — a call hidden in EITHER comment syntax is not a call.
+    #
+    # `without_comments` stripped only the ERB form, so `<!-- <%= ruact_js_assets %> -->`
+    # read as wired: the generator skipped the migration and the doctor passed, on a
+    # layout that emitted nothing. Found on the new head helper; the older one had it too.
+    describe "comment handling (Story 17.0b)", :story_17_0b do
+      it "does not read a call inside an HTML comment as wired", :aggregate_failures do
+        expect(described_class.wired?("<!-- <%= ruact_js_assets %> -->")).to be(false)
+        expect(described_class.head_wired?("<!-- <%= ruact_head_assets %> -->")).to be(false)
+      end
+
+      it "does not read a call inside an ERB comment as wired", :aggregate_failures do
+        expect(described_class.wired?("<%# <%= ruact_js_assets %> %>")).to be(false)
+        expect(described_class.head_wired?("<%# ruact_head_assets %>")).to be(false)
+      end
+
+      it "still reads a real call as wired", :aggregate_failures do
+        expect(described_class.wired?("<%= ruact_js_assets %>")).to be(true)
+        expect(described_class.head_wired?("<%= ruact_head_assets %>")).to be(true)
+      end
+
+      # An `<!--` opened INSIDE an ERB comment must not swallow through to a later
+      # `-->` and blank a live call in between. One alternation, scanned left to
+      # right, is what makes that true; two sequential passes got it wrong.
+      it "closes whichever comment opened first" do
+        source = "<%# <!-- %> <%= ruact_head_assets %> <!-- tail -->"
+        expect(described_class.head_wired?(source)).to be(true)
+      end
+    end
   end
 end

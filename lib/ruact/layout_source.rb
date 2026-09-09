@@ -20,6 +20,9 @@ module Ruact
     # an earlier version of this pattern missed.
     ERB_COMMENT = /<%-?#.*?-?%>/m
 
+    # Either comment syntax, matched in one left-to-right pass.
+    ANY_COMMENT = /<!--.*?-->|<%-?#.*?-?%>/m
+
     # An ERB OUTPUT tag calling the helper: `<%= ruact_js_assets %>` and the raw
     # `<%== ... %>` form, with or without arguments or surrounding whitespace.
     # Scanning stops at the tag's own `%>` rather than forbidding `%` outright —
@@ -62,8 +65,18 @@ module Ruact
         markup.to_s.match?(ROOT_ATTRIBUTE)
       end
 
+      # Strips BOTH comment syntaxes a layout can hide a call in.
+      #
+      # This used to strip only the ERB form, which left `<!-- <%= ruact_js_assets %> -->`
+      # reading as a live call: the generator skipped the migration and the doctor
+      # passed, on a layout emitting nothing. Story 17.0b found it on the new
+      # `head_wired?` and it was equally true of `wired?`.
+      #
+      # ONE alternation rather than two passes, so a left-to-right scan closes
+      # whichever comment opened first — running the HTML pass first let a `<!--`
+      # living inside `<%# ... %>` swallow through to a later `-->`.
       def without_comments(source)
-        source.to_s.gsub(ERB_COMMENT, "")
+        source.to_s.gsub(ANY_COMMENT, "")
       end
     end
   end

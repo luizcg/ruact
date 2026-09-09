@@ -153,6 +153,17 @@ module Ruact
           allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new("production"))
         end
 
+        it "caches a MISSING entry too, so an absent manifest cannot reappear mid-render" do
+          # Memoizing only truthy values would re-read on every nil, which is
+          # exactly the window a deploy lands in.
+          allow(asset_helper).to receive(:read_vite_manifest_entry).and_return(nil)
+
+          asset_helper.ruact_head_assets
+          asset_helper.ruact_js_assets
+
+          expect(asset_helper).to have_received(:read_vite_manifest_entry).once
+        end
+
         it "reads the manifest ONCE per render, so both helpers describe one build" do
           allow(asset_helper).to receive(:read_vite_manifest_entry)
             .and_return({ "file" => "b.js", "css" => ["a.css"] })
