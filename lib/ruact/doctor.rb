@@ -262,7 +262,7 @@ module Ruact
       [:fail,
        "the build emits #{count} client-component stylesheet(s) that nothing links",
        "Add <%= ruact_head_assets %> inside <head> in #{path}, " \
-       "ABOVE your stylesheet_link_tag so your own CSS still wins the cascade " \
+       "ABOVE your stylesheet_link_tag so your own CSS is loaded last and wins ties " \
        "(or re-run rails generate ruact:install). Without it that CSS is built and served but " \
        "never referenced - styling that works in development and vanishes in production."]
     end

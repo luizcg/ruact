@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Development hid it completely, because the Vite dev server injects that CSS through JavaScript. Only a production build showed it, which is the worst place to find out.
 
-  There is now a second helper for the `<head>`, `ruact_head_assets`, and `rails generate ruact:install` writes it into your layout **above** your own `stylesheet_link_tag` — so your CSS still loads last and still wins the cascade. `rails ruact:doctor` fails when the build emits component CSS that the layout never links, naming the line to paste. The built-in shell (`config.layout = false`) links it too: that shell still does not presume your app's stylesheets, but the component CSS belongs to the very components it exists to render.
+  There is now a second helper for the `<head>`, `ruact_head_assets`, and `rails generate ruact:install` writes it into your layout **above** your own `stylesheet_link_tag`, so your CSS is loaded last. Order settles ties; specificity, `!important` and cascade layers still outrank it. `rails ruact:doctor` fails when the build emits component CSS that the layout never links, naming the line to paste. The built-in shell (`config.layout = false`) links it too: that shell still does not presume your app's stylesheets, but the component CSS belongs to the very components it exists to render.
 
   The helper is deliberately separate from `ruact_js_assets` rather than folded into it. That one is injected before `</body>`, so a stylesheet emitted beside it would be discovered late and would sit *after* your own CSS in the document — the two things you least want from a stylesheet you did not write.
 

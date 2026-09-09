@@ -38,7 +38,7 @@ module Ruact
     # controller a public instance method is exposed as a routable action. Demote
     # the mixed-in helper methods so they are never callable as actions (they are
     # only ever invoked internally by `ruact_html_shell`).
-    private :ruact_js_assets, :__ruact_component__
+    private :ruact_js_assets, :ruact_head_assets, :__ruact_component__
 
     # Resolves the manifest for this render. In PRODUCTION this is the boot-time
     # cached +Ruact.manifest+ (set by Railtie#config.to_prepare) — no per-request

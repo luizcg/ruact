@@ -180,7 +180,7 @@ RSpec.describe Ruact::Doctor do
         expect(remediation).to include("ruact_head_assets")
         expect(remediation).to include("app/views/layouts/application.html.erb")
         # The cascade instruction is load-bearing: linking it below the app's own
-        # stylesheet would let third-party CSS outrank the app's.
+        # stylesheet would put third-party CSS after the app's, so it wins ties.
         expect(remediation).to include("ABOVE your stylesheet_link_tag")
       end
 

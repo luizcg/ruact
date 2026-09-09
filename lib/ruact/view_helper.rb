@@ -77,7 +77,7 @@ module Ruact
     # **Why this is separate from {#ruact_js_assets}, and why it belongs in
     # `<head>`.** The JS helper is injected before `</body>`, and the built-in
     # shell emits it there too — a position that did not matter while it emitted
-    # only a `<script>`. A stylesheet there means the page has already painted
+    # only a `<script>`. A stylesheet there is discovered late and sits AFTER
     # when the browser finds it, and it means third-party CSS outranks the app's
     # own. So ruact declares that it contributes CSS and says WHERE, rather than
     # smuggling it through a helper named for JavaScript.

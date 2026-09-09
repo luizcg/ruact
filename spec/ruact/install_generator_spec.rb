@@ -1209,7 +1209,7 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
     #
     # Position is the whole point: `ruact_head_assets` goes in `<head>` and ABOVE
     # the app's own `stylesheet_link_tag`, so the app's CSS loads afterwards and
-    # wins the cascade. Asserting only presence would pass with the call in the
+    # is loaded last. Asserting only presence would pass with the call in the
     # wrong place, which is the failure this story exists to avoid.
     describe "Thor command surface" do
       it "registers only the install steps, never the private helpers" do
@@ -1316,7 +1316,7 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
     # Drives the REAL generator method, in the shape the inject_layout_shell
     # specs below settled on. POSITION is the point: the call goes in `<head>`
     # and ABOVE the app's own `stylesheet_link_tag`, so the app's CSS loads
-    # afterwards and wins the cascade. A presence-only assertion would pass with
+    # afterwards and wins ties. A presence-only assertion would pass with
     # the call in the wrong place, which is the failure this story exists to fix.
     describe "inject_layout_head_assets — the REAL generator", :aggregate_failures, :story_17_0b do
       let(:app_root) { Dir.mktmpdir("ruact_install_17_0b") }
@@ -1373,11 +1373,11 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(layout.index("ruact_head_assets")).to be < layout.index("</head>")
       end
 
-      # Thor's `inject_into_file` already refuses to insert a byte-identical
-      # string twice, so a naive "run it twice" case passes with or without the
-      # guard. What the guard actually buys is recognising the call in ANOTHER
-      # SHAPE — different spacing, a different place in the head — which is what
-      # a hand-edited layout looks like.
+      # A naive "run it twice" case is weak: the second run is skipped by the
+      # already-wired guard, so it would pass for the wrong reason if the guard
+      # only ever matched the exact string this generator writes. What the guard
+      # has to buy is recognising the call in ANOTHER SHAPE — different spacing,
+      # a different place in the head — which is what a hand-edited layout is.
       it "recognises an already-present call written differently, and leaves it alone" do
         layout = layout_after_run(<<~ERB)
           <html>
