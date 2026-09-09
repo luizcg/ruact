@@ -13,10 +13,12 @@
 //   1. Data props — 0 / 1 / 2 elements, at top level and nested, arrive with
 //      their arity intact. The n=1 cases are the regression; n=0 and n=2 are
 //      guards that the fix does not over-correct in the other direction.
-//   2. Children — the shapes the server actually emits still build. The server
-//      collapses a single child before the wire (`html_converter.rb:188`, and
-//      the Suspense path at `:202`), so the client is not the place that
-//      normalizes children.
+//   2. Children — 0 / 1 / 2, asserting the REBUILT content (type, key, nested
+//      children), not just arity, so a rebuild returning nulls cannot pass.
+//      Children keep their arity too: the server collapses a lone TAG-NESTED
+//      child before the wire (`html_converter.rb:188`, Suspense at `:202`), but
+//      an explicit `children={[...]}` prop reaches the client as an array and
+//      now stays one. See the contract note on that describe block.
 //   3. The gem-produced fixture — the same assertion driven by wire bytes the
 //      Ruby serializer wrote, not by a literal typed here.
 //
@@ -124,10 +126,34 @@ describe("Story 17.0a — data props keep their arity", () => {
   });
 });
 
-describe("Story 17.0a — children shapes the server emits still build", () => {
-  it("a single child arrives collapsed, because the SERVER collapsed it", () => {
-    // `html_converter.rb:188` writes `children` as the child itself when there
-    // is exactly one. The client receives a string/element, never a 1-array.
+describe("Story 17.0a — children keep their arity too (contract, decided 2026-09-09)", () => {
+  // Decision: arity is preserved for `children` as well as for data props.
+  //
+  // The server collapses a lone child produced by TAG NESTING before the wire
+  // (`html_converter.rb:188`, Suspense at `:202`), so that path is unaffected.
+  // But `children` passed as an EXPLICIT PROP on a self-closing tag —
+  // `<Label children={["hi"]} />` — reaches the wire as an array, and Story
+  // 15.2's loud error does not cover it (`erb_preprocessor.rb:174` exempts
+  // self-closing tags). Before this story the client collapsed that to `"hi"`.
+  // It no longer does: you passed an array, you get an array.
+  //
+  // Taken deliberately while the library has no external adopters — the only
+  // moment where making the contract consistent costs nothing.
+
+  it("a single child NESTED IN A TAG arrives collapsed, because the server collapsed it", () => {
+    const tree = buildTree(
+      ["$", "div", null, { children: ["$", "em", null, { children: "hi" }] }],
+      EMPTY_ROWS,
+      MODULE_REGISTRY,
+    );
+
+    // Not an array: the server sent the element itself, and it rebuilds as one.
+    expect(Array.isArray(tree.props.children)).toBe(false);
+    expect(tree.props.children.type).toBe("em");
+    expect(tree.props.children.props.children).toBe("hi");
+  });
+
+  it("a single TEXT child nested in a tag arrives as the string", () => {
     const tree = buildTree(
       ["$", "div", null, { children: "hi" }],
       EMPTY_ROWS,
@@ -137,34 +163,72 @@ describe("Story 17.0a — children shapes the server emits still build", () => {
     expect(tree.props.children).toBe("hi");
   });
 
-  it("multiple children arrive as an array", () => {
+  it("multiple children arrive as an array, each one rebuilt", () => {
     const tree = buildTree(
-      ["$", "ul", null, { children: [["$", "li", "a", { children: "one" }], ["$", "li", "b", { children: "two" }]] } ],
+      ["$", "ul", null, {
+        children: [
+          ["$", "li", "a", { children: "one" }],
+          ["$", "li", "b", { children: "two" }],
+        ],
+      }],
+      EMPTY_ROWS,
+      MODULE_REGISTRY,
+    );
+
+    const kids = tree.props.children;
+    expect(Array.isArray(kids)).toBe(true);
+    expect(kids).toHaveLength(2);
+    // Content, not just arity — a rebuild that returned nulls would pass a
+    // length check and fail this one.
+    expect(kids.map((k) => k.type)).toEqual(["li", "li"]);
+    expect(kids.map((k) => k.key)).toEqual(["a", "b"]);
+    expect(kids.map((k) => k.props.children)).toEqual(["one", "two"]);
+  });
+
+  it("an EXPLICIT one-element children prop stays a one-element array", () => {
+    // The contract change. `<Label children={["hi"]} />` — verified against the
+    // Ruby pipeline to reach the wire as `{"children":["hi"]}`.
+    const tree = buildTree(
+      ["$", "span", null, { children: ["hi"] }],
+      EMPTY_ROWS,
+      MODULE_REGISTRY,
+    );
+
+    expect(tree.props.children).toEqual(["hi"]);
+  });
+
+  it("a one-element children array of ELEMENTS stays an array, rebuilt", () => {
+    const tree = buildTree(
+      ["$", "ul", null, { children: [["$", "li", "only", { children: "just one" }]] }],
+      EMPTY_ROWS,
+      MODULE_REGISTRY,
+    );
+
+    const kids = tree.props.children;
+    expect(Array.isArray(kids)).toBe(true);
+    expect(kids).toHaveLength(1);
+    expect(kids[0].type).toBe("li");
+    expect(kids[0].key).toBe("only");
+    expect(kids[0].props.children).toBe("just one");
+  });
+
+  it("an EMPTY children array stays an empty array", () => {
+    // AC3's n=0 for children. Distinct from "no children prop at all" below:
+    // this one is present and empty, and must not become visible content.
+    const tree = buildTree(
+      ["$", "ul", null, { children: [] }],
       EMPTY_ROWS,
       MODULE_REGISTRY,
     );
 
     expect(Array.isArray(tree.props.children)).toBe(true);
-    expect(tree.props.children).toHaveLength(2);
+    expect(tree.props.children).toHaveLength(0);
   });
 
-  it("a children array that DOES arrive with one element stays an array", () => {
-    // Not a shape the current server emits, but the client must not silently
-    // change arity — that is the whole defect, and `children` is not special.
-    const tree = buildTree(
-      ["$", "ul", null, { children: [["$", "li", "a", { children: "only" }]] }],
-      EMPTY_ROWS,
-      MODULE_REGISTRY,
-    );
-
-    expect(Array.isArray(tree.props.children)).toBe(true);
-    expect(tree.props.children).toHaveLength(1);
-  });
-
-  it("an element with no children has no children prop", () => {
+  it("an element with no children prop has none after rebuilding", () => {
     const tree = buildTree(["$", "br", null, {}], EMPTY_ROWS, MODULE_REGISTRY);
 
-    expect(tree.props.children).toBeUndefined();
+    expect("children" in tree.props).toBe(false);
   });
 });
 

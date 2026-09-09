@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Arrays keep their length, including `children`.** ⚠️ **Behaviour change.** The collapse described under Fixed was applied by a walker that sees values without seeing where they sit, so removing it reaches one more path than the reported bug: `children` passed as an *explicit prop* on a self-closing tag — `<Label children={["hi"]} />` — used to arrive as `"hi"` and now arrives as `["hi"]`.
+
+  Children written the ordinary way, nested inside a tag, are unaffected: the server collapses a lone child before the wire, and that is still what the client receives. Only the explicit-prop form changes, and only when the array holds exactly one item. A component that indexed into that prop, or called a string method on it, will now see an array.
+
+  This was taken deliberately rather than compensated for. The alternative was to keep collapsing `children` alone, which preserves the old behaviour at the price of a permanent inconsistency — the same one-element array arriving as an array in every prop except one. A uniform contract is only free to adopt before there are applications depending on the exception.
+
 - **The published gem stopped shipping the repository.** `spec.files` was `git ls-files` minus four entries, so the whole of `spec/` — about two fifths of the tracked tree — plus `.github/`, `bench/`, `docs/`, `Rakefile`, `Gemfile.lock` and the RuboCop configuration travelled inside every `.gem` anybody installed, none of it reachable from an installed copy. What ships is now decided by a predicate, `Ruact::Packaging`, with a single writer that both the gemspec and the release gate call: `lib/`, `sig/`, `vendor/javascript/` and the top-level documents. Nothing a consumer loads was removed; the vendored Vite plugin and browser runtime still ship, because they are resolved by filesystem path off the installed gem. `spec.bindir` and `spec.executables` are gone with it — this gem has never had an `exe/` directory.
 
 
@@ -49,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   What this looked like is worth stating, because it did not look like a bug: the generated list rendered **neither the table nor the "none yet" message**, with nothing in the console. The first click on a column header threw. Typing in the search box fixed it, since search results come back as JSON and never pass through that code. Seed data and fixtures almost always hold more than one row, so the case that broke was the one every new application reaches first — the record you just created.
 
-  Arity is now preserved wherever an array appears. Nothing compensates for it elsewhere: the server already collapses a lone child before the wire, and React renders an array of children fine. `flight-client.js` was the only runtime module in the bundled Vite plugin without a unit test, which is what let a change to shared deserialization go unnoticed; it has one now, covering empty, one and two elements for both data props and children, driven in part by wire bytes the Ruby serializer writes.
+  Arity is now preserved wherever an array appears — see **Arrays keep their length, including `children`** under Changed. `flight-client.js` was the only runtime module in the bundled Vite plugin without a unit test, which is what let a change to shared deserialization go unnoticed; it has one now, covering empty, one and two elements for both data props and children, asserting the rebuilt content rather than only its arity, and driven in part by wire bytes the Ruby serializer writes.
 
 ## [0.0.11] - 2026-08-25
 
