@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.12] - 2026-09-09
+
 ### Added
 
 - **The release is the pull request.** Publishing used to be turned on by hand — a repository variable a maintainer set before merging and had to remember to delete afterwards — and the version number was then computed by CI, written into `lib/ruact/version.rb` after the merge, and committed back to `main` with `[skip ci]`. Three things followed from that, and all three are gone. The number was *predicted* when the CHANGELOG heading was stamped and *decided* afterwards, so the first minor would have been published under a heading naming a patch. The commit every published gem was built from was the one commit no check had ever seen. And the switch's dangerous state was the one you had to remember to undo.
@@ -318,7 +320,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI matrix** — GitHub Actions: RSpec across Ruby 3.2 × 3.3 × Rails 7.0 × 7.1 × 7.2 × 8.0; RuboCop; YARD docs; memory benchmark; E2E system tests against React 19.0.0 and 19.x (Capybara + Cuprite); non-blocking React@next job with auto-issue on failure.
 - **E2E test app** — `e2e/` Rails app (no DB, in-memory Post model) with full CRUD system tests validating the complete request cycle.
 
-[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.11...HEAD
+[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.12...HEAD
+[0.0.12]: https://github.com/luizcg/ruact/releases/tag/v0.0.12
 [0.0.11]: https://github.com/luizcg/ruact/releases/tag/v0.0.11
 [0.0.10]: https://github.com/luizcg/ruact/releases/tag/v0.0.10
 [0.0.9]: https://github.com/luizcg/ruact/releases/tag/v0.0.9
