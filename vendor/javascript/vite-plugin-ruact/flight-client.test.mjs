@@ -119,10 +119,37 @@ describe("Story 17.0a — data props keep their arity", () => {
       MODULE_REGISTRY,
     );
 
+    // The component itself, not just its props — a rebuild that resolved the
+    // `$L` reference to a plain "div" would keep every prop assertion green
+    // while never running PostList at all.
+    expect(tree.type).toBe(TaskList);
+
     const { posts } = tree.props;
     expect(Array.isArray(posts)).toBe(true);
     expect(posts).toHaveLength(1);
     expect(() => [...posts]).not.toThrow();
+  });
+
+  it("an array INSIDE an array keeps both dimensions", () => {
+    // `.flat()` in the walker would collapse this and still satisfy every
+    // one-dimensional assertion above.
+    const tree = createFromFlightPayload(
+      payloadWithProps({ grid: [[1, 2], [3]] }),
+      MODULE_REGISTRY,
+    );
+
+    expect(tree.props.grid).toEqual([[1, 2], [3]]);
+  });
+
+  it("falsy items survive — they are values, not absences", () => {
+    // `.filter(Boolean)` in the walker would drop these and still satisfy
+    // every length assertion that uses truthy items.
+    const tree = createFromFlightPayload(
+      payloadWithProps({ flags: [false, 0, null, "", 1] }),
+      MODULE_REGISTRY,
+    );
+
+    expect(tree.props.flags).toEqual([false, 0, null, "", 1]);
   });
 });
 
@@ -234,11 +261,15 @@ describe("Story 17.0a — children keep their arity too (contract, decided 2026-
 
 describe("Story 17.0a — the contract, driven by a gem-produced fixture", () => {
   // The bytes were written by the Ruby serializer, not typed here.
-  // `spec/ruact/flight/serializer_spec.rb` ("single-element array prop
-  // survives the wire (Story 17.0a)") produces and pins them; if the server's
-  // wire shape ever changes, that spec fails on the Ruby side and this one
-  // fails on the JS side — one defect, both sides of the submodule boundary.
-  // Pattern established by Story 5.2.
+  //
+  // The two sides guarantee DIFFERENT things, and neither reddens for the
+  // other: `spec/ruact/flight/serializer_spec.rb` ("single-element array prop
+  // survives the wire (Story 17.0a)") asserts that what the serializer emits
+  // still equals this file, so a server-side change reddens THERE; this test
+  // asserts that these bytes rebuild into a one-element array, so a client-side
+  // change reddens HERE. What the pair buys is that the client is exercised
+  // against real server output rather than a literal someone typed — the
+  // Story 5.2 pattern. It does not buy simultaneous failure.
   const FIXTURE = path.join(
     import.meta.dirname,
     "../../../spec/fixtures/flight/single_element_array_prop.txt",
@@ -248,6 +279,7 @@ describe("Story 17.0a — the contract, driven by a gem-produced fixture", () =>
     const payload = fs.readFileSync(FIXTURE, "utf8");
     const tree = createFromFlightPayload(payload, MODULE_REGISTRY);
 
+    expect(tree.type).toBe(PostList);
     expect(Array.isArray(tree.props.posts)).toBe(true);
     expect(tree.props.posts).toEqual([{ id: 1, title: "First post" }]);
   });
