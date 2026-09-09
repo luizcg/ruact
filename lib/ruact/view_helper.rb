@@ -65,6 +65,52 @@ module Ruact
       parts.join("\n").html_safe
     end
 
+    # The `<head>` half of the asset contract: the stylesheets Vite emitted for
+    # the client components, linked so they reach the page in production.
+    #
+    # Vite is an ASSET bundler, not a JS bundler — a `"use client"` component
+    # that imports CSS (its own, or one a package ships) produces a stylesheet
+    # recorded on the manifest entry beside `file`. Nothing linked it, so the
+    # styling was built, digest-stamped, served and never referenced. Only
+    # production was affected: the dev server injects that CSS through JS.
+    #
+    # **Why this is separate from {#ruact_js_assets}, and why it belongs in
+    # `<head>`.** The JS helper is injected before `</body>`, and the built-in
+    # shell emits it there too — a position that did not matter while it emitted
+    # only a `<script>`. A stylesheet there means the page has already painted
+    # when the browser finds it, and it means third-party CSS outranks the app's
+    # own. So ruact declares that it contributes CSS and says WHERE, rather than
+    # smuggling it through a helper named for JavaScript.
+    #
+    # **Cascade.** `rails generate ruact:install` places this call ABOVE the
+    # app's `stylesheet_link_tag`, so the app's own CSS is loaded afterwards and
+    # wins — your code beats the gem's.
+    #
+    # **In development this emits nothing at all**, and that is deliberate: the
+    # dev server is already injecting the CSS, and linking the file on disk would
+    # serve whatever the last build left there.
+    #
+    # It reads the SAME manifest entry as {#ruact_js_assets}, in the same render,
+    # so the script and the stylesheet can never come from different builds.
+    #
+    # @return [ActiveSupport::SafeBuffer] the `<link>` markup, html_safe; empty
+    #   in development, when no entry exists, or when the entry declares no CSS
+    # @example In a layout
+    #   <head>
+    #     <%= ruact_head_assets %>
+    #     <%= stylesheet_link_tag :app %>
+    #   </head>
+    def ruact_head_assets
+      return "".html_safe if Rails.env.development? && vite_dev_running?
+
+      entry = vite_manifest_entry(Ruact.bootstrap_virtual_id)
+      return "".html_safe if entry.nil?
+
+      Array(entry["css"])
+        .map { |file| %(<link rel="stylesheet" href="/assets/#{file}">) }
+        .join("\n").html_safe
+    end
+
     private
 
     # The `__FLIGHT_DATA` inline bootstrap `<script>` — pushes the per-render

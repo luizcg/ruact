@@ -1205,11 +1205,18 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
     # message printed twice, a `--shadcn`-only notice firing on the default
     # path, and a helper taking a required argument being invoked with none.
     # Pin the command list so the next one is caught here rather than in an app.
+    # Story 17.0b (issue #63) — the `<head>` half of the asset contract.
+    #
+    # Position is the whole point: `ruact_head_assets` goes in `<head>` and ABOVE
+    # the app's own `stylesheet_link_tag`, so the app's CSS loads afterwards and
+    # wins the cascade. Asserting only presence would pass with the call in the
+    # wrong place, which is the failure this story exists to avoid.
     describe "Thor command surface" do
       it "registers only the install steps, never the private helpers" do
         expect(Ruact::Generators::InstallGenerator.commands.keys).to contain_exactly(
           "create_initializer",
           "inject_controller_concern",
+          "inject_layout_head_assets",
           "inject_layout_shell",
           "create_shadcn_prerequisites",
           "create_components_directory",
@@ -1301,6 +1308,127 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         $stdout.string
       ensure
         $stdout = original
+      end
+    end
+
+    # Story 17.0b (issue #63) — the `<head>` half of the asset contract.
+    #
+    # Drives the REAL generator method, in the shape the inject_layout_shell
+    # specs below settled on. POSITION is the point: the call goes in `<head>`
+    # and ABOVE the app's own `stylesheet_link_tag`, so the app's CSS loads
+    # afterwards and wins the cascade. A presence-only assertion would pass with
+    # the call in the wrong place, which is the failure this story exists to fix.
+    describe "inject_layout_head_assets — the REAL generator", :aggregate_failures, :story_17_0b do
+      let(:app_root) { Dir.mktmpdir("ruact_install_17_0b") }
+
+      after { FileUtils.remove_entry(app_root) }
+
+      def build_generator(root, opts = {})
+        gen = Ruact::Generators::InstallGenerator.new([], opts)
+        gen.destination_root = root
+        gen
+      end
+
+      def silently
+        original = $stdout
+        $stdout = StringIO.new
+        yield
+      ensure
+        $stdout = original
+      end
+
+      def layout_after_run(body)
+        path = File.join(app_root, "app/views/layouts/application.html.erb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, body)
+        silently { build_generator(app_root).inject_layout_head_assets }
+        File.read(path)
+      end
+
+      it "injects ABOVE the app stylesheet, not merely somewhere in the file" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <%= stylesheet_link_tag :app %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout).to include("<%= ruact_head_assets %>")
+        expect(layout.index("ruact_head_assets")).to be < layout.index("stylesheet_link_tag")
+      end
+
+      it "falls back to </head> when the layout links no stylesheet" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <title>App</title>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout).to include("<%= ruact_head_assets %>")
+        expect(layout.index("ruact_head_assets")).to be < layout.index("</head>")
+      end
+
+      # Thor's `inject_into_file` already refuses to insert a byte-identical
+      # string twice, so a naive "run it twice" case passes with or without the
+      # guard. What the guard actually buys is recognising the call in ANOTHER
+      # SHAPE — different spacing, a different place in the head — which is what
+      # a hand-edited layout looks like.
+      it "recognises an already-present call written differently, and leaves it alone" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <title>App</title>
+              <%=   ruact_head_assets   %>
+              <%= stylesheet_link_tag :app %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout.scan("ruact_head_assets").length).to eq(1)
+      end
+
+      it "is idempotent — running twice does not duplicate the call" do
+        path = File.join(app_root, "app/views/layouts/application.html.erb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, <<~ERB)
+          <html>
+            <head>
+              <%= stylesheet_link_tag :app %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+        silently { build_generator(app_root).inject_layout_head_assets }
+        silently { build_generator(app_root).inject_layout_head_assets }
+
+        expect(File.read(path).scan("ruact_head_assets").length).to eq(1)
+      end
+
+      it "does not read a MENTION IN A COMMENT as already wired" do
+        # The exact shape that got layout auto-detection removed: a comment
+        # naming the helper must not count as a call.
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <%# TODO: add ruact_head_assets %>
+              <%= stylesheet_link_tag :app %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout).to include("<%= ruact_head_assets %>")
+        expect(layout.scan("ruact_head_assets").length).to eq(2) # the comment + the real call
+      end
+
+      it "does nothing when there is no layout to edit" do
+        expect { silently { build_generator(app_root).inject_layout_head_assets } }.not_to raise_error
       end
     end
 

@@ -98,6 +98,43 @@ module Ruact
                          after: /class ApplicationController.*\n/
       end
 
+      # Story 17.0b — the `<head>` half of the asset contract.
+      #
+      # `ruact_head_assets` links the stylesheets Vite emitted for the client
+      # components. It goes in `<head>`, ABOVE the app's own `stylesheet_link_tag`,
+      # so the app's CSS loads afterwards and wins the cascade — your code beats
+      # the gem's, and a package shipping an aggressive reset cannot flatten your
+      # design system.
+      #
+      # Anchored on the app's stylesheet call when there is one, and on `</head>`
+      # otherwise. Skipped when the call is already there, which is decided by
+      # `LayoutSource.head_wired?` — a real call, not a mention in a comment.
+      STYLESHEET_CALL = /<%=[^%]*\bstylesheet_link_tag\b[^%]*%>/
+      private_constant :STYLESHEET_CALL
+
+      def inject_layout_head_assets
+        layout_file = "app/views/layouts/application.html.erb"
+        path = Pathname(destination_root).join(layout_file)
+        return unless path.exist?
+
+        content = path.read
+        if Ruact::LayoutSource.head_wired?(content)
+          say_status "skip", "ruact_head_assets already present in layout", :yellow
+          return
+        end
+
+        stylesheet = content[STYLESHEET_CALL]
+        if stylesheet
+          migrate_layout(layout_file, "<%= ruact_head_assets %>\n    ",
+                         before: stylesheet,
+                         success: "added ruact_head_assets above the app stylesheet")
+        else
+          migrate_layout(layout_file, "    <%= ruact_head_assets %>\n",
+                         before: "  </head>",
+                         success: "added ruact_head_assets to <head>")
+        end
+      end
+
       # The layout owns the document: `stylesheet_link_tag`, favicons, fonts and
       # every `<head>`-writing gem only reach a ruact page because Rails' own
       # layout renders it (see `Ruact::Configuration#layout`). That requires TWO

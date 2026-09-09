@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Styling from an npm component worked in development and disappeared in production.** A `"use client"` component that imports CSS — its own, or one a package ships, like a date picker's — produces a separate stylesheet that Vite builds, digest-stamps and serves. Nothing linked it. The page came back with the script tag and no `<link>`, so the component rendered unstyled: in the case that surfaced this, a date picker collapsed into a column of overlapping numbers.
+
+  Development hid it completely, because the Vite dev server injects that CSS through JavaScript. Only a production build showed it, which is the worst place to find out.
+
+  There is now a second helper for the `<head>`, `ruact_head_assets`, and `rails generate ruact:install` writes it into your layout **above** your own `stylesheet_link_tag` — so your CSS still loads last and still wins the cascade. `rails ruact:doctor` fails when the build emits component CSS that the layout never links, naming the line to paste. The built-in shell (`config.layout = false`) links it too: that shell still does not presume your app's stylesheets, but the component CSS belongs to the very components it exists to render.
+
+  The helper is deliberately separate from `ruact_js_assets` rather than folded into it. That one is injected before `</body>`, and a stylesheet there means the page has already painted when the browser finds it — and that third-party CSS outranks your own.
+
+- **`ruact:install --shadcn` wrote a `tsconfig.json` that rejected CSS imports.** A client component doing `import "pkg/dist/pkg.css"` failed type-checking with `TS2882`. The generated config now declares `vite/client`, which is what makes a side-effect CSS import a legal thing to write.
+
 ## [0.0.12] - 2026-09-09
 
 ### Added

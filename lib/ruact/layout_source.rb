@@ -28,6 +28,12 @@ module Ruact
     # merely follows some other tag.
     ASSETS_CALL = /<%=+(?:(?!%>).)*?\bruact_js_assets\b/m
 
+    # Story 17.0b — the `<head>` half. A sibling recogniser, not a second
+    # mechanism: it runs through the same `without_comments` as the others,
+    # because a mention inside a comment reading as "already wired" is the exact
+    # failure that got layout auto-detection removed.
+    HEAD_ASSETS_CALL = /<%=+(?:(?!%>).)*?\bruact_head_assets\b/m
+
     # The React mount target, as an attribute rather than as a substring. The
     # lookbehind is what stops `data-id="root"` (and any other `*-id`) from
     # counting: those are not the mount point, and a document that has one but
@@ -42,6 +48,11 @@ module Ruact
       # Does this ERB source actually CALL `ruact_js_assets`?
       def wired?(source)
         without_comments(source).match?(ASSETS_CALL)
+      end
+
+      # Whether the layout calls `ruact_head_assets` (Story 17.0b).
+      def head_wired?(source)
+        without_comments(source).match?(HEAD_ASSETS_CALL)
       end
 
       # Does this markup carry a React mount target? Used on RENDERED HTML by

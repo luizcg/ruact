@@ -54,6 +54,88 @@ module Ruact
     # bootstrap entry `<script>` tags (re-targeting `virtual:ruact/bootstrap`)
     # plus the `__FLIGHT_DATA` inline script. The controller delegates to this
     # one implementation (parity asserted in controller_spec).
+    # Story 17.0b (issue #63) — the CSS half of the asset contract.
+    #
+    # Vite emits client-component CSS as a separate asset and records it on the
+    # entry; `ruact_js_assets` only ever read `file`, so the stylesheet was built,
+    # digest-stamped, served — and never referenced. Dev hid it, because the dev
+    # server injects CSS through JS.
+    #
+    # This helper is deliberately SEPARATE from `ruact_js_assets` and belongs in
+    # `<head>`: the JS helper is injected before `</body>`, and a stylesheet there
+    # means FOUC plus a cascade in which third-party CSS outranks the app's own.
+    describe "#ruact_head_assets", :story_17_0b do
+      let(:asset_helper) do
+        obj = Object.new
+        obj.extend(described_class)
+        obj
+      end
+
+      context "when in dev with the Vite dev server running" do
+        before do
+          allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new("development"))
+          allow(asset_helper).to receive(:vite_dev_running?).and_return(true)
+        end
+
+        it "emits NOTHING — the dev server injects the CSS through JS" do
+          # Linking the on-disk file here would serve a stale build alongside
+          # what Vite is injecting live.
+          expect(asset_helper.ruact_head_assets).to eq("")
+        end
+
+        it "does not even consult the manifest in dev" do
+          allow(asset_helper).to receive(:vite_manifest_entry)
+          asset_helper.ruact_head_assets
+          expect(asset_helper).not_to have_received(:vite_manifest_entry)
+        end
+      end
+
+      context "when in prod (Vite manifest lookup)" do
+        before do
+          allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new("production"))
+        end
+
+        it "reads the SAME manifest entry the script tag uses (one build, never two)" do
+          allow(asset_helper).to receive(:vite_manifest_entry).and_return(nil)
+          asset_helper.ruact_head_assets
+          expect(asset_helper).to have_received(:vite_manifest_entry).with(Ruact.bootstrap_virtual_id)
+        end
+
+        it "emits one <link rel=\"stylesheet\"> per file in the entry's css array", :aggregate_failures do
+          allow(asset_helper).to receive(:vite_manifest_entry)
+            .with(Ruact.bootstrap_virtual_id)
+            .and_return({ "file" => "bootstrap-abc.js", "css" => ["bootstrap-def.css", "vendor-ghi.css"] })
+          html = asset_helper.ruact_head_assets
+          expect(html).to include(%(<link rel="stylesheet" href="/assets/bootstrap-def.css">))
+          expect(html).to include(%(<link rel="stylesheet" href="/assets/vendor-ghi.css">))
+          expect(html.scan("<link").length).to eq(2)
+        end
+
+        it "emits no script tag — the JS half is not this helper's job" do
+          allow(asset_helper).to receive(:vite_manifest_entry)
+            .and_return({ "file" => "bootstrap-abc.js", "css" => ["a.css"] })
+          expect(asset_helper.ruact_head_assets).not_to include("<script")
+        end
+
+        it "emits nothing when the entry declares no css" do
+          allow(asset_helper).to receive(:vite_manifest_entry)
+            .and_return({ "file" => "bootstrap-abc.js" })
+          expect(asset_helper.ruact_head_assets).to eq("")
+        end
+
+        it "emits nothing when the manifest entry is missing entirely" do
+          allow(asset_helper).to receive(:vite_manifest_entry).and_return(nil)
+          expect(asset_helper.ruact_head_assets).to eq("")
+        end
+
+        it "returns an html_safe buffer" do
+          allow(asset_helper).to receive(:vite_manifest_entry)
+            .and_return({ "file" => "b.js", "css" => ["a.css"] })
+          expect(asset_helper.ruact_head_assets).to be_html_safe
+        end
+      end
+    end
+
     describe "#ruact_js_assets", :story_14_2 do
       let(:asset_helper) do
         obj = Object.new

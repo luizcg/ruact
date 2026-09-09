@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "json"
 require "socket"
 require "pathname"
 
@@ -7,7 +8,8 @@ module Ruact
   # Runs a suite of installation health checks and prints ✓/✗ per check.
   # Extracted from the ruact:doctor Rake task for direct testability (FR27).
   class Doctor # rubocop:disable Metrics/ClassLength
-    CHECKS = %i[manifest vite controller layout streaming legacy_constant serialize_only flight_middleware].freeze
+    CHECKS = %i[manifest vite controller layout head_assets streaming legacy_constant serialize_only
+                flight_middleware].freeze
     # Built via Array#join so the gem-CI `name-propagation` guard does not
     # match these literals against itself (Story 5.1 review F4 — the doctor
     # file participates in the guard with no exclusion).
@@ -198,6 +200,53 @@ module Ruact
       return layout_not_opted_in_result unless opted_in
 
       [:pass, "layout owns the document (React root + ruact_js_assets, config.layout on)"]
+    end
+
+    # Story 17.0b — the CSS half of the asset contract.
+    #
+    # Vite records client-component stylesheets on the bootstrap manifest entry.
+    # If the build produced CSS and the layout never calls `ruact_head_assets`,
+    # that CSS is served and never referenced: styling that works in development
+    # and silently disappears in production.
+    #
+    # The decision is MECHANICAL — read the manifest, read the layout — and never
+    # an inference at render time. Layout auto-detection was removed deliberately
+    # (see Ruact::Configuration#layout) and this must not reintroduce it:
+    # `LayoutSource.head_wired?` runs through `without_comments`, so a mention
+    # inside a comment does not read as wired.
+    def check_head_assets
+      entry = doctor_manifest_entry
+      css = Array(entry && entry["css"])
+      return [:pass, "no client-component CSS in the build (nothing to link)"] if css.empty?
+
+      path = Rails.root.join("app", "views", "layouts", "application.html.erb")
+      unless File.exist?(path) && Ruact.config.layout != false
+        return [:pass, "client-component CSS present; the built-in shell links it"]
+      end
+
+      return head_assets_missing_result(css.length) unless Ruact::LayoutSource.head_wired?(File.read(path))
+
+      [:pass, "client-component CSS is linked (ruact_head_assets in the layout)"]
+    end
+
+    def head_assets_missing_result(count)
+      [:fail,
+       "the build emits #{count} client-component stylesheet(s) that nothing links",
+       "Add <%= ruact_head_assets %> inside <head> in app/views/layouts/application.html.erb, " \
+       "ABOVE your stylesheet_link_tag so your own CSS still wins the cascade " \
+       "(or re-run rails generate ruact:install). Without it that CSS is built and served but " \
+       "never referenced - styling that works in development and vanishes in production."]
+    end
+
+    # The bootstrap manifest entry, or nil when there is no build to read. Kept
+    # here rather than reaching into the view helper's private lookup.
+    def doctor_manifest_entry
+      manifest_path = Rails.root.join("public", "assets", ".vite", "manifest.json")
+      return nil unless File.exist?(manifest_path)
+
+      JSON.parse(File.read(manifest_path))[Ruact.bootstrap_virtual_id]
+    rescue JSON::ParserError
+      nil
     end
 
     def layout_unwired_result
