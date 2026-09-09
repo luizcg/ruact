@@ -509,9 +509,12 @@ module Ruact
                                    })
         end
 
-        it "serializes a one-element array prop as a one-element array" do
+        # The title deliberately starts with "$": §7 requires ONE extra "$" on the
+        # wire, so the fixture also carries the escape, and the client half of
+        # the pair has to decode it rather than merely preserve arity.
+        it "serializes a one-element array prop as a one-element array, escape intact" do
           ref = post_list_manifest.reference_for("PostList")
-          el  = ReactElement.new(type: ref, props: { posts: [{ id: 1, title: "First post" }] })
+          el  = ReactElement.new(type: ref, props: { posts: [{ id: 1, title: "$5 plan" }] })
           expect(Renderer.render(el, post_list_manifest)).to match_flight_fixture("single_element_array_prop")
         end
       end

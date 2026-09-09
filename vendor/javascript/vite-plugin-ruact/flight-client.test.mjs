@@ -26,7 +26,9 @@
 // module-level Maps that survive between tests in one process. `lazyCache` is
 // memoized by rowId, so two cases reusing an id would leak into each other.
 // `clearPendingChunks()` in `beforeEach` is what keeps this file order-
-// independent (the suite runs in randomized order by project rule).
+// independent. Vitest is not configured to shuffle, so nothing here depends on
+// that guard today — it is insurance against a case that reuses a row id, and
+// against shuffling being turned on later.
 
 import { describe, it, expect, beforeEach } from "vitest";
 import fs from "node:fs";
@@ -103,17 +105,22 @@ describe("Story 17.0a — data props keep their arity", () => {
 
   it("a one-element array of PRIMITIVES keeps its arity", () => {
     const tree = createFromFlightPayload(
-      payloadWithProps({ tags: ["ruby"] }),
+      payloadWithProps({ tags: ["$$ruby"] }),
       MODULE_REGISTRY,
     );
 
-    expect(tree.props.tags).toEqual(["ruby"]);
+    // Decoded, not merely carried: "$$ruby" on the wire is "$ruby" in the prop.
+    expect(tree.props.tags).toEqual(["$ruby"]);
   });
 
   it("the scaffold's own prop shape survives (issue #62 reproduction)", () => {
-    // `<PostList posts={rows} />` with exactly one record — the generated
-    // scaffold reads `posts.length` and spreads `[...posts]`, so an object here
-    // renders neither the table nor the empty state, and throws on first sort.
+    // `<PostList posts={rows} />` with exactly one record. The generated
+    // scaffold gates its table on `sortedRows.length > 0`, so an object here
+    // renders neither the table nor the empty state — a blank list, no error.
+    // The throw needs a specific sequence, because the sort controls live
+    // inside the table that did not render: search (which works, since results
+    // arrive as JSON), sort, then clear the search — that puts the object back
+    // through `[...rows]`.
     const tree = createFromFlightPayload(
       payloadWithProps({ posts: [{ id: 1, title: "First post" }] }),
       MODULE_REGISTRY,
@@ -281,6 +288,9 @@ describe("Story 17.0a — the contract, driven by a gem-produced fixture", () =>
 
     expect(tree.type).toBe(PostList);
     expect(Array.isArray(tree.props.posts)).toBe(true);
-    expect(tree.props.posts).toEqual([{ id: 1, title: "First post" }]);
+    // The title is "$$5 plan" ON THE WIRE (§7 prepends one "$"). Asserting the
+    // DECODED value means a walker that preserved arity but stopped rebuilding
+    // scalar members would fail here rather than pass.
+    expect(tree.props.posts).toEqual([{ id: 1, title: "$5 plan" }]);
   });
 });
