@@ -175,6 +175,7 @@ module Ruact
               <meta charset="UTF-8" />
               <meta name="viewport" content="width=device-width, initial-scale=1" />
               #{ruact_csrf_meta_tag}
+              #{ruact_head_assets}
               <title>Rails RSC</title>
             </head>
             <body>

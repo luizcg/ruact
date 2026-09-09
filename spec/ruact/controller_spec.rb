@@ -2,6 +2,11 @@
 
 require "spec_helper"
 require "active_support/concern"
+# Order independence (project rule, project-context §11): this file exercises
+# helpers that call `html_safe`, and it was relying on some OTHER spec file
+# having loaded the core_ext first. Run alone it failed 12 examples. Required
+# here so the file stands on its own.
+require "active_support/core_ext/string/output_safety"
 # Re-run-5 (2026-05-15) — the `:current_user` inherited-helper clobber
 # test creates a `Class.new(ActionController::Base)`, which requires
 # `action_controller` to be loaded. Pre-Re-run-5 this test was the
@@ -216,6 +221,25 @@ module Ruact
       before { allow(controller).to receive(:ruact_vite_tags).and_return("") }
 
       let(:payload) { "0:[\"$\",\"div\",null,{}]\n" }
+
+      # Story 17.0b — the built-in shell links the CLIENT-COMPONENT CSS.
+      #
+      # Deliberately asymmetric with the app's CSS, and the asymmetry is the
+      # point: the `<head>` belongs to the host app, so the shell does not
+      # presume the app's stylesheets — that is why `config.layout = false` is
+      # documented as "your app's CSS does not reach this page", and that stays
+      # true. But the component CSS is ruact's own; it belongs to the very
+      # components the shell exists to render. Not linking it was the shell
+      # sabotaging its own job.
+      it "links client-component CSS in <head> (Story 17.0b)", :aggregate_failures, :story_17_0b do
+        allow(controller).to receive(:ruact_head_assets)
+          .and_return(%(<link rel="stylesheet" href="/assets/x.css">))
+
+        html = controller.send(:ruact_html_shell, payload)
+        head = html[%r{<head>.*?</head>}m]
+
+        expect(head).to include(%(<link rel="stylesheet" href="/assets/x.css">))
+      end
 
       it "returns a string containing window.__FLIGHT_DATA" do
         html = controller.send(:ruact_html_shell, payload)

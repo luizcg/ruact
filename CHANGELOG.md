@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Styling from an npm component worked in development and disappeared in production.** A `"use client"` component that imports CSS — its own, or one a package ships, like a date picker's — produces a separate stylesheet that Vite builds, digest-stamps and serves. Nothing linked it. The page came back with the script tag and no `<link>`, so the component rendered unstyled: in the case that surfaced this, a date picker collapsed into a column of overlapping numbers.
+
+  Development hid it completely, because the Vite dev server injects that CSS through JavaScript. Only a production build showed it, which is the worst place to find out.
+
+  There is now a second helper for the `<head>`, `ruact_head_assets`, and `rails generate ruact:install` writes it into your layout **above** your own `stylesheet_link_tag`, so your CSS is loaded last. Order settles ties; specificity, `!important` and cascade layers still outrank it. `rails ruact:doctor` fails when the build emits component CSS that the layout never links, naming the line to paste. The built-in shell (`config.layout = false`) links it too: that shell still does not presume your app's stylesheets, but the component CSS belongs to the very components it exists to render.
+
+  The helper is deliberately separate from `ruact_js_assets` rather than folded into it. That one is injected before `</body>`, so a stylesheet emitted beside it would be discovered late and would sit *after* your own CSS in the document — the two things you least want from a stylesheet you did not write.
+
+- **The generated `--shadcn` `tsconfig.json` had no types for a CSS import.** A client component importing a stylesheet for its side effect had no declaration to resolve against, which surfaces as a type error once the compiler is asked to check side-effect imports. The generated config now declares `vite/client`, which is what supplies those declarations.
+
 ## [0.0.12] - 2026-09-09
 
 ### Added

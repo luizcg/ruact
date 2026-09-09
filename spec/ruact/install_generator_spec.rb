@@ -1205,11 +1205,18 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
     # message printed twice, a `--shadcn`-only notice firing on the default
     # path, and a helper taking a required argument being invoked with none.
     # Pin the command list so the next one is caught here rather than in an app.
+    # Story 17.0b (issue #63) — the `<head>` half of the asset contract.
+    #
+    # Position is the whole point: `ruact_head_assets` goes in `<head>` and ABOVE
+    # the app's own `stylesheet_link_tag`, so the app's CSS loads afterwards and
+    # is loaded last. Asserting only presence would pass with the call in the
+    # wrong place, which is the failure this story exists to avoid.
     describe "Thor command surface" do
       it "registers only the install steps, never the private helpers" do
         expect(Ruact::Generators::InstallGenerator.commands.keys).to contain_exactly(
           "create_initializer",
           "inject_controller_concern",
+          "inject_layout_head_assets",
           "inject_layout_shell",
           "create_shadcn_prerequisites",
           "create_components_directory",
@@ -1301,6 +1308,290 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         $stdout.string
       ensure
         $stdout = original
+      end
+    end
+
+    # Story 17.0b (issue #63) — the `<head>` half of the asset contract.
+    #
+    # Drives the REAL generator method, in the shape the inject_layout_shell
+    # specs below settled on. POSITION is the point: the call goes in `<head>`
+    # and ABOVE the app's own `stylesheet_link_tag`, so the app's CSS loads
+    # afterwards and wins ties. A presence-only assertion would pass with
+    # the call in the wrong place, which is the failure this story exists to fix.
+    describe "inject_layout_head_assets — the REAL generator", :aggregate_failures, :story_17_0b do
+      let(:app_root) { Dir.mktmpdir("ruact_install_17_0b") }
+
+      after { FileUtils.remove_entry(app_root) }
+
+      def build_generator(root, opts = {})
+        gen = Ruact::Generators::InstallGenerator.new([], opts)
+        gen.destination_root = root
+        gen
+      end
+
+      def silently
+        original = $stdout
+        $stdout = StringIO.new
+        yield
+      ensure
+        $stdout = original
+      end
+
+      def layout_after_run(body)
+        path = File.join(app_root, "app/views/layouts/application.html.erb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, body)
+        silently { build_generator(app_root).inject_layout_head_assets }
+        File.read(path)
+      end
+
+      it "injects ABOVE the app stylesheet, not merely somewhere in the file" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <%= stylesheet_link_tag :app %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout).to include("<%= ruact_head_assets %>")
+        expect(layout.index("ruact_head_assets")).to be < layout.index("stylesheet_link_tag")
+      end
+
+      it "falls back to </head> when the layout links no stylesheet" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <title>App</title>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout).to include("<%= ruact_head_assets %>")
+        expect(layout.index("ruact_head_assets")).to be < layout.index("</head>")
+      end
+
+      # A naive "run it twice" case is weak: the second run is skipped by the
+      # already-wired guard, so it would pass for the wrong reason if the guard
+      # only ever matched the exact string this generator writes. What the guard
+      # has to buy is recognising the call in ANOTHER SHAPE — different spacing,
+      # a different place in the head — which is what a hand-edited layout is.
+      it "recognises an already-present call written differently, and leaves it alone" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <title>App</title>
+              <%=   ruact_head_assets   %>
+              <%= stylesheet_link_tag :app %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout.scan("ruact_head_assets").length).to eq(1)
+      end
+
+      it "is idempotent — running twice does not duplicate the call" do
+        path = File.join(app_root, "app/views/layouts/application.html.erb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, <<~ERB)
+          <html>
+            <head>
+              <%= stylesheet_link_tag :app %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+        silently { build_generator(app_root).inject_layout_head_assets }
+        silently { build_generator(app_root).inject_layout_head_assets }
+
+        expect(File.read(path).scan("ruact_head_assets").length).to eq(1)
+      end
+
+      it "does not read a MENTION IN A COMMENT as already wired" do
+        # The exact shape that got layout auto-detection removed: a comment
+        # naming the helper must not count as a call.
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <%# TODO: add ruact_head_assets %>
+              <%= stylesheet_link_tag :app %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout).to include("<%= ruact_head_assets %>")
+        expect(layout.scan("ruact_head_assets").length).to eq(2) # the comment + the real call
+      end
+
+      # Review round 1 found the Thor-anchored version injecting INSIDE a
+      # commented-out stylesheet link — inert markup that `head_wired?` then
+      # reported as done, so the doctor passed and the next generator run
+      # skipped. Silent, and production-only.
+      it "does not anchor on a stylesheet call that is inside an HTML comment" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <!-- <%= stylesheet_link_tag :old %> -->
+              <%= stylesheet_link_tag :app %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout).to include("<%= ruact_head_assets %>")
+        # The call must be LIVE markup: not swallowed by the comment, and ahead of
+        # the app's real stylesheet.
+        expect(layout).not_to match(/<!--(?:(?!-->).)*ruact_head_assets/m)
+        expect(layout.index("ruact_head_assets")).to be < layout.index("stylesheet_link_tag :app")
+      end
+
+      it "does not anchor on a stylesheet call inside an ERB comment" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <%# <%= stylesheet_link_tag :old %> %>
+              <%= stylesheet_link_tag :app %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout.scan("ruact_head_assets").length).to eq(1)
+      end
+
+      # Thor anchors by gsub, so two identical calls got two helpers — and the
+      # second one landed AFTER the app's CSS, inverting the cascade the story
+      # exists to get right.
+      it "injects exactly once when the layout links two stylesheets" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <%= stylesheet_link_tag :app %>
+              <%= stylesheet_link_tag :app %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout.scan("ruact_head_assets").length).to eq(1)
+        expect(layout.index("ruact_head_assets")).to be < layout.index("stylesheet_link_tag")
+      end
+
+      # `%w[...]` is a normal way to write this call, and the first regex died on
+      # the literal `%`, silently falling through to the </head> branch.
+      it "anchors on a call carrying %w[] arguments" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <%= stylesheet_link_tag %w[application print] %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout.index("ruact_head_assets")).to be < layout.index("stylesheet_link_tag")
+      end
+
+      it "refuses loudly rather than guessing when there is no <head> and no stylesheet" do
+        path = File.join(app_root, "app/views/layouts/application.html.erb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, "<html><body></body></html>")
+
+        expect { build_generator(app_root).inject_layout_head_assets }
+          .to output(/could not place ruact_head_assets automatically/).to_stdout
+        expect(File.read(path)).not_to include("ruact_head_assets")
+      end
+
+      # Review round 2, high: the previous anchor matched an ERB call by regex and
+      # `.*?` crossed `%>`, so in a stock Rails layout it started at the FIRST `<%=`
+      # and inserted INSIDE `<title>`.
+      it "does not land inside another ERB tag when the layout has a dynamic title" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <title><%= content_for(:title) || "App" %></title>
+              <%= stylesheet_link_tag :app %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout).to include("<title><%= content_for(:title) || \"App\" %></title>")
+        expect(layout.index("ruact_head_assets")).to be < layout.index("<title>")
+      end
+
+      it "does not land inside an attribute carrying ERB" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <meta name="csrf" content="<%= form_authenticity_token %>">
+              <%= stylesheet_link_tag :app %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout).to include(%(content="<%= form_authenticity_token %>"))
+      end
+
+      # Round 2: CSS can arrive without a `stylesheet_link_tag` at all. Anchoring
+      # on the app's call could not see these and put ruact after them.
+      it "still comes first when the app's CSS arrives via yield :head" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <%= yield :head %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout.index("ruact_head_assets")).to be < layout.index("yield :head")
+      end
+
+      it "still comes first when the app's CSS arrives via a partial" do
+        layout = layout_after_run(<<~ERB)
+          <html>
+            <head>
+              <%= render "shared/styles" %>
+            </head>
+            <body></body>
+          </html>
+        ERB
+
+        expect(layout.index("ruact_head_assets")).to be < layout.index("render")
+      end
+
+      # Round 2: an opener with no closer leaves everything after it in an unknown
+      # state. Writing into that produced an inert helper reported as success.
+      it "refuses when a comment is opened and never closed before <head>" do
+        path = File.join(app_root, "app/views/layouts/application.html.erb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, "<html><!-- oops <head><%= stylesheet_link_tag :app %></head><body></body></html>")
+
+        expect { build_generator(app_root).inject_layout_head_assets }
+          .to output(/could not find a safe place/).to_stdout
+        expect(File.read(path)).not_to include("ruact_head_assets")
+      end
+
+      # Round 2: dropping Thor's action also dropped Thor's --pretend.
+      it "writes nothing under --pretend" do
+        path = File.join(app_root, "app/views/layouts/application.html.erb")
+        FileUtils.mkdir_p(File.dirname(path))
+        original = "<html><head><%= stylesheet_link_tag :app %></head><body></body></html>"
+        File.write(path, original)
+
+        silently { build_generator(app_root, pretend: true).inject_layout_head_assets }
+
+        expect(File.read(path)).to eq(original)
+      end
+
+      it "does nothing when there is no layout to edit" do
+        expect { silently { build_generator(app_root).inject_layout_head_assets } }.not_to raise_error
       end
     end
 

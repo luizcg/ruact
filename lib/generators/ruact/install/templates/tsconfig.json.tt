@@ -9,6 +9,9 @@
     "noEmit": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
+    // Vite's client types. Without them a client component importing a
+    // stylesheet for its side effect has no declaration to resolve against.
+    "types": ["vite/client"],
     "baseUrl": ".",
     "paths": {
       "@/*": ["app/javascript/*"]

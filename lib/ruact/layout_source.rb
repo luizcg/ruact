@@ -20,6 +20,9 @@ module Ruact
     # an earlier version of this pattern missed.
     ERB_COMMENT = /<%-?#.*?-?%>/m
 
+    # Either comment syntax, matched in one left-to-right pass.
+    ANY_COMMENT = /<!--.*?-->|<%-?#.*?-?%>/m
+
     # An ERB OUTPUT tag calling the helper: `<%= ruact_js_assets %>` and the raw
     # `<%== ... %>` form, with or without arguments or surrounding whitespace.
     # Scanning stops at the tag's own `%>` rather than forbidding `%` outright —
@@ -27,6 +30,12 @@ module Ruact
     # `[^%]*` pattern rejected, while still never matching a bare mention that
     # merely follows some other tag.
     ASSETS_CALL = /<%=+(?:(?!%>).)*?\bruact_js_assets\b/m
+
+    # Story 17.0b — the `<head>` half. A sibling recogniser, not a second
+    # mechanism: it runs through the same `without_comments` as the others,
+    # because a mention inside a comment reading as "already wired" is the exact
+    # failure that got layout auto-detection removed.
+    HEAD_ASSETS_CALL = /<%=+(?:(?!%>).)*?\bruact_head_assets\b/m
 
     # The React mount target, as an attribute rather than as a substring. The
     # lookbehind is what stops `data-id="root"` (and any other `*-id`) from
@@ -44,6 +53,11 @@ module Ruact
         without_comments(source).match?(ASSETS_CALL)
       end
 
+      # Whether the layout calls `ruact_head_assets` (Story 17.0b).
+      def head_wired?(source)
+        without_comments(source).match?(HEAD_ASSETS_CALL)
+      end
+
       # Does this markup carry a React mount target? Used on RENDERED HTML by
       # the runtime and on ERB source by the generator; the attribute shape is
       # the same either way.
@@ -51,8 +65,18 @@ module Ruact
         markup.to_s.match?(ROOT_ATTRIBUTE)
       end
 
+      # Strips BOTH comment syntaxes a layout can hide a call in.
+      #
+      # This used to strip only the ERB form, which left `<!-- <%= ruact_js_assets %> -->`
+      # reading as a live call: the generator skipped the migration and the doctor
+      # passed, on a layout emitting nothing. Story 17.0b found it on the new
+      # `head_wired?` and it was equally true of `wired?`.
+      #
+      # ONE alternation rather than two passes, so a left-to-right scan closes
+      # whichever comment opened first — running the HTML pass first let a `<!--`
+      # living inside `<%# ... %>` swallow through to a later `-->`.
       def without_comments(source)
-        source.to_s.gsub(ERB_COMMENT, "")
+        source.to_s.gsub(ANY_COMMENT, "")
       end
     end
   end

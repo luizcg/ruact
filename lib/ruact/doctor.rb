@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "json"
 require "socket"
 require "pathname"
 
@@ -7,7 +8,8 @@ module Ruact
   # Runs a suite of installation health checks and prints ✓/✗ per check.
   # Extracted from the ruact:doctor Rake task for direct testability (FR27).
   class Doctor # rubocop:disable Metrics/ClassLength
-    CHECKS = %i[manifest vite controller layout streaming legacy_constant serialize_only flight_middleware].freeze
+    CHECKS = %i[manifest vite controller layout head_assets streaming legacy_constant serialize_only
+                flight_middleware].freeze
     # Built via Array#join so the gem-CI `name-propagation` guard does not
     # match these literals against itself (Story 5.1 review F4 — the doctor
     # file participates in the guard with no exclusion).
@@ -198,6 +200,98 @@ module Ruact
       return layout_not_opted_in_result unless opted_in
 
       [:pass, "layout owns the document (React root + ruact_js_assets, config.layout on)"]
+    end
+
+    # Story 17.0b — the CSS half of the asset contract.
+    #
+    # Vite records client-component stylesheets on the bootstrap manifest entry.
+    # If the build produced CSS and the layout never calls `ruact_head_assets`,
+    # that CSS is served and never referenced: styling that works in development
+    # and silently disappears in production.
+    #
+    # The decision is MECHANICAL — read the manifest, read the layout — and never
+    # an inference at render time. Layout auto-detection was removed deliberately
+    # (see Ruact::Configuration#layout) and this must not reintroduce it:
+    # `LayoutSource.head_wired?` runs through `without_comments`, so a mention
+    # inside a comment does not read as wired.
+    def check_head_assets
+      entry = doctor_manifest_entry
+      return head_assets_unreadable_result if entry == :unreadable
+
+      css = Array(entry && entry["css"])
+      return [:pass, "no client-component CSS in the build (nothing to link)"] if css.empty?
+
+      # The layout that actually renders — `config.layout` may name one. Reading
+      # application.html.erb regardless would pass on a layout nothing uses.
+      return [:pass, "client-component CSS present; the built-in shell links it"] if Ruact.config.layout == false
+
+      path = head_assets_layout_path
+      return head_assets_no_layout_result(path) unless File.exist?(path)
+
+      return head_assets_missing_result(css.length, path) unless Ruact::LayoutSource.head_wired?(File.read(path))
+
+      [:pass, "client-component CSS is linked (ruact_head_assets in #{path.basename})"]
+    end
+
+    # The layout file this check reads.
+    #
+    # A String names one explicitly, and may or may not carry the conventional
+    # `layouts/` prefix — Rails accepts both, so it is stripped rather than
+    # doubled into `app/views/layouts/layouts/...`.
+    #
+    # `true` means "whatever layout the controller normally renders", which this
+    # check CANNOT resolve: it depends on the controller handling the request, and
+    # any controller may override with `layout "admin"`. It reads the application
+    # layout, which is what the overwhelming majority of apps render, and every
+    # message names the file it read so the limit of the check is visible rather
+    # than implied.
+    def head_assets_layout_path
+      name = Ruact.config.layout.is_a?(String) ? Ruact.config.layout.sub(%r{\Alayouts/}, "") : "application"
+      Rails.root.join("app", "views", "layouts", "#{name}.html.erb")
+    end
+
+    def head_assets_no_layout_result(path)
+      [:fail,
+       "the build emits client-component CSS but #{path.basename} does not exist " \
+       "(Ruact.config.layout points at it)",
+       "Ruact.config.layout points at #{path}, which is not there. Create it (or correct " \
+       "config.layout) and add <%= ruact_head_assets %> inside its <head> — otherwise the " \
+       "stylesheets Vite built for your client components are served and never referenced."]
+    end
+
+    # An unreadable manifest is NOT "nothing to link": the same file is parsed at
+    # render time, where a parse error raises. Reporting :pass here would mean the
+    # doctor is green on an app that 500s.
+    def head_assets_unreadable_result
+      [:fail,
+       "public/assets/.vite/manifest.json exists but is not valid JSON — rebuild your assets",
+       "Rebuild your assets (npm run build). ruact reads this file at render time, so a " \
+       "truncated or corrupt manifest raises there rather than degrading."]
+    end
+
+    # The file goes in the MESSAGE, not only in the remediation: `Doctor#run`
+    # prints `message` alone, so anything a reader needs in the terminal has to
+    # be there. (Story 5.4 found the same asymmetry; the remediation reaches
+    # `-- --json` only.)
+    def head_assets_missing_result(count, path)
+      [:fail,
+       "the build emits #{count} client-component stylesheet(s) that nothing links " \
+       "— add <%= ruact_head_assets %> to #{path.basename}",
+       "Add <%= ruact_head_assets %> as the first thing inside <head> in #{path}, " \
+       "ABOVE your stylesheet_link_tag so your own CSS is loaded last and wins ties " \
+       "(or re-run rails generate ruact:install). Without it that CSS is built and served but " \
+       "never referenced - styling that works in development and vanishes in production."]
+    end
+
+    # The bootstrap manifest entry, or nil when there is no build to read. Kept
+    # here rather than reaching into the view helper's private lookup.
+    def doctor_manifest_entry
+      manifest_path = Rails.root.join("public", "assets", ".vite", "manifest.json")
+      return nil unless File.exist?(manifest_path)
+
+      JSON.parse(File.read(manifest_path))[Ruact.bootstrap_virtual_id]
+    rescue JSON::ParserError
+      :unreadable
     end
 
     def layout_unwired_result

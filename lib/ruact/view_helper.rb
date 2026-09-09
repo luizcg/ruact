@@ -65,6 +65,55 @@ module Ruact
       parts.join("\n").html_safe
     end
 
+    # The `<head>` half of the asset contract: the stylesheets Vite emitted for
+    # the client components, linked so they reach the page in production.
+    #
+    # Vite is an ASSET bundler, not a JS bundler — a `"use client"` component
+    # that imports CSS (its own, or one a package ships) produces a stylesheet
+    # recorded on the manifest entry beside `file`. Nothing linked it, so the
+    # styling was built, digest-stamped, served and never referenced. Only
+    # production was affected: the dev server injects that CSS through JS.
+    #
+    # **Why this is separate from {#ruact_js_assets}, and why it belongs in
+    # `<head>`.** The JS helper is injected before `</body>`, and the built-in
+    # shell emits it there too — a position that did not matter while it emitted
+    # only a `<script>`. A stylesheet there is discovered late and sits AFTER
+    # when the browser finds it, and it means third-party CSS outranks the app's
+    # own. So ruact declares that it contributes CSS and says WHERE, rather than
+    # smuggling it through a helper named for JavaScript.
+    #
+    # **Cascade.** `rails generate ruact:install` places this call ABOVE the
+    # app's `stylesheet_link_tag`, so the app's own CSS is loaded afterwards.
+    # Order decides ties only — specificity, `!important` and cascade layers all
+    # outrank it — but ties are the common case, and losing them by default is
+    # what makes third-party CSS feel like it "takes over".
+    #
+    # **With the dev server reachable this emits nothing**, deliberately: Vite is
+    # already injecting the CSS, and linking the file on disk would serve whatever
+    # the last build left there. In development WITHOUT the dev server it falls
+    # back to the built manifest, matching what `ruact_vite_tags` does.
+    #
+    # It reads the SAME manifest entry as {#ruact_js_assets}, in the same render,
+    # so the script and the stylesheet can never come from different builds.
+    #
+    # @return [ActiveSupport::SafeBuffer] the `<link>` markup, html_safe; empty
+    #   in development, when no entry exists, or when the entry declares no CSS
+    # @example In a layout
+    #   <head>
+    #     <%= ruact_head_assets %>
+    #     <%= stylesheet_link_tag :app %>
+    #   </head>
+    def ruact_head_assets
+      return "".html_safe if Rails.env.development? && vite_dev_running?
+
+      entry = vite_manifest_entry(Ruact.bootstrap_virtual_id)
+      return "".html_safe if entry.nil?
+
+      Array(entry["css"])
+        .map { |file| %(<link rel="stylesheet" href="/assets/#{file}">) }
+        .join("\n").html_safe
+    end
+
     private
 
     # The `__FLIGHT_DATA` inline bootstrap `<script>` — pushes the per-render
@@ -139,7 +188,19 @@ module Ruact
       false
     end
 
+    # Memoized FOR THE DURATION OF ONE RENDER, which is what lets
+    # `ruact_head_assets` and `ruact_js_assets` promise they describe the same
+    # build. They are separate calls in the template, so without this a deploy
+    # landing between them serves one build's stylesheet beside another build's
+    # script — verified reachable in review, not hypothetical.
     def vite_manifest_entry(src_path)
+      @__ruact_manifest_entries ||= {}
+      return @__ruact_manifest_entries[src_path] if @__ruact_manifest_entries.key?(src_path)
+
+      @__ruact_manifest_entries[src_path] = read_vite_manifest_entry(src_path)
+    end
+
+    def read_vite_manifest_entry(src_path)
       manifest_path = Rails.root.join("public", "assets", ".vite", "manifest.json")
       return nil unless File.exist?(manifest_path)
 
