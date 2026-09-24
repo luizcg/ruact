@@ -18,65 +18,65 @@ require "fileutils"
 # `on_load(:action_controller)` (spike 2026-09-10). Only an app that boots the
 # real initializer chain can say where the path lands. One process per
 # environment, because a process holds one Rails.application.
-RSpec.describe "the gem's layout in a booted app (Story 17.0b)", :story_17_0b do # rubocop:disable RSpec/DescribeClass
-  BOOT_SCRIPT = <<~'RUBY'
-    # A constant, not a local: a `class` body opens a new scope, and a local
-    # named `root` there silently resolves to the class's own `root` instead.
-    BOOT_ROOT = ARGV.fetch(0)
-    ENV["RAILS_ENV"] = ARGV.fetch(1)
-    ENV["SECRET_KEY_BASE"] ||= "x" * 64
+GEM_LAYOUT_BOOT_SCRIPT = <<~RUBY
+  # A constant, not a local: a `class` body opens a new scope, and a local
+  # named `root` there silently resolves to the class's own `root` instead.
+  BOOT_ROOT = ARGV.fetch(0)
+  ENV["RAILS_ENV"] = ARGV.fetch(1)
+  ENV["SECRET_KEY_BASE"] ||= "x" * 64
 
-    require "rails"
-    require "action_controller/railtie"
-    require "action_view/railtie"
-    require "ruact"
-    require "json"
-    require "logger"
+  require "rails"
+  require "action_controller/railtie"
+  require "action_view/railtie"
+  require "ruact"
+  require "json"
+  require "logger"
 
-    class BootApp < Rails::Application
-      config.root = BOOT_ROOT
-      config.eager_load = Rails.env.production?
-      config.logger = Logger.new(IO::NULL)
-      config.active_support.deprecation = :silence
-      config.secret_key_base = "x" * 64
-      config.consider_all_requests_local = true
-      config.action_dispatch.show_exceptions = :none
-      config.hosts.clear if config.respond_to?(:hosts)
-      routes.append { get "/page", to: "pages#show" }
-    end
+  class BootApp < Rails::Application
+    config.root = BOOT_ROOT
+    config.eager_load = Rails.env.production?
+    config.logger = Logger.new(IO::NULL)
+    config.active_support.deprecation = :silence
+    config.secret_key_base = "x" * 64
+    config.consider_all_requests_local = true
+    config.action_dispatch.show_exceptions = :none
+    config.hosts.clear if config.respond_to?(:hosts)
+    routes.append { get "/page", to: "pages#show" }
+  end
 
-    Ruact.configure do |c|
-      c.layout = "ruact"
-      c.manifest_path = File.join(BOOT_ROOT, "public", "react-client-manifest.json")
-      # Nothing listens here, so the Vite dev server always reads as down and
-      # the production-build path (the one that links CSS) is exercised.
-      c.vite_dev_server = "http://127.0.0.1:9"
-    end
+  Ruact.configure do |c|
+    c.layout = "ruact"
+    c.manifest_path = File.join(BOOT_ROOT, "public", "react-client-manifest.json")
+    # Nothing listens here, so the Vite dev server always reads as down and
+    # the production-build path (the one that links CSS) is exercised.
+    c.vite_dev_server = "http://127.0.0.1:9"
+  end
 
-    BootApp.initialize!
+  BootApp.initialize!
 
-    # A controller the app did NOT give a view path of its own — the gem's
-    # path has to come from the Railtie, not from the controller.
-    module EngineSide
-      class ThingsController < ActionController::Base; end
-    end
+  # A controller the app did NOT give a view path of its own — the gem's
+  # path has to come from the Railtie, not from the controller.
+  module EngineSide
+    class ThingsController < ActionController::Base; end
+  end
 
-    probe = ApplicationController.new.lookup_context
-    status, headers, body = BootApp.call(Rack::MockRequest.env_for("/page", "HTTP_ACCEPT" => "text/html"))
-    html = +""
-    body.each { |part| html << part }
+  probe = ApplicationController.new.lookup_context
+  status, headers, body = BootApp.call(Rack::MockRequest.env_for("/page", "HTTP_ACCEPT" => "text/html"))
+  html = +""
+  body.each { |part| html << part }
 
-    puts JSON.generate(
-      "view_paths" => ApplicationController.view_paths.map(&:to_s),
-      "ruact_layout" => probe.find_all("ruact", ["layouts"]).first&.identifier,
-      "application_layout" => probe.find_all("application", ["layouts"]).first&.identifier,
-      "engine_side_sees_it" => EngineSide::ThingsController.new.lookup_context.exists?("ruact", ["layouts"]),
-      "status" => status,
-      "content_type" => headers["content-type"] || headers["Content-Type"],
-      "html" => html
-    )
-  RUBY
+  puts JSON.generate(
+    "view_paths" => ApplicationController.view_paths.map(&:to_s),
+    "ruact_layout" => probe.find_all("ruact", ["layouts"]).first&.identifier,
+    "application_layout" => probe.find_all("application", ["layouts"]).first&.identifier,
+    "engine_side_sees_it" => EngineSide::ThingsController.new.lookup_context.exists?("ruact", ["layouts"]),
+    "status" => status,
+    "content_type" => headers["content-type"] || headers["Content-Type"],
+    "html" => html
+  )
+RUBY
 
+RSpec.describe "the gem's layout in a booted app (Story 17.0b)", :story_17_0b do
   let(:app_root) { Dir.mktmpdir("ruact_gem_layout_boot") }
 
   after { FileUtils.rm_rf(app_root) }
@@ -93,11 +93,13 @@ RSpec.describe "the gem's layout in a booted app (Story 17.0b)", :story_17_0b do
         include Ruact::Controller
       end
     RUBY
-    write("app/controllers/pages_controller.rb", "class PagesController < ApplicationController\n  def show; end\nend\n")
+    write("app/controllers/pages_controller.rb",
+          "class PagesController < ApplicationController\n  def show; end\nend\n")
     write("app/views/pages/show.html.erb", "<h1>booted</h1>\n")
     # The app's OWN layout, deliberately without any ruact wiring: Mode A
     # leaves it alone, and it must keep resolving as `layouts/application`.
-    write("app/views/layouts/application.html.erb", "<html><head><title>APP LAYOUT</title></head><body><%= yield %></body></html>\n")
+    write("app/views/layouts/application.html.erb",
+          "<html><head><title>APP LAYOUT</title></head><body><%= yield %></body></html>\n")
     write("public/react-client-manifest.json", "{}")
     write("public/assets/.vite/manifest.json", JSON.generate(
                                                  Ruact.bootstrap_virtual_id => {
@@ -105,7 +107,7 @@ RSpec.describe "the gem's layout in a booted app (Story 17.0b)", :story_17_0b do
                                                    "css" => ["bootstrap-def.css"]
                                                  }
                                                ))
-    write("script.rb", BOOT_SCRIPT)
+    write("script.rb", GEM_LAYOUT_BOOT_SCRIPT)
   end
 
   def boot(env)
@@ -139,7 +141,9 @@ RSpec.describe "the gem's layout in a booted app (Story 17.0b)", :story_17_0b do
       # ships no view whose name an app could already own.
       it "puts the gem's views after the app's", :aggregate_failures do
         expect(result["view_paths"]).to include(Ruact.views_path)
-        app_views = result["view_paths"].index { |path| path.end_with?("app/views") && !path.start_with?(Ruact.views_path) }
+        app_views = result["view_paths"].index do |path|
+          path.end_with?("app/views") && !path.start_with?(Ruact.views_path)
+        end
         expect(app_views).to be < result["view_paths"].index(Ruact.views_path)
       end
 

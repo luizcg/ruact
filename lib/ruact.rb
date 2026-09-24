@@ -23,6 +23,11 @@ require_relative "ruact/query"
 require_relative "ruact/railtie" if defined?(Rails)
 
 module Ruact
+  # Story 17.0b — the name of the layout the gem ships (lib/ruact/views/layouts/
+  # ruact.html.erb), and what `rails generate ruact:install` writes into
+  # `config.layout`.
+  GEM_LAYOUT = "ruact"
+
   class << self
     attr_accessor :manifest, :streaming_mode
 

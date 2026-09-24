@@ -26,11 +26,6 @@ module Ruact
       # BOTH dev and production, whose entry tags differ.
       RUACT_ASSETS_MARKER = "__FLIGHT_DATA"
 
-      # Story 17.0b — the name of the layout the gem ships (lib/ruact/views/
-      # layouts/ruact.html.erb). What `rails generate ruact:install` writes into
-      # `config.layout`.
-      GEM_LAYOUT = "ruact"
-
       # What counts as a mount target and what counts as a real call both live in
       # {Ruact::LayoutSource}, shared with `ruact:install` so the runtime and the
       # generator can never disagree about whether a layout is migrated.
@@ -134,7 +129,7 @@ module Ruact
 
       def __ruact_handle_unready_layout(layout, reason)
         detail =
-          if reason == :missing && layout == GEM_LAYOUT
+          if reason == :missing && layout == Ruact::GEM_LAYOUT
             # Story 17.0b — `layouts/ruact` ships with the gem and the Railtie
             # appends its view path. Missing means that path never reached this
             # controller (the Railtie did not run, or the view paths were reset),

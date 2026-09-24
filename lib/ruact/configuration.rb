@@ -353,9 +353,7 @@ module Ruact
     # helper, where a stray nil or Hash would surface as a first-render error
     # instead of a legible configuration one.
     def validate_layout_stylesheets!(value)
-      valid = value.is_a?(Array) &&
-              value.all? { |name| name.is_a?(Symbol) || (name.is_a?(String) && !name.empty?) }
-      return if valid
+      return if value.is_a?(Array) && value.all? { |name| name.is_a?(Symbol) || (name.is_a?(String) && !name.empty?) }
 
       raise Ruact::ConfigurationError,
             "Ruact::Configuration#layout_stylesheets must be an Array of stylesheet names " \
