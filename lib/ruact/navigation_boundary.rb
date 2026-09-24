@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "uri"
+
 module Ruact
   # Story 17.0f (FR117) — the document belongs to whoever rendered it.
   #
@@ -46,11 +48,20 @@ module Ruact
       # `Vary`, because the same URL answers differently with and without the
       # router's header; `no-store`, because this answer is about routing, not
       # content, and must never be served from a cache to a browser navigation.
+      #
+      # Built through Rack's own header class so a later middleware looking up
+      # `Cache-Control` finds this one on Rack 2 (Rails 7.0) as well as Rack 3.
       def native_response
-        [200,
-         { HEADER => NATIVE, "content-type" => "text/plain; charset=utf-8",
-           "cache-control" => "no-store", "vary" => "Ruact-Request" },
-         []]
+        [200, native_headers, []]
+      end
+
+      def native_headers
+        headers = defined?(Rack::Headers) ? Rack::Headers.new : Rack::Utils::HeaderHash.new
+        headers[HEADER] = NATIVE
+        headers["content-type"] = "text/plain; charset=utf-8"
+        headers["cache-control"] = "no-store"
+        headers["vary"] = "Ruact-Request"
+        headers
       end
     end
 
@@ -76,14 +87,28 @@ module Ruact
       # @return [Symbol] `:ruact`, `:native`, or `:pass` (could not tell)
       def classify(env)
         request = ActionDispatch::Request.new(env.dup)
-        verdict_in(@router || Rails.application.routes.router, request)
-      rescue StandardError
+        verdict_in(@router || application_router, request)
+      rescue StandardError => e
+        Rails.logger&.debug do
+          "[ruact] navigation boundary could not classify #{env['PATH_INFO']}: #{e.class}: #{e.message}"
+        end
         :pass
       end
 
       private
 
-      def verdict_in(router, request)
+      # Rails 8 routes load lazily in development and test: the route set loads
+      # itself on `call`, but not when its `router` is read — and this runs
+      # BEFORE the app is called, so the first request after a boot could see
+      # an empty table.
+      def application_router
+        app = Rails.application
+        app.reload_routes_unless_loaded if app.respond_to?(:reload_routes_unless_loaded)
+        app.routes.router
+      end
+
+      def verdict_in(router, request, in_engine: false)
+        mounted_app = false
         router.recognize(request) do |route, params|
           app = route.app
           if app.is_a?(ActionDispatch::Routing::Mapper::Constraints)
@@ -93,24 +118,48 @@ module Ruact
             app = app.app
           end
 
-          return verdict_for(route, app, request, params)
+          # A mounted Rack app may answer — or pass (`X-Cascade: pass`, what
+          # Grape and Sinatra do at "/"), and Rails moves on. Keep looking: a
+          # later route is what Rails would reach. Only when nothing later
+          # matches does the Rack app own the request.
+          if mounted_rack_app?(route, app)
+            mounted_app = true
+            next
+          end
+
+          return verdict_for(route, app, request, params, in_engine: in_engine)
         end
-        :pass # no route: the 404 goes the normal way
+        mounted_app ? :native : :pass # no route: the 404 goes the normal way
       end
 
-      def verdict_for(route, app, request, params)
-        return action_verdict(request, params[:controller], params[:action]) if route.dispatcher?
-        # The fetch follows the redirect and the target is classified on arrival.
-        return :pass if app.is_a?(ActionDispatch::Routing::Redirect)
-        return engine_verdict(app, request) if app.respond_to?(:routes) && app.routes.respond_to?(:router)
-
-        :native # a mounted Rack app renders no ruact page
+      def mounted_rack_app?(route, app)
+        !route.dispatcher? && !app.is_a?(ActionDispatch::Routing::Redirect) && !engine?(app)
       end
 
-      # Inside `recognize`'s block the request's path_info is already relative
-      # to the mount point, which is what the engine's own router expects.
-      def engine_verdict(engine, request)
-        verdict_in(engine.routes.router, request)
+      def engine?(app)
+        app.respond_to?(:routes) && app.routes.respond_to?(:router)
+      end
+
+      def verdict_for(route, app, request, params, in_engine:)
+        return action_verdict(request, params[:controller], params[:action], in_engine) if route.dispatcher?
+        return redirect_verdict(app, request, params) if app.is_a?(ActionDispatch::Routing::Redirect)
+
+        # Inside `recognize`'s block the request's path_info is already relative
+        # to the mount point, which is what the engine's own router expects.
+        verdict_in(app.routes.router, request, in_engine: true)
+      end
+
+      # Same origin: the fetch follows the redirect and the target is
+      # classified when it arrives. Another origin: the fetch cannot follow it
+      # (CORS), so the browser has to — native.
+      def redirect_verdict(redirect, request, params)
+        target = URI.parse(redirect.path(params, request).to_s)
+        same_origin = target.host == request.host && (target.port || request.port) == request.port
+        return :pass if target.host.nil? || same_origin
+
+        :native
+      rescue StandardError
+        :pass
       end
 
       # GET/HEAD: ruact renders the page only when `default_render` would —
@@ -122,11 +171,18 @@ module Ruact
       # template, and answers the router with a Flight redirect row
       # (Ruact::Controller#redirect_to) — the Story 13.3 redirect-back has to
       # stay in place, not become a full page load.
-      def action_verdict(request, controller, action)
+      #
+      # Inside a mounted ENGINE, a non-GET is native even when its controller
+      # inherits the app's ruact controller: that is Devise's shape, and its
+      # `destroy` answers a non-navigational request with a bare 204 — the user
+      # is signed out and the router has nothing to render. An engine's actions
+      # speak the engine's protocol, not ruact's. Its GET pages still count when
+      # the APP provides the template (the way apps override engine views).
+      def action_verdict(request, controller, action, in_engine)
         klass = "#{controller.to_s.camelize}Controller".safe_constantize
         return :pass unless klass.is_a?(Class)
         return :native unless klass.include?(Ruact::Controller)
-        return :ruact unless request.get? || request.head?
+        return (in_engine ? :native : :ruact) unless request.get? || request.head?
 
         klass.ruact_page?(action) ? :ruact : :native
       end

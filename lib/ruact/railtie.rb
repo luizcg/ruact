@@ -43,7 +43,6 @@ module Ruact
     # read, and an app without it (API-shaped) does not fail to boot the way
     # `insert_after Rack::MethodOverride` would.
     initializer "ruact.navigation_boundary" do |app|
-      require_relative "navigation_boundary"
       app.config.middleware.use Ruact::NavigationBoundary::Middleware
     end
 

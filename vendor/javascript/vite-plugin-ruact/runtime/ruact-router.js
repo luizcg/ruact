@@ -289,10 +289,15 @@ function _isFlight(response) {
 
 // A full document load of the final URL (after any redirect the fetch
 // followed). `replace` for back/forward, so no entry is pushed mid-history.
+//
+// `response.url` never carries the #fragment (Fetch strips it), so the one
+// the link asked for is put back.
 function _fullLoad(response, targetUrl, { replace = false } = {}) {
-  const destination = response.url || new URL(targetUrl, location.href).href;
-  if (replace) location.replace(destination);
-  else location.assign(destination);
+  const requested = new URL(targetUrl, location.href);
+  const destination = new URL(response.url || requested.href);
+  if (!destination.hash && requested.hash) destination.hash = requested.hash;
+  if (replace) location.replace(destination.href);
+  else location.assign(destination.href);
 }
 
 function _escapedFormMessage(method, targetUrl, response) {
@@ -309,20 +314,60 @@ function _escapedFormMessage(method, targetUrl, response) {
 // the clicked button's `name=value` (and honours its `formaction` / `formmethod`
 // / `formtarget`) when that button is the submitter, which `submit()` has no way
 // to express: both are carried over onto the form first.
+//
+// Everything added to the form is taken back right after: `submit()` builds its
+// entry list synchronously, and a page that survives the submit (a download, a
+// 204, a return from the back-forward cache) must not keep the last button's
+// overrides and value for the next one.
+//
+// A form rendered by a React component has no `authenticity_token` field — the
+// router's own fetch sent the token as a header. A native submit cannot, so the
+// token from `<meta name="csrf-token">` goes in as a field, the way rails-ujs
+// does it.
+const _SUBMITTER_OVERRIDES = [
+  ["formaction", "action"], ["formmethod", "method"], ["formtarget", "target"], ["formenctype", "enctype"],
+];
+
 function _nativeSubmit(form, submitter) {
+  const restore = [];
+  const added = [];
+
   if (submitter) {
-    for (const [override, attribute] of [["formaction", "action"], ["formmethod", "method"], ["formtarget", "target"]]) {
-      if (submitter.hasAttribute(override)) form.setAttribute(attribute, submitter.getAttribute(override));
+    for (const [override, attribute] of _SUBMITTER_OVERRIDES) {
+      if (!submitter.hasAttribute(override)) continue;
+      restore.push([attribute, form.hasAttribute(attribute) ? form.getAttribute(attribute) : null]);
+      form.setAttribute(attribute, submitter.getAttribute(override));
     }
-    if (submitter.name) {
-      const carried = document.createElement("input");
-      carried.type = "hidden";
-      carried.name = submitter.name;
-      carried.value = submitter.value;
-      form.appendChild(carried);
-    }
+    if (submitter.name) added.push(_hiddenField(submitter.name, submitter.value));
   }
-  HTMLFormElement.prototype.submit.call(form);
+
+  const csrfParam = document.querySelector('meta[name="csrf-param"]')?.content;
+  const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+  if (csrfParam && csrfToken && !_hasField(form, csrfParam)) added.push(_hiddenField(csrfParam, csrfToken));
+
+  added.forEach((field) => form.appendChild(field));
+  try {
+    HTMLFormElement.prototype.submit.call(form);
+  } finally {
+    added.forEach((field) => field.remove?.());
+    restore.forEach(([attribute, value]) => {
+      if (value === null) form.removeAttribute?.(attribute);
+      else form.setAttribute(attribute, value);
+    });
+  }
+}
+
+function _hiddenField(name, value) {
+  const field = document.createElement("input");
+  field.type = "hidden";
+  field.name = name;
+  field.value = value;
+  return field;
+}
+
+function _hasField(form, name) {
+  const quoted = name.replace(/["\\]/g, "\\$&");
+  return Boolean(form.elements?.namedItem?.(name) ?? form.querySelector?.(`[name="${quoted}"]`));
 }
 
 async function _submitForm(form, submitter = null) {
@@ -371,7 +416,11 @@ async function _submitForm(form, submitter = null) {
     // submit is its one and only run, and its real response (a 422 with the
     // validation errors included) is what the user sees.
     if (_isNativeBoundary(response)) {
-      _nativeSubmit(form, submitter);
+      // The boundary answer came at the END of a redirect the fetch followed:
+      // the form's action already ran (a real 3xx, e.g. to another scheme), and
+      // resubmitting would run it twice. Load where it redirected to instead.
+      if (response.redirected) _fullLoad(response, action);
+      else _nativeSubmit(form, submitter);
       return;
     }
     await _processFlightResponse(response, { push: true, targetUrl: action, method: htmlMethod });
@@ -452,17 +501,32 @@ async function _processFlightResponse(response, {
   // Story 17.0f — a response that is not Flight escaped the server's boundary
   // classifier. Feeding it to the line parser was the old dead click: every HTML
   // line parses to null, nothing renders, nothing reports.
+  //
+  // Only a SUCCESSFUL non-Flight GET is a page to load in full. An error page
+  // (a 500 or 404 HTML) keeps the error path below — a full load would run the
+  // failing action again and turn `await revalidate()` into a success — and so
+  // does any non-Flight answer to a caller that asked to be told (`throwOnError`).
   if (!_isFlight(response)) {
-    if (method === "GET") {
+    if (method === "GET" && response.ok && !throwOnError) {
       _fullLoad(response, targetUrl, { replace });
       return;
     }
-    // The action already ran; resubmitting would run it again. Say so, loudly.
-    const err = new Error(_escapedFormMessage(method, targetUrl, response));
-    console.error(err.message);
-    _onError?.(err);
-    if (throwOnError) throw err;
-    return;
+    // A form whose action answered HTML — it ran, so it will not be resubmitted.
+    // Only a 2xx or a 422 is that; a 403 (CSRF) or a 500 is a failure, below.
+    if (method !== "GET" && (response.ok || response.status === 422)) {
+      const err = new Error(_escapedFormMessage(method, targetUrl, response));
+      console.error(err.message);
+      _onError?.(err);
+      if (throwOnError) throw err;
+      return;
+    }
+    if (response.ok) {
+      const err = new Error(`[ruact] ${targetUrl} did not answer with a ruact response`);
+      console.error(err.message);
+      _onError?.(err);
+      if (throwOnError) throw err;
+      return;
+    }
   }
 
   if (!response.ok) {

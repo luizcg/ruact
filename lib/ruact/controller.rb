@@ -47,13 +47,16 @@ module Ruact
       end
 
       # The template `default_render` looks for — the literal
-      # `Rails.root/app/views/<controller>/<action>.html.erb`, not the view path
-      # lookup, which is what keeps an engine's own templates (Devise's) out.
+      # `Rails.root/app/views/<controller_path>/<action>.html.erb`, not the view
+      # path lookup, which is what keeps an engine's own templates (Devise's)
+      # out. `controller_path`, not the class name with "_controller" cut out
+      # of it: `RemoteControllersController` used to look in
+      # `remotes_controller/`.
       #
       # @param action [String, Symbol]
       # @return [Pathname]
       def ruact_template_path(action)
-        Rails.root.join("app", "views", name.underscore.sub("_controller", ""), "#{action}.html.erb")
+        Rails.root.join("app", "views", controller_path, "#{action}.html.erb")
       end
 
       # A GET to `action` renders through ruact when both hold.

@@ -36,11 +36,19 @@ function installDom(path = "/products/1") {
     listeners[bucket][type] = (listeners[bucket][type] || []).filter((f) => f !== fn);
   };
 
+  const metas = {};
   globalThis.document = {
     addEventListener: on("document"),
     removeEventListener: off("document"),
-    querySelector: () => null,
-    createElement: (tag) => ({ tagName: tag.toUpperCase(), type: "", name: "", value: "" }),
+    querySelector: (selector) => {
+      const name = selector.match(/meta\[name="([^"]+)"\]/)?.[1];
+      return name && name in metas ? { content: metas[name] } : null;
+    },
+    createElement: (tag) => {
+      const el = { tagName: tag.toUpperCase(), type: "", name: "", value: "", parent: null };
+      el.remove = () => { if (el.parent) el.parent.children = el.parent.children.filter((c) => c !== el); };
+      return el;
+    },
   };
   globalThis.window = {
     addEventListener: on("window"),
@@ -59,14 +67,19 @@ function installDom(path = "/products/1") {
     getAttribute(name) { return name in this.attrs ? this.attrs[name] : null; }
     hasAttribute(name) { return name in this.attrs; }
     setAttribute(name, value) { this.attrs[name] = value; }
-    appendChild(node) { this.children.push(node); }
+    removeAttribute(name) { delete this.attrs[name]; }
+    appendChild(node) { node.parent = this; this.children.push(node); }
+    querySelector(selector) {
+      const name = selector.match(/\[name="([^"]+)"\]/)?.[1];
+      return this.children.find((c) => c.name === name) ?? null;
+    }
     get action() { return new URL(this.attrs.action ?? globalThis.location.href, ORIGIN).href; }
     submit() {}
   }
   globalThis.HTMLFormElement = FakeForm;
   globalThis.FormData = class { constructor() { this.entries = []; } forEach() {} };
 
-  return { listeners, FakeForm };
+  return { listeners, FakeForm, metas };
 }
 
 function flightBody(text) {
@@ -212,21 +225,107 @@ describe("ruact-router — the navigation boundary (Story 17.0f)", () => {
 
     // A native submit loses the submitter unless it is carried over: the
     // browser only includes `name=value` of the button that was clicked.
-    it("carries the submitter's name/value and its formaction/formmethod overrides", async () => {
+    it("carries the submitter's name/value and overrides DURING the submit, and takes them back after", async () => {
       const form = new dom.FakeForm({ action: "/people", method: "post" });
       const submitter = {
         name: "op", value: "archive",
-        hasAttribute: (n) => ["formAction", "formMethod", "formaction", "formmethod"].includes(n),
-        getAttribute: (n) => ({ formAction: "/people/archive", formaction: "/people/archive", formMethod: "post", formmethod: "post" })[n] ?? null,
+        hasAttribute: (n) => ["formAction", "formMethod", "formaction", "formmethod", "formenctype"].includes(n),
+        getAttribute: (n) => ({
+          formAction: "/people/archive", formaction: "/people/archive",
+          formMethod: "post", formmethod: "post", formenctype: "multipart/form-data",
+        })[n] ?? null,
       };
-      vi.spyOn(HTMLFormElement.prototype, "submit");
+      let during;
+      vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function () {
+        during = { action: this.getAttribute("action"), enctype: this.getAttribute("enctype"), fields: this.children.map((c) => [c.name, c.value]) };
+      });
       fetch.mockResolvedValue(respond({ contentType: "text/plain", boundary: "native" }));
 
       submit(dom.listeners, form, submitter);
       await settle();
 
-      expect(form.getAttribute("action")).toBe("/people/archive");
-      expect(form.children).toContainEqual(expect.objectContaining({ name: "op", value: "archive" }));
+      expect(during).toEqual({ action: "/people/archive", enctype: "multipart/form-data", fields: [["op", "archive"]] });
+      // Taken back: a page that survives the submit keeps its form as it was.
+      expect(form.getAttribute("action")).toBe("/people");
+      expect(form.hasAttribute("enctype")).toBe(false);
+      expect(form.children).toEqual([]);
+    });
+
+    // Review round 1 — a form a React component rendered has no token field;
+    // the router's fetch sent it as a header, a native submit cannot.
+    it("adds the CSRF token from the meta tags when the form has no token field", async () => {
+      dom.metas["csrf-param"] = "authenticity_token";
+      dom.metas["csrf-token"] = "tok-123";
+      const form = new dom.FakeForm({ action: "/people", method: "post" });
+      let fields;
+      vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function () {
+        fields = this.children.map((c) => [c.name, c.value]);
+      });
+      fetch.mockResolvedValue(respond({ contentType: "text/plain", boundary: "native" }));
+
+      submit(dom.listeners, form);
+      await settle();
+
+      expect(fields).toEqual([["authenticity_token", "tok-123"]]);
+    });
+
+    // Review round 1 — a native answer at the END of a redirect the fetch
+    // followed means the action already ran. Resubmitting would run it twice.
+    it("loads the redirect target instead of resubmitting when the fetch was redirected", async () => {
+      const form = new dom.FakeForm({ action: "/people", method: "post" });
+      const nativeSubmit = vi.spyOn(HTMLFormElement.prototype, "submit");
+      fetch.mockResolvedValue({ ...respond({ contentType: "text/plain", boundary: "native", url: `${ORIGIN}/people/3` }), redirected: true });
+
+      submit(dom.listeners, form);
+      await settle();
+
+      expect(nativeSubmit).not.toHaveBeenCalled();
+      expect(location.assign).toHaveBeenCalledWith(`${ORIGIN}/people/3`);
+    });
+  });
+
+  describe("review round 1 — errors stay errors", () => {
+    // A full load would run the failing action again, and turn a rejected
+    // revalidate() into a success.
+    it("keeps a GET error page (500 HTML) on the error path, with no full load", async () => {
+      fetch.mockResolvedValue(respond({ status: 500, contentType: "text/html", body: "<h1>oops</h1>" }));
+
+      click(dom.listeners, "/products/9");
+      await settle();
+
+      expect(location.assign).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError.mock.calls[0][0].message).toContain("500");
+    });
+
+    it("rejects revalidate() on a non-Flight answer instead of reloading", async () => {
+      fetch.mockResolvedValue(respond({ contentType: "text/html", body: "<h1>html</h1>" }));
+
+      await expect(globalThis.__ruact_revalidate()).rejects.toThrow("did not answer with a ruact response");
+      expect(location.assign).not.toHaveBeenCalled();
+    });
+
+    // A 403 is a CSRF rejection: the action did NOT run, and telling the
+    // developer it did (and to add data-ruact="false") points the wrong way.
+    it("does not call a 403 on a form 'not a ruact page'", async () => {
+      const form = new dom.FakeForm({ action: "/people", method: "post" });
+      fetch.mockResolvedValue(respond({ status: 403, contentType: "text/html", body: "forbidden" }));
+
+      submit(dom.listeners, form);
+      await settle();
+
+      expect(onError.mock.calls[0][0].message).not.toContain("data-ruact");
+      expect(onError.mock.calls[0][0].message).toContain("403");
+    });
+
+    // Fetch drops the #fragment from response.url.
+    it("keeps the link's #fragment on a full load", async () => {
+      fetch.mockResolvedValue(respond({ contentType: "text/plain", boundary: "native", url: `${ORIGIN}/docs/guide` }));
+
+      click(dom.listeners, "/docs/guide#install");
+      await settle();
+
+      expect(location.assign).toHaveBeenCalledWith(`${ORIGIN}/docs/guide#install`);
     });
   });
 

@@ -47,6 +47,9 @@ GEM_BOUNDARY_BOOT_SCRIPT = <<~RUBY
     config.consider_all_requests_local = true
     config.hosts.clear if config.respond_to?(:hosts)
     config.action_controller.allow_forgery_protection = false
+    # Review round 1 (17.0f) — the documented way out must work from here,
+    # before any initializer: the constant has to be loaded already.
+    config.middleware.delete Ruact::NavigationBoundary::Middleware if ENV["BOUNDARY_REMOVED"]
   end
 
   Ruact.configure do |c|
@@ -62,18 +65,9 @@ GEM_BOUNDARY_BOOT_SCRIPT = <<~RUBY
   AdminPanel::Engine.routes.draw do
     get "reports", to: "dashboard#reports"
     get "session/new", to: "sessions#new"
+    get "pages/:id", to: "pages#show"
+    delete "pages/:id", to: "pages#destroy"
   end
-
-  BoundaryApp.routes.draw do
-    resources :people, only: %i[show create destroy]
-    resources :products, only: %i[show create destroy]
-    get "item/:id", to: "people#show", constraints: ->(req) { req.path_parameters[:id].to_i.odd? }
-    get "item/:id", to: "products#show"
-    get "go/people", to: redirect("/people/1")
-    mount AdminPanel::Engine, at: "/admin"
-    mount ->(_env) { RUNS["rack"] += 1; [200, { "content-type" => "text/html" }, ["rack"]] }, at: "/rack"
-  end
-
 
   def call(method, path, headers: {}, params: nil)
     env = Rack::MockRequest.env_for(path, { method: method, params: params }.merge(headers))
@@ -84,9 +78,12 @@ GEM_BOUNDARY_BOOT_SCRIPT = <<~RUBY
 
   ROUTER = { "HTTP_RUACT_REQUEST" => "1", "HTTP_ACCEPT" => "text/x-component" }.freeze
 
+  # The FIRST request is one that must come back native: the app's routes are
+  # in config/routes.rb, and Rails 8 loads them lazily in development and test.
+  # Classifying against a route table nobody loaded yet would pass it through.
   requests = {
-    "ruact page (GET)" => [:get, "/products/1", ROUTER],
     "rails page (GET)" => [:get, "/people/1", ROUTER],
+    "ruact page (GET)" => [:get, "/products/1", ROUTER],
     "rails page, browser navigation" => [:get, "/people/1", { "HTTP_ACCEPT" => "text/html" }],
     "rails page, server-function JSON" => [:get, "/people/1", { "HTTP_ACCEPT" => "application/json" }],
     "constraint, odd -> rails" => [:get, "/item/1", ROUTER],
@@ -99,8 +96,13 @@ GEM_BOUNDARY_BOOT_SCRIPT = <<~RUBY
     "POST to rails controller" => [:post, "/people", ROUTER],
     "POST to ruact controller without template" => [:post, "/products", ROUTER],
     "_method=delete to rails controller" => [:post, "/people/1", ROUTER, { "_method" => "delete" }],
-    "_method=delete to ruact controller" => [:post, "/products/1", ROUTER, { "_method" => "delete" }]
+    "_method=delete to ruact controller" => [:post, "/products/1", ROUTER, { "_method" => "delete" }],
+    "ruact page inside an engine" => [:get, "/admin/pages/1", ROUTER],
+    "DELETE to an engine controller inheriting the app's" => [:post, "/admin/pages/1", ROUTER, { "_method" => "delete" }],
+    "redirect route to another origin" => [:get, "/elsewhere", ROUTER],
+    "controller named ...ControllersController" => [:get, "/remote_controllers", ROUTER]
   }
+  requests = requests.slice(*ENV["BOUNDARY_ONLY"].split("|")) if ENV["BOUNDARY_ONLY"]
 
   results = requests.to_h do |label, (method, path, headers, params)|
     RUNS.clear
@@ -112,15 +114,13 @@ GEM_BOUNDARY_BOOT_SCRIPT = <<~RUBY
 RUBY
 
 RSpec.describe "the navigation boundary in a booted app (Story 17.0f)", :story_17_0f do
-  def write(root, relative, body)
+  def self.write(root, relative, body)
     path = File.join(root, relative)
     FileUtils.mkdir_p(File.dirname(path))
     File.write(path, body)
   end
 
-  # rubocop:disable RSpec/InstanceVariable -- one subprocess boot for the whole group
-  before(:context) do # rubocop:disable RSpec/BeforeAfterAll -- one subprocess boot, read-only results
-    root = Dir.mktmpdir("ruact_boundary_boot")
+  def self.build_app(root)
     write(root, "app/controllers/application_controller.rb", <<~RUBY)
       class ApplicationController < ActionController::Base
         include Ruact::Controller
@@ -143,6 +143,15 @@ RSpec.describe "the navigation boundary in a booted app (Story 17.0f)", :story_1
       end
     RUBY
     write(root, "app/views/products/show.html.erb", "<h1>product</h1>\n")
+    # Review round 1 — the template path comes from controller_path; cutting
+    # "_controller" out of the class name looked in remotes_controller/.
+    write(root, "app/controllers/remote_controllers_controller.rb", <<~RUBY)
+      class RemoteControllersController < ApplicationController
+        before_action { RUNS["remote_controllers#\#{action_name}"] += 1 }
+        def index; end
+      end
+    RUBY
+    write(root, "app/views/remote_controllers/index.html.erb", "<h1>remotes</h1>\n")
     write(root, "app/controllers/admin_panel/dashboard_controller.rb", <<~RUBY)
       module AdminPanel
         class DashboardController < ActionController::Base
@@ -160,18 +169,57 @@ RSpec.describe "the navigation boundary in a booted app (Story 17.0f)", :story_1
         end
       end
     RUBY
+    # An engine controller inheriting the app's, whose GET page has a template
+    # in the APP (how apps override engine views): a ruact page reached only by
+    # descending into the engine. Its DELETE speaks the engine's protocol.
+    write(root, "app/controllers/admin_panel/pages_controller.rb", <<~RUBY)
+      module AdminPanel
+        class PagesController < ::ApplicationController
+          before_action { RUNS["pages#\#{action_name}"] += 1 }
+          def show; end
+          def destroy = head(:no_content)
+        end
+      end
+    RUBY
+    write(root, "app/views/admin_panel/pages/show.html.erb", "<h1>engine page</h1>\n")
+    # In config/routes.rb, NOT drawn by the script: Rails 8 loads these lazily
+    # in development and test, which is the case the classifier must survive.
+    write(root, "config/routes.rb", <<~RUBY)
+      Rails.application.routes.draw do
+        # A Rack app at "/" that passes on what it does not know (Grape and
+        # Sinatra do this): Rails moves on to the routes below, and so must the
+        # classifier.
+        mount ->(_env) { [404, { "x-cascade" => "pass" }, []] }, at: "/" if ENV["BOUNDARY_ROOT_MOUNT"]
+        resources :people, only: %i[show create destroy]
+        resources :products, only: %i[show create destroy]
+        get "item/:id", to: "people#show", constraints: ->(req) { req.path_parameters[:id].to_i.odd? }
+        get "item/:id", to: "products#show"
+        get "go/people", to: redirect("/people/1")
+        get "elsewhere", to: redirect("https://blog.example.org/")
+        get "remote_controllers", to: "remote_controllers#index"
+        mount AdminPanel::Engine, at: "/admin"
+        mount ->(_env) { RUNS["rack"] += 1; [200, { "content-type" => "text/html" }, ["rack"]] }, at: "/rack"
+      end
+    RUBY
     write(root, "public/react-client-manifest.json", "{}")
     write(root, "script.rb", GEM_BOUNDARY_BOOT_SCRIPT)
+  end
 
+  def self.boot(env = {})
+    root = Dir.mktmpdir("ruact_boundary_boot")
+    build_app(root)
     gem_lib = File.expand_path("../../lib", __dir__)
-    out, err, status = Open3.capture3(RbConfig.ruby, "-I", gem_lib, "-rbundler/setup",
+    out, err, status = Open3.capture3(env, RbConfig.ruby, "-I", gem_lib, "-rbundler/setup",
                                       File.join(root, "script.rb"), root)
     raise "boundary boot failed (exit #{status.exitstatus}):\n#{err}\n#{out}" unless status.success?
 
-    @results = JSON.parse(out.lines.last)
+    JSON.parse(out.lines.last)
   ensure
     FileUtils.rm_rf(root) if root
   end
+
+  # rubocop:disable RSpec/InstanceVariable -- one subprocess boot for the whole group
+  before(:context) { @results = self.class.boot } # rubocop:disable RSpec/BeforeAfterAll -- read-only results
 
   def outcome(label) = @results.fetch(label)
   # rubocop:enable RSpec/InstanceVariable
@@ -196,11 +244,15 @@ RSpec.describe "the navigation boundary in a booted app (Story 17.0f)", :story_1
   it_behaves_like "answered native without running the action", "mounted rack app"
   it_behaves_like "answered native without running the action", "POST to rails controller"
   it_behaves_like "answered native without running the action", "_method=delete to rails controller"
+  it_behaves_like "answered native without running the action", "DELETE to an engine controller inheriting the app's"
+  it_behaves_like "answered native without running the action", "redirect route to another origin"
 
   it_behaves_like "passed through to the app", "ruact page (GET)"
   it_behaves_like "passed through to the app", "constraint, even -> ruact"
   it_behaves_like "passed through to the app", "redirect route"
   it_behaves_like "passed through to the app", "no route"
+  it_behaves_like "passed through to the app", "ruact page inside an engine"
+  it_behaves_like "passed through to the app", "controller named ...ControllersController"
 
   # The case the spike missed: no create.html.erb, but the gem's redirect_to
   # answers a ruact request with a Flight redirect row. Classifying it native
@@ -212,10 +264,28 @@ RSpec.describe "the navigation boundary in a booted app (Story 17.0f)", :story_1
     expect(outcome("ruact page (GET)")["runs"]).to eq(1)
     expect(outcome("POST to ruact controller without template")["runs"]).to eq(1)
     expect(outcome("_method=delete to ruact controller")["runs"]).to eq(1)
+    expect(outcome("ruact page inside an engine")["runs"]).to eq(1)
   end
 
   it "never touches a request the ruact router did not send", :aggregate_failures do
     expect(outcome("rails page, browser navigation")).to include("boundary" => nil, "runs" => 1)
     expect(outcome("rails page, server-function JSON")).to include("boundary" => nil, "runs" => 1)
+  end
+
+  context "when a Rack app mounted at / passes on what it does not know" do
+    it "keeps classifying the routes below it", :aggregate_failures do
+      results = self.class.boot("BOUNDARY_ROOT_MOUNT" => "1", "BOUNDARY_ONLY" => "ruact page (GET)|rails page (GET)")
+
+      expect(results["ruact page (GET)"]).to include("boundary" => nil, "runs" => 1)
+      expect(results["rails page (GET)"]).to include("boundary" => "native", "runs" => 0)
+    end
+  end
+
+  context "when the app removes the middleware in config/application.rb" do
+    it "boots, and the router's requests reach the app untouched" do
+      results = self.class.boot("BOUNDARY_REMOVED" => "1", "BOUNDARY_ONLY" => "rails page (GET)")
+
+      expect(results["rails page (GET)"]).to include("boundary" => nil, "runs" => 1)
+    end
   end
 end
