@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Styling from an npm component worked in development and disappeared in production.** A `"use client"` component that imports CSS — its own, or one a package ships, like a date picker's — produces a separate stylesheet that Vite builds, digest-stamps and serves. Nothing linked it. The page came back with the script tag and no `<link>`, so the component rendered unstyled: in the case that surfaced this ([#63](https://github.com/luizcg/ruact/issues/63)), a date picker collapsed into a column of overlapping numbers. Development hid it completely, because the Vite dev server injects that CSS through JavaScript.
+
+  A new `<head>` helper, `ruact_head_assets`, links those stylesheets — above your own, so your CSS loads last and wins ties. It emits nothing while the Vite dev server is running. The layout ruact now ships calls it for you, and so does the built-in shell (`config.layout = false`), which still carries none of *your* stylesheets. `rails ruact:doctor` fails when a build emits component CSS that the layout rendering your pages never links, and names that layout.
+
+- **The generated `--shadcn` `tsconfig.json` had no types for a CSS import.** A client component importing a stylesheet for its side effect had nothing to resolve against. It now declares `vite/client`. If you keep your own `tsconfig.json`, add `"types": ["vite/client"]` to it.
+
+### Changed
+
+- **New installs render ruact pages through a layout the gem ships, and no longer edit yours.** `rails generate ruact:install` used to write the React root and `ruact_js_assets` into `app/views/layouts/application.html.erb`. It now writes `config.layout = "ruact"`: ruact pages render through `layouts/ruact`, which comes with the gem and links CSRF, CSP, your client components' CSS and then the stylesheets you name in the new `config.layout_stylesheets` (`[:app]` under Propshaft; the install writes `["application"]` when it finds Sprockets instead). Your layouts are not touched.
+
+  What that layout does **not** bring is the rest of your own layout's `<head>` — favicons, fonts, analytics, meta tags other gems write — or your app's JavaScript. If a ruact page needs those, `rails generate ruact:layout` copies the layout into `app/views/layouts/ruact.html.erb`, where it is yours to change and wins over the gem's with no setting. Or set `config.layout = true` to keep rendering through your own layout, as before.
+
+  **Existing installs are not changed**: re-running the install leaves a `config.layout` you already have alone. On an app that renders through its own layout, the install now prints any of the three lines that layout is missing — `ruact_head_assets` is the new one — instead of writing them.
+
 ## [0.0.12] - 2026-09-09
 
 ### Added

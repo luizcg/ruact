@@ -82,8 +82,10 @@ module Ruact
     # own. So ruact declares that it contributes CSS and says WHERE, rather than
     # smuggling it through a helper named for JavaScript.
     #
-    # **Cascade.** `rails generate ruact:install` places this call ABOVE the
-    # app's `stylesheet_link_tag`, so the app's own CSS is loaded afterwards.
+    # **Cascade.** Call it ABOVE the app's `stylesheet_link_tag`, so the app's
+    # own CSS is loaded afterwards. The layout ruact ships (`layouts/ruact`,
+    # Story 17.0b) does exactly that; a layout of the app's own does it by hand
+    # (`rails generate ruact:install` prints the line, it never edits a layout).
     # Order decides ties only — specificity, `!important` and cascade layers all
     # outrank it — but ties are the common case, and losing them by default is
     # what makes third-party CSS feel like it "takes over".

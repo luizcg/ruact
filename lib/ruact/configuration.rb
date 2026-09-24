@@ -145,17 +145,21 @@ module Ruact
     #     full-document render a browser gets on a normal navigation.
     #
     #     - `false` (default) — render the gem's built-in minimal shell.
+    #     - `"ruact"` — render through the layout the gem ships
+    #       (`lib/ruact/views/layouts/ruact.html.erb`, Story 17.0b): CSRF, CSP,
+    #       the client-component CSS, then the app stylesheets named in
+    #       {#layout_stylesheets}. What `rails generate ruact:install` writes.
+    #       It edits no layout of the app; an app that puts its own
+    #       `app/views/layouts/ruact.html.erb` in place (`rails generate
+    #       ruact:layout` copies the gem's) wins by view-path order.
     #     - `true` — render through the controller's normal Rails layout.
-    #     - a String — render through that named layout (e.g. `"ruact"`).
+    #     - another String — render through that named layout.
     #
-    #     The layout path exists because the document `<head>` belongs to the
-    #     host app: `stylesheet_link_tag`, favicons, fonts, analytics and any
-    #     `<head>`-writing gem only reach the page when Rails' own layout owns
-    #     the document. The built-in shell carries no stylesheet slot, so under
-    #     the `false` default a ruact page renders with no app CSS at all —
-    #     which is why `rails generate ruact:install` writes `config.layout =
-    #     true` into the generated initializer and adds `<%= ruact_js_assets %>`
-    #     to your layout in the same run.
+    #     The trade-off between the last two and `"ruact"`: the app's own layout
+    #     brings its whole `<head>` (favicons, fonts, analytics, `<head>`-writing
+    #     gems) but has to be wired by hand; the gem's layout needs no wiring but
+    #     brings only the stylesheets. The built-in shell carries neither — under
+    #     the `false` default a ruact page renders with no app CSS at all.
     #
     #     **This setting is deliberately explicit — there is no auto-detection.**
     #     ruact used to try to infer whether your layout was ready by inspecting
@@ -174,10 +178,10 @@ module Ruact
     #   @note A ruact view is rendered in its own pass (it produces the component
     #     tree), so `content_for` declared inside the view does NOT reach the
     #     layout. Set document metadata from the controller instead.
-    #   @example Let your layout own the document (what ruact:install writes)
-    #     Ruact.configure { |c| c.layout = true }
-    #   @example Use a dedicated layout for ruact pages only
+    #   @example Render through the layout ruact ships (what ruact:install writes)
     #     Ruact.configure { |c| c.layout = "ruact" }
+    #   @example Let your own application layout own the document
+    #     Ruact.configure { |c| c.layout = true }
     #
     # @!attribute [r] layout_stylesheets
     #   @return [Array<Symbol, String>] The app stylesheets the gem's layout
