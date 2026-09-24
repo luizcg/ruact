@@ -90,33 +90,61 @@ module Ruact
     # outrank it — but ties are the common case, and losing them by default is
     # what makes third-party CSS feel like it "takes over".
     #
-    # **With the dev server reachable this emits nothing**, deliberately: Vite is
-    # already injecting the CSS, and linking the file on disk would serve whatever
-    # the last build left there. In development WITHOUT the dev server it falls
-    # back to the built manifest, matching what `ruact_vite_tags` does.
+    # **With the dev server reachable it links no stylesheet**, deliberately:
+    # Vite is already injecting the CSS, and linking the file on disk would serve
+    # whatever the last build left there. In development WITHOUT the dev server it
+    # falls back to the built manifest, matching what `ruact_vite_tags` does.
     #
     # It reads the SAME manifest entry as {#ruact_js_assets}, in the same render,
     # so the script and the stylesheet can never come from different builds.
     #
-    # @return [ActiveSupport::SafeBuffer] the `<link>` markup, html_safe; empty
-    #   in development, when no entry exists, or when the entry declares no CSS
+    # **In a document ruact renders it also emits
+    # `<meta name="turbo-visit-control" content="reload">`** (Story 17.0f), in
+    # every environment: Turbo Drive then loads a ruact page in full instead of
+    # swapping it into its own document. Outside a ruact render — the same layout
+    # rendering a plain Rails page — it does not.
+    #
+    # @return [ActiveSupport::SafeBuffer] the meta (in a ruact document) followed
+    #   by the `<link>` markup, html_safe; no links in development with Vite
+    #   running, when no entry exists, or when the entry declares no CSS
     # @example In a layout
     #   <head>
     #     <%= ruact_head_assets %>
     #     <%= stylesheet_link_tag :app %>
     #   </head>
     def ruact_head_assets
-      return "".html_safe if Rails.env.development? && vite_dev_running?
-
-      entry = vite_manifest_entry(Ruact.bootstrap_virtual_id)
-      return "".html_safe if entry.nil?
-
-      Array(entry["css"])
-        .map { |file| %(<link rel="stylesheet" href="/assets/#{file}">) }
-        .join("\n").html_safe
+      tags = []
+      tags << TURBO_VISIT_CONTROL if ruact_document?
+      tags.concat(ruact_component_stylesheets) unless Rails.env.development? && vite_dev_running?
+      tags.join("\n").html_safe
     end
 
+    # Story 17.0f (FR117) — a document ruact rendered must not be swapped into
+    # the page by Turbo Drive: Turbo would keep ITS document, the ruact bootstrap
+    # (a module script, evaluated once per document) would not run again, and
+    # the two routers would end up fighting over one page — dead links and
+    # blank pages after a single round trip (spike 2026-09-12, S3–S7). With this
+    # meta Turbo does a full load instead. It does not depend on Vite, so it is
+    # emitted in development too.
+    TURBO_VISIT_CONTROL = %(<meta name="turbo-visit-control" content="reload">)
+
     private
+
+    # Whether the document being rendered is ruact's. `render_ruact_document`
+    # sets `@ruact_flight_payload` for the whole render (copied into the view by
+    # Rails), and removes it after. The same layout rendering a plain Rails page
+    # — the app's layout, in whole-app mode — does not have it, and must not
+    # tell Turbo to reload every visit.
+    def ruact_document?
+      instance_variable_defined?(:@ruact_flight_payload) && !@ruact_flight_payload.nil?
+    end
+
+    def ruact_component_stylesheets
+      entry = vite_manifest_entry(Ruact.bootstrap_virtual_id)
+      return [] if entry.nil?
+
+      Array(entry["css"]).map { |file| %(<link rel="stylesheet" href="/assets/#{file}">) }
+    end
 
     # The `__FLIGHT_DATA` inline bootstrap `<script>` — pushes the per-render
     # Flight payload onto the global queue the bootstrap entry drains on boot.

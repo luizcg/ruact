@@ -176,6 +176,52 @@ module Ruact
       end
     end
 
+    # Story 17.0f (AC5) — every document ruact renders tells Turbo Drive not to
+    # swap it in: `turbo-visit-control: reload` makes Turbo do a full load, so the
+    # ruact router never ends up living inside a Turbo-owned document (the
+    # 2026-09-12 spike: S3–S7, dead links and blank pages after one round trip).
+    describe "#ruact_head_assets — the Turbo meta", :story_17_0f do
+      let(:meta) { %(<meta name="turbo-visit-control" content="reload">) }
+      let(:asset_helper) do
+        obj = Object.new
+        obj.extend(described_class)
+        obj
+      end
+
+      def in_ruact_render(helper)
+        # What `render_ruact_document` sets for the render (copied into the view
+        # by Rails' view_assigns): the signal that this document is ruact's.
+        helper.instance_variable_set(:@ruact_flight_payload, "0:[]\n")
+        helper
+      end
+
+      it "is emitted in development with the Vite dev server running — it does not depend on Vite" do
+        allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new("development"))
+        allow(asset_helper).to receive(:vite_dev_running?).and_return(true)
+
+        expect(in_ruact_render(asset_helper).ruact_head_assets).to eq(meta)
+      end
+
+      it "comes before the component stylesheets in production", :aggregate_failures do
+        allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new("production"))
+        allow(asset_helper).to receive(:vite_manifest_entry).and_return({ "file" => "b.js", "css" => ["a.css"] })
+
+        html = in_ruact_render(asset_helper).ruact_head_assets
+
+        expect(html).to start_with(meta)
+        expect(html).to include(%(<link rel="stylesheet" href="/assets/a.css">))
+      end
+
+      # Whole-app mode: the app's own layout calls this helper and ALSO renders
+      # plain Rails pages. The meta there would make Turbo reload on every visit.
+      it "is NOT emitted outside a ruact render, even from the same layout" do
+        allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new("development"))
+        allow(asset_helper).to receive(:vite_dev_running?).and_return(true)
+
+        expect(asset_helper.ruact_head_assets).not_to include("turbo-visit-control")
+      end
+    end
+
     describe "#ruact_js_assets", :story_14_2 do
       let(:asset_helper) do
         obj = Object.new

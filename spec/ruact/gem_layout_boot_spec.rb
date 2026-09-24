@@ -165,6 +165,9 @@ RSpec.describe "the gem's layout in a booted app (Story 17.0b)", :story_17_0b do
         expect(head.index("bootstrap-def.css")).to be < head.index("app.css")
         expect(result["html"]).to include(%(<div id="root"></div>))
         expect(result["html"]).not_to include("APP LAYOUT")
+        # Story 17.0f — the page is ruact's, so Turbo is told to reload rather
+        # than swap it into a document of its own.
+        expect(head).to include(%(<meta name="turbo-visit-control" content="reload">))
       end
     end
   end

@@ -59,6 +59,12 @@ module Ruact
       # committed: that is a configuration error, raised in development/test and
       # logged-and-degraded in production rather than served to real traffic.
       def render_ruact_document(payload)
+        # Set for EVERY branch, the shell included: besides carrying the payload
+        # to a layout's zero-argument `ruact_js_assets`, it is how
+        # `ruact_head_assets` knows this document is ruact's and emits the Turbo
+        # meta (Story 17.0f). Removed in `ensure`, so a later plain-Rails render
+        # through the same layout never inherits it.
+        @ruact_flight_payload = payload
         layout = Ruact.config.layout
         return render html: ruact_html_shell(payload).html_safe, layout: false if layout == false
 
@@ -67,10 +73,10 @@ module Ruact
           return render html: ruact_html_shell(payload).html_safe, layout: false
         end
 
-        # Copied to the view by Rails' `view_assigns` plumbing (the name does not
-        # match the `/\A@_/` protected-ivar filter) — that is how the layout's
-        # zero-argument `ruact_js_assets` reaches THIS render's Flight payload.
-        @ruact_flight_payload = payload
+        # `@ruact_flight_payload` is copied to the view by Rails' `view_assigns`
+        # plumbing (the name does not match the `/\A@_/` protected-ivar filter) —
+        # that is how the layout's zero-argument `ruact_js_assets` reaches THIS
+        # render's Flight payload.
         document = render_to_string(html: "".html_safe, layout: layout)
 
         if ruact_document_mountable?(document)

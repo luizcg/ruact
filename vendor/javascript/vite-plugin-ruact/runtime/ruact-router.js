@@ -275,6 +275,56 @@ function _buildFormData(form, submitter) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Story 17.0f — the navigation boundary
+// ---------------------------------------------------------------------------
+
+function _isNativeBoundary(response) {
+  return response.headers?.get("ruact-boundary") === "native";
+}
+
+function _isFlight(response) {
+  return (response.headers?.get("content-type") || "").includes("text/x-component");
+}
+
+// A full document load of the final URL (after any redirect the fetch
+// followed). `replace` for back/forward, so no entry is pushed mid-history.
+function _fullLoad(response, targetUrl, { replace = false } = {}) {
+  const destination = response.url || new URL(targetUrl, location.href).href;
+  if (replace) location.replace(destination);
+  else location.assign(destination);
+}
+
+function _escapedFormMessage(method, targetUrl, response) {
+  const path = new URL(targetUrl, location.href).pathname;
+  const type = response.headers?.get("content-type") || "no content type";
+  return `[ruact] ${method} ${path} answered ${response.status} with ${type}, not a ruact page. ` +
+    "The action already ran, so ruact will not submit the form again. " +
+    'Add data-ruact="false" to this <form> to let the browser submit it, ' +
+    "or have the action answer through ruact.";
+}
+
+// Submits the form as the browser would, WITHOUT dispatching a `submit` event —
+// so neither this router nor Turbo intercepts it again. The browser only sends
+// the clicked button's `name=value` (and honours its `formaction` / `formmethod`
+// / `formtarget`) when that button is the submitter, which `submit()` has no way
+// to express: both are carried over onto the form first.
+function _nativeSubmit(form, submitter) {
+  if (submitter) {
+    for (const [override, attribute] of [["formaction", "action"], ["formmethod", "method"], ["formtarget", "target"]]) {
+      if (submitter.hasAttribute(override)) form.setAttribute(attribute, submitter.getAttribute(override));
+    }
+    if (submitter.name) {
+      const carried = document.createElement("input");
+      carried.type = "hidden";
+      carried.name = submitter.name;
+      carried.value = submitter.value;
+      form.appendChild(carried);
+    }
+  }
+  HTMLFormElement.prototype.submit.call(form);
+}
+
 async function _submitForm(form, submitter = null) {
   clearPendingChunks();
 
@@ -317,7 +367,14 @@ async function _submitForm(form, submitter = null) {
       headers,
       signal:  controller.signal,
     });
-    await _processFlightResponse(response, { push: true, targetUrl: action });
+    // Story 17.0f — not a ruact page, and the action did NOT run: this native
+    // submit is its one and only run, and its real response (a 422 with the
+    // validation errors included) is what the user sees.
+    if (_isNativeBoundary(response)) {
+      _nativeSubmit(form, submitter);
+      return;
+    }
+    await _processFlightResponse(response, { push: true, targetUrl: action, method: htmlMethod });
   } catch (err) {
     if (err.name === "AbortError") return;
     console.error("[ruact-router] Form submission error:", err);
@@ -330,7 +387,9 @@ async function _submitForm(form, submitter = null) {
 // ---------------------------------------------------------------------------
 
 function handlePopstate() {
-  navigate(location.pathname + location.search + location.hash, { push: false, scroll: false });
+  // Story 17.0f — `replace`: if this entry turns out not to be a ruact page, the
+  // full load must not push a NEW entry into the history being walked.
+  navigate(location.pathname + location.search + location.hash, { push: false, scroll: false, replace: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -346,7 +405,7 @@ function handlePopstate() {
  * REJECTS on a failed Flight fetch — without this, callers cannot
  * branch on success vs. failure of a programmatic refetch.
  */
-async function navigate(url, { push = true, scroll = true, throwOnError = false } = {}) {
+async function navigate(url, { push = true, scroll = true, throwOnError = false, replace = false } = {}) {
   // Clear stale lazy refs from any previous streaming navigation
   clearPendingChunks();
 
@@ -359,11 +418,18 @@ async function navigate(url, { push = true, scroll = true, throwOnError = false 
       headers: { Accept: "text/x-component", "Ruact-Request": "1" },
       signal:  controller.signal,
     });
+    // Story 17.0f — the server said the destination is not a ruact page, and
+    // ran nothing to say so. The browser takes it from here.
+    if (_isNativeBoundary(response)) {
+      _fullLoad(response, url, { replace });
+      return;
+    }
     await _processFlightResponse(response, {
       push,
       targetUrl: url,
       scroll,
       throwOnError,
+      replace,
     });
   } catch (err) {
     if (err.name === "AbortError") {
@@ -380,7 +446,25 @@ async function navigate(url, { push = true, scroll = true, throwOnError = false 
 // Shared Flight response processor (used by navigate + _submitForm)
 // ---------------------------------------------------------------------------
 
-async function _processFlightResponse(response, { push, targetUrl, scroll = true, throwOnError = false }) {
+async function _processFlightResponse(response, {
+  push, targetUrl, scroll = true, throwOnError = false, replace = false, method = "GET",
+}) {
+  // Story 17.0f — a response that is not Flight escaped the server's boundary
+  // classifier. Feeding it to the line parser was the old dead click: every HTML
+  // line parses to null, nothing renders, nothing reports.
+  if (!_isFlight(response)) {
+    if (method === "GET") {
+      _fullLoad(response, targetUrl, { replace });
+      return;
+    }
+    // The action already ran; resubmitting would run it again. Say so, loudly.
+    const err = new Error(_escapedFormMessage(method, targetUrl, response));
+    console.error(err.message);
+    _onError?.(err);
+    if (throwOnError) throw err;
+    return;
+  }
+
   if (!response.ok) {
     const msg = `[ruact] Request failed: ${response.status} ${response.statusText}`;
     console.error(msg);

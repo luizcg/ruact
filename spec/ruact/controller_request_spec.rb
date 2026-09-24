@@ -364,6 +364,13 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         # This layout raises if it is rendered (it reads an ivar a ruact action
         # never sets) — the shape of a real pre-migration app. Nothing may
         # execute it.
+        # Story 17.0f — the shell is a ruact document too.
+        it "tells Turbo Drive to reload rather than swap the shell in", :story_17_0f do
+          get "/layout-demo/show"
+
+          expect(last_response.body).to include(%(<meta name="turbo-visit-control" content="reload">))
+        end
+
         it "never executes an unmigrated layout, so a working page cannot become a 500" do
           get "/exploding-layout-demo/show"
 

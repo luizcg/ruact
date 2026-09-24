@@ -32,6 +32,39 @@ module Ruact
     # as the un-migrated fallback. See Ruact::Controller::DocumentRendering.
     include Ruact::Controller::DocumentRendering
 
+    # Story 17.0f — "is this action a ruact PAGE?", answered at CLASS level so the
+    # navigation boundary (Ruact::NavigationBoundary) can ask it before any action
+    # runs, and so it and `default_render` read ONE definition rather than two
+    # that could drift (the 2026-09-16 spike's classifier kept its own copy).
+    class_methods do
+      # Whether `action` is a page this controller renders through ruact. Every
+      # action is, today; Story 17-0g narrows it (pages declared per action).
+      #
+      # @param _action [String, Symbol]
+      # @return [Boolean]
+      def ruact_page_action?(_action)
+        true
+      end
+
+      # The template `default_render` looks for — the literal
+      # `Rails.root/app/views/<controller>/<action>.html.erb`, not the view path
+      # lookup, which is what keeps an engine's own templates (Devise's) out.
+      #
+      # @param action [String, Symbol]
+      # @return [Pathname]
+      def ruact_template_path(action)
+        Rails.root.join("app", "views", name.underscore.sub("_controller", ""), "#{action}.html.erb")
+      end
+
+      # A GET to `action` renders through ruact when both hold.
+      #
+      # @param action [String, Symbol]
+      # @return [Boolean]
+      def ruact_page?(action)
+        ruact_page_action?(action) && File.exist?(ruact_template_path(action))
+      end
+    end
+
     private
 
     # `ruact_js_assets` / `__ruact_component__` are public VIEW helpers, but on a
@@ -232,13 +265,11 @@ module Ruact
     end
 
     def ruact_template_exists?
-      File.exist?(default_template_path)
+      self.class.ruact_page?(action_name)
     end
 
     def default_template_path
-      action = action_name
-      controller = self.class.name.underscore.sub("_controller", "")
-      Rails.root.join("app", "views", controller, "#{action}.html.erb")
+      self.class.ruact_template_path(action_name)
     end
   end
 end
