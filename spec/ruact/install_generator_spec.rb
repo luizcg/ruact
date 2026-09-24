@@ -1195,11 +1195,6 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
       end
     end
 
-    # Codex review finding: the layout-migration branch was pinned only by the
-    # REPRODUCTION helper above, which cannot see the real generator's anchor
-    # regex. Invoking the actual generator caught that a layout written with
-    # single quotes matched nothing while the generator still printed a success
-    # message. These specs drive `InstallGenerator#inject_layout_shell` itself.
     # Thor registers every PUBLIC instance method of a generator as a command and
     # runs it in declaration order. A helper left public therefore executes on
     # its own, out of context — this has bitten three times in this branch: a
@@ -1395,6 +1390,95 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         output, = advise(layout_setting: '"ghost"')
 
         expect(output).to include("ghost.html.erb").and include("does not exist")
+      end
+    end
+
+    # Review round 1 — the install must edit an existing initializer whatever its
+    # block variable is called, and never claim an edit it did not make.
+    describe "create_initializer on unusual existing initializers", :aggregate_failures, :story_17_0b do
+      def write_initializer(body)
+        path = File.join(app_root, "config/initializers/ruact.rb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.binwrite(path, body)
+        path
+      end
+
+      def run_create
+        out = StringIO.new
+        original = $stdout
+        $stdout = out
+        build_generator(app_root).create_initializer
+        out.string
+      ensure
+        $stdout = original
+      end
+
+      it "writes with the block's own variable, so the app still boots" do
+        path = write_initializer("Ruact.configure do |c|\n  c.strict_serialization = true\nend\n")
+
+        run_create
+
+        result = File.read(path)
+        expect(result).to include(%(c.layout = "ruact"))
+        expect(result).not_to include("config.")
+        expect { RubyVM::InstructionSequence.compile(result) }.not_to raise_error
+      end
+
+      it "sees a setting under any receiver as already set" do
+        path = write_initializer("Ruact.configure do |c|\n  c.layout = true\nend\n")
+
+        run_create
+
+        expect(File.read(path).scan(/\.layout\s*=/).size).to eq(1)
+      end
+
+      it "edits a block whose opening line carries a comment" do
+        path = write_initializer("Ruact.configure do |config| # ruact settings\nend\n")
+
+        output = run_create
+
+        expect(File.read(path)).to include(%(config.layout = "ruact"))
+        expect(output).to include("update")
+      end
+
+      it "edits a CRLF initializer" do
+        path = write_initializer("Ruact.configure do |config|\r\nend\r\n")
+
+        run_create
+
+        expect(File.read(path)).to include(%(config.layout = "ruact"))
+      end
+    end
+
+    describe "layout_stylesheets beyond the two common pipelines", :aggregate_failures, :story_17_0b do
+      def lock(name, gems)
+        File.write(File.join(app_root, name), "GEM\n  specs:\n#{gems.map { |g| "    #{g}\n" }.join}")
+      end
+
+      def written
+        silently { build_generator(app_root).create_initializer }
+        read("config/initializers/ruact.rb")[/config\.layout_stylesheets = (.+)$/, 1]
+      end
+
+      # Propshaft learned :app in 0.9.0; on 0.8 it would look for app.css and 500.
+      it "writes [\"application\"] for Propshaft older than 0.9" do
+        lock("Gemfile.lock", ["propshaft (0.8.0)"])
+        expect(written).to eq('["application"]')
+      end
+
+      it "writes [:app] for Propshaft 0.9 and later" do
+        lock("Gemfile.lock", ["propshaft (0.9.0)"])
+        expect(written).to eq("[:app]")
+      end
+
+      it "writes [] when the app has neither Propshaft nor Sprockets" do
+        lock("Gemfile.lock", ["rails (8.0.0)", "vite_ruby (3.9.0)"])
+        expect(written).to eq("[]")
+      end
+
+      it "reads gems.locked too" do
+        lock("gems.locked", ["sprockets-rails (3.5.0)"])
+        expect(written).to eq('["application"]')
       end
     end
 

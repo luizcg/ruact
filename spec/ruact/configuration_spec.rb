@@ -479,6 +479,14 @@ module Ruact
       end
 
       describe "writer-time validation" do
+        # Review round 1 — Propshaft reads :app/:all only as the WHOLE list.
+        [[:app, "theme"], ["reset", :app], %i[all app]].each do |mixed|
+          it "rejects #{mixed.inspect}: :app and :all stand alone" do
+            expect { Ruact.configure { |c| c.layout_stylesheets = mixed } }
+              .to raise_error(Ruact::ConfigurationError, /:app and :all stand alone/)
+          end
+        end
+
         [nil, :app, "application", [nil], [""], [{ media: "print" }]].each do |bad|
           it "rejects #{bad.inspect} with a message that shows the accepted shape" do
             expect { Ruact.configure { |c| c.layout_stylesheets = bad } }

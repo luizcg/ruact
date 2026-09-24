@@ -357,6 +357,23 @@ RSpec.describe Ruact::Doctor do
       end
     end
 
+    # Review round 1 — no build is the normal state in development with Vite
+    # running. An own layout without the helper used to PASS there ("nothing to
+    # link") and then lose the component CSS in production.
+    context "when there is no build yet and the app's own layout never calls the helper" do
+      before do
+        write_head("<html><head><%= stylesheet_link_tag :app %></head><body></body></html>")
+        Ruact.configure { |c| c.layout = true }
+      end
+
+      it "warns, naming the file", :aggregate_failures do
+        status, message = doctor.send(:check_head_assets)
+
+        expect(status).to eq(:warn)
+        expect(message).to include("application.html.erb").and include("ruact_head_assets")
+      end
+    end
+
     it "is registered in CHECKS, so a real doctor run reaches it" do
       expect(described_class::CHECKS).to include(:head_assets)
     end
@@ -438,9 +455,12 @@ RSpec.describe Ruact::Doctor do
         expect(status).to eq(:fail)
       end
 
-      it "names both halves, since either could be the missing one" do
+      # Story 17.0b review — the MESSAGE names the exact missing lines: it is all
+      # `Doctor#run` prints, and "the root and/or the helper" left the reader to
+      # work out which.
+      it "names each missing line exactly" do
         _, msg = doctor.send(:check_layout)
-        expect(msg).to include("React root").and include("ruact_js_assets")
+        expect(msg).to eq(%(application.html.erb is missing <div id="root"></div> and <%= ruact_js_assets %>))
       end
     end
 
@@ -485,6 +505,23 @@ RSpec.describe Ruact::Doctor do
         expect(status).to eq(:fail)
         expect(message).to include("ruact.html.erb")
         expect(message).not_to include("application.html.erb")
+      end
+    end
+
+    # Review round 1 — advising `config.layout = "ruact"` to the app's own copy
+    # of the ruact layout is advice to change nothing.
+    context "when the ejected layouts/ruact.html.erb is the one missing lines", :story_17_0b do
+      before do
+        dir = tmpdir.join("app", "views", "layouts")
+        FileUtils.mkdir_p(dir)
+        File.write(dir.join("ruact.html.erb"), "<html><body></body></html>")
+        Ruact.configure { |c| c.layout = "ruact" }
+      end
+
+      it "does not suggest the setting it already has" do
+        _, _, remediation = doctor.send(:check_layout)
+
+        expect(remediation).not_to include(%(config.layout = "ruact"))
       end
     end
 
@@ -851,7 +888,7 @@ RSpec.describe Ruact::Doctor do
 
       it "prints the fix hint" do
         expect { described_class.run }
-          .to output(/Run rails generate ruact:install to fix configuration issues/).to_stdout
+          .to output(/Run rails ruact:doctor -- --json for how to fix each failure/).to_stdout
       end
     end
   end

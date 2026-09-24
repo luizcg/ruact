@@ -76,7 +76,7 @@ module Ruact
       # offered a bad choice on the one path that matters most — migrating an
       # existing app: overwrite and lose every setting the app had
       # (`strict_serialization`, `manifest_path`, the SGID defaults…), or skip
-      # and end up half-migrated, with the layout edited but `config.layout`
+      # and end up half-migrated, with `config.layout`
       # still off and nothing saying so except `ruact:doctor`.
       def create_initializer
         path = Pathname(destination_root).join("config/initializers/ruact.rb")
@@ -372,8 +372,8 @@ module Ruact
         show_shadcn_next_steps if shadcn?
 
         say "\nThen add <MyComponent /> to any ERB view."
-        say "ruact pages render through ruact's own layout — your layouts are untouched."
-        say "To customize it: rails generate ruact:layout\n"
+        say layout_summary
+        say ""
         say "Note: re-run this generator after updating the ruact gem to refresh"
         say "the bundled Vite plugin path in vite.config.js."
         say ""
@@ -381,26 +381,58 @@ module Ruact
 
       private
 
+      # What the post-install message says about the layout — true for the
+      # setting actually in effect, not just for a fresh install.
+      def layout_summary
+        own = configured_app_layout
+        return "ruact pages render through your #{own} layout (see any lines printed above)." if own
+        if configured_layout_value == "false"
+          return "ruact pages render through its built-in shell (config.layout = false)."
+        end
+
+        "ruact pages render through ruact's own layout — your layouts are untouched.\n" \
+          "To customize it: rails generate ruact:layout"
+      end
+
       # Story 17.0b — what `layouts/ruact` should link, decided ONCE, here, and
       # written into the initializer where the app can see and change it. Never
       # inferred at render time. `:app` is what `rails new` 8.x links and means
       # "every stylesheet" under Propshaft; under Sprockets it would be a file
       # called app.css, which does not exist — an AssetNotFound on the first
       # render — so a Sprockets app gets its conventional "application".
+      #
+      # Propshaft learned `:app` in 0.9.0 (checked against the released gems:
+      # 0.8.0's helper has no `when :app`, 0.9.0's does). Below that, or under
+      # Sprockets, the conventional "application" is what exists. With neither
+      # pipeline there is nothing to link: `:app` would become a 404 on
+      # /stylesheets/app.css.
       PROPSHAFT_STYLESHEETS = "[:app]"
       SPROCKETS_STYLESHEETS = '["application"]'
-      private_constant :PROPSHAFT_STYLESHEETS, :SPROCKETS_STYLESHEETS
+      NO_PIPELINE_STYLESHEETS = "[]"
+      private_constant :PROPSHAFT_STYLESHEETS, :SPROCKETS_STYLESHEETS, :NO_PIPELINE_STYLESHEETS
 
       def detected_layout_stylesheets
         @detected_layout_stylesheets ||= begin
-          lock = Pathname(destination_root).join("Gemfile.lock")
-          gems = lock.exist? ? lock.read : ""
-          if !gems.match?(/^ {4}propshaft \(/) && gems.match?(/^ {4}sprockets-rails \(/)
+          gems = locked_gems
+          propshaft = gems[/^ {4}propshaft \((\d+)\.(\d+)/] && [Regexp.last_match(1).to_i, Regexp.last_match(2).to_i]
+          if propshaft
+            (propshaft <=> [0, 9]) >= 0 ? PROPSHAFT_STYLESHEETS : SPROCKETS_STYLESHEETS
+          elsif gems.match?(/^ {4}sprockets-rails \(/)
             SPROCKETS_STYLESHEETS
+          elsif gems.empty?
+            PROPSHAFT_STYLESHEETS # no lockfile to read: the default, as `rails new` would have
           else
-            PROPSHAFT_STYLESHEETS
+            NO_PIPELINE_STYLESHEETS
           end
         end
+      end
+
+      def locked_gems
+        %w[Gemfile.lock gems.locked].each do |name|
+          lock = Pathname(destination_root).join(name)
+          return lock.read if lock.exist?
+        end
+        ""
       end
 
       # The layout the app chose for ruact pages, when it is the app's OWN one:
@@ -409,10 +441,7 @@ module Ruact
       # no initializer is in play. Reads the initializer the app wrote, once, at
       # install time — the same thing a reader of that file would conclude.
       def configured_app_layout
-        path = Pathname(destination_root).join("config/initializers/ruact.rb")
-        return nil unless path.exist?
-
-        value = path.read[/^\s*\w+\.layout\s*=\s*([^\s#]+)/, 1]
+        value = configured_layout_value
         return "application" if value == "true"
 
         quoted = value && value[/\A["'](.+)["']\z/, 1]
@@ -420,6 +449,17 @@ module Ruact
         return nil if name.nil? || name == Ruact::GEM_LAYOUT
 
         name
+      end
+
+      # The raw right-hand side of the LAST `…layout =` in the initializer — the
+      # one Ruby leaves in effect — or nil. Anything that is not a literal
+      # (`ENV.fetch(...)`, a ternary) comes back as-is and is treated as "not
+      # something to advise about", never guessed at.
+      def configured_layout_value
+        path = Pathname(destination_root).join("config/initializers/ruact.rb")
+        return nil unless path.exist?
+
+        path.read.scan(/^\s*[\w.]+\.layout\s*=\s*([^\s#]+)/).flatten.last
       end
 
       # Each call the app's own layout is missing, with where it goes. Read
@@ -434,22 +474,27 @@ module Ruact
         missing
       end
 
+      # The block may name its variable anything (`|c|`, `|ruact|`): the setting
+      # is found whatever the receiver, and the snippet is written with the
+      # block's OWN variable — writing `config.` into a `|c|` block raised
+      # NameError at boot. One pattern both finds the block and anchors the
+      # injection, so the two cannot disagree (a trailing comment or CRLF used
+      # to pass the first check and miss the second, while the generator still
+      # reported success); and the file is compared before success is claimed.
       def inject_layout_setting(path)
         content = path.read
 
-        if content.match?(/^\s*config\.layout\s*=/)
+        if content.match?(LAYOUT_ASSIGNMENT)
           say_status "skip", "config.layout already set in config/initializers/ruact.rb", :yellow
           return
         end
 
-        unless content.match?(/Ruact\.configure\s+do\s*\|(\w+)\|/)
-          warn_initializer_not_injectable
-          return
-        end
+        block = content.match(CONFIGURE_BLOCK)
+        return warn_initializer_not_injectable unless block
 
-        inject_into_file "config/initializers/ruact.rb",
-                         layout_setting_snippet,
-                         after: /Ruact\.configure\s+do\s*\|\w+\|\n/
+        inject_into_file "config/initializers/ruact.rb", layout_setting_snippet(block[1]), after: CONFIGURE_BLOCK
+        return warn_initializer_not_injectable if path.read == content
+
         say_status "update", "set config.layout = \"ruact\" (ruact pages render through ruact's layout)", :green
       end
 
@@ -692,14 +737,14 @@ module Ruact
       # block, so a migrated app and a fresh one end up reading the same thing.
       # A method, not a constant, because the stylesheet list depends on the
       # app's asset pipeline (see #detected_layout_stylesheets).
-      def layout_setting_snippet
+      def layout_setting_snippet(variable = "config")
         <<~RUBY
           # Render ruact pages through the layout ruact ships (layouts/ruact). It links
           # the CSS your client components import, then your stylesheets below, and it
           # edits none of your layouts. To change more of its <head> than the
           # stylesheets, copy it into your app: `rails generate ruact:layout`.
-          config.layout = "ruact"
-          config.layout_stylesheets = #{detected_layout_stylesheets}
+          #{variable}.layout = "ruact"
+          #{variable}.layout_stylesheets = #{detected_layout_stylesheets}
 
         RUBY
       end
@@ -719,6 +764,13 @@ module Ruact
         say "  of your stylesheets — your app's CSS will not reach a ruact-rendered page."
         say ""
       end
+
+      # Any receiver: `config.layout =`, `c.layout =`, `Ruact.config.layout =`.
+      LAYOUT_ASSIGNMENT = /^\s*[\w.]+\.layout\s*=/
+      # The configure block's opening line, whatever its variable is called and
+      # whatever follows it on the line (a comment), CRLF included.
+      CONFIGURE_BLOCK = /Ruact\.configure\s+do\s*\|(\w+)\|[^\n]*\r?\n/
+      private_constant :LAYOUT_ASSIGNMENT, :CONFIGURE_BLOCK
 
       def shadcn?
         options[:shadcn]
