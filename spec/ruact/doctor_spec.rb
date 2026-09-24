@@ -320,6 +320,43 @@ RSpec.describe Ruact::Doctor do
       end
     end
 
+    # Story 17.0b, Mode A — ruact pages render through the layout the GEM ships
+    # (`config.layout = "ruact"`). With no layout of that name in the app there
+    # is no app file to read: the gem's layout calls the helper itself.
+    context "when config.layout is \"ruact\" and the app has no such layout (the gem's renders)" do
+      before do
+        write_manifest({ "file" => "b.js", "css" => ["a.css"] })
+        write_head("<html><head><%= stylesheet_link_tag :app %></head><body></body></html>")
+        Ruact.configure { |c| c.layout = "ruact" }
+      end
+
+      it "passes without reading any app layout", :aggregate_failures do
+        status, message = doctor.send(:check_head_assets)
+
+        expect(status).to eq(:pass)
+        expect(message).to include("ruact's layout")
+      end
+    end
+
+    # An EJECTED layout (`rails g ruact:layout`) wins over the gem's by view-path
+    # order, so it is the file that renders — and the file this check reads.
+    context "when the app has ejected layouts/ruact.html.erb and dropped the helper" do
+      before do
+        write_manifest({ "file" => "b.js", "css" => ["a.css"] })
+        dir = tmpdir.join("app", "views", "layouts")
+        FileUtils.mkdir_p(dir)
+        File.write(dir.join("ruact.html.erb"), "<html><head></head><body></body></html>")
+        Ruact.configure { |c| c.layout = "ruact" }
+      end
+
+      it "FAILS naming the ejected file", :aggregate_failures do
+        status, message = doctor.send(:check_head_assets)
+
+        expect(status).to eq(:fail)
+        expect(message).to include("ruact.html.erb")
+      end
+    end
+
     it "is registered in CHECKS, so a real doctor run reaches it" do
       expect(described_class::CHECKS).to include(:head_assets)
     end
@@ -413,6 +450,52 @@ RSpec.describe Ruact::Doctor do
 
         expect(status).to eq(:fail)
         expect(msg).to eq("React shell missing from application.html.erb")
+      end
+    end
+
+    # Story 17.0b, Mode A. A fresh install writes `config.layout = "ruact"` and
+    # leaves the app's own layout untouched — so that layout has no React root
+    # and no ruact_js_assets, and reading it (as this check used to, always)
+    # failed a correct install.
+    context "when config.layout is \"ruact\" and the app keeps a stock layout", :story_17_0b do
+      before do
+        make_layout(with_sentinel: false)
+        Ruact.configure { |c| c.layout = "ruact" }
+      end
+
+      it "passes, naming the gem's layout as the one that renders", :aggregate_failures do
+        status, message = doctor.send(:check_layout)
+
+        expect(status).to eq(:pass)
+        expect(message).to include("ruact's layout")
+      end
+    end
+
+    context "when an ejected layouts/ruact.html.erb lost the React root", :story_17_0b do
+      before do
+        dir = tmpdir.join("app", "views", "layouts")
+        FileUtils.mkdir_p(dir)
+        File.write(dir.join("ruact.html.erb"), "<html><body><%= ruact_js_assets %></body></html>")
+        Ruact.configure { |c| c.layout = "ruact" }
+      end
+
+      it "fails naming the ejected file, not application.html.erb", :aggregate_failures do
+        status, message = doctor.send(:check_layout)
+
+        expect(status).to eq(:fail)
+        expect(message).to include("ruact.html.erb")
+        expect(message).not_to include("application.html.erb")
+      end
+    end
+
+    context "when config.layout names a layout that exists nowhere", :story_17_0b do
+      before { Ruact.configure { |c| c.layout = "nowhere" } }
+
+      it "fails naming the layout it looked for", :aggregate_failures do
+        status, message = doctor.send(:check_layout)
+
+        expect(status).to eq(:fail)
+        expect(message).to include("nowhere.html.erb")
       end
     end
   end
