@@ -38,6 +38,15 @@ RSpec.describe Ruact::Packaging, :story_5_10 do
       expect(described_class).to be_packaged("vendor/javascript/vite-plugin-ruact/index.js")
     end
 
+    # Story 17.0b — the layout ruact pages render into ships with the gem. It
+    # lives under lib/ because app/ is not packaged: an Engine-style
+    # app/views/layouts/ruact.html.erb would exist in this repository and be
+    # missing from every installed copy.
+    it "packages the gem's own layout", :story_17_0b do
+      expect(described_class).to be_packaged("lib/ruact/views/layouts/ruact.html.erb")
+      expect(described_class).not_to be_packaged("app/views/layouts/ruact.html.erb")
+    end
+
     it "packages the top-level documents, by shape rather than by roster" do
       expect(described_class).to be_packaged("README.md")
       expect(described_class).to be_packaged("LICENSE.txt")

@@ -16,6 +16,25 @@ module Ruact
       require_relative "routing"
     end
 
+    # Story 17.0b — make the gem's own layout (`layouts/ruact`) findable by name.
+    #
+    # APPEND, not prepend: the gem's views go BEHIND the app's and every
+    # engine's, so an app that ejects the layout (`rails generate ruact:layout`)
+    # wins by view-path order and `layouts/application` always stays the app's.
+    # Shadowing the app's layout was measured and rejected (spike 2026-09-10:
+    # every page loaded React and lost the app's <title>), and the prepend
+    # version failed SILENTLY from this very hook — which is why the order this
+    # produces is asserted by a spec that boots a real app through this Railtie
+    # (spec/ruact/gem_layout_boot_spec.rb), in development and production.
+    #
+    # `respond_to?` mirrors Rails' own `add_view_paths`: the hook also fires for
+    # controller classes that carry no view paths.
+    initializer "ruact.view_paths" do
+      ActiveSupport.on_load(:action_controller) do
+        append_view_path(Ruact.views_path) if respond_to?(:append_view_path)
+      end
+    end
+
     rake_tasks { load File.expand_path("../tasks/ruact.rake", __dir__) }
 
     # Load the client manifest at boot (and on each code reload in development).

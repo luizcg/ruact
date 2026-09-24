@@ -46,6 +46,20 @@ module Ruact
       File.expand_path("../vendor/javascript/vite-plugin-ruact/index.js", __dir__)
     end
 
+    # Story 17.0b — the directory of views the gem ships: today, the
+    # `layouts/ruact` document a ruact page renders into when
+    # `config.layout = "ruact"`. The Railtie APPENDS it to the controller view
+    # paths, so it sits behind the app and every engine — an app's own
+    # `app/views/layouts/ruact.html.erb` wins — and `rails generate ruact:layout`
+    # copies from here when an app wants to own that file.
+    #
+    # Under `lib/` on purpose: `app/` is not packaged (see {Ruact::Packaging}).
+    #
+    # @return [String] absolute path to lib/ruact/views
+    def views_path
+      File.expand_path("ruact/views", __dir__)
+    end
+
     # Story 14.2 (FR104) — the SINGLE source of truth for the bootstrap entry id.
     # ruact's React entry is served as the virtual module `virtual:ruact/bootstrap`
     # (by the bundled Vite plugin) instead of a `app/javascript/application.jsx`

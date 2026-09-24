@@ -25,6 +25,7 @@ module Ruact
       signed_global_id_default_expires_in
       shadcn_compatible_versions
       layout
+      layout_stylesheets
     ].freeze
 
     # @!attribute [r] manifest_path
@@ -177,6 +178,22 @@ module Ruact
     #     Ruact.configure { |c| c.layout = true }
     #   @example Use a dedicated layout for ruact pages only
     #     Ruact.configure { |c| c.layout = "ruact" }
+    #
+    # @!attribute [r] layout_stylesheets
+    #   @return [Array<Symbol, String>] The app stylesheets the gem's layout
+    #     (`layouts/ruact`, used when `layout` is `"ruact"`) links, passed as-is
+    #     to `stylesheet_link_tag`. They come AFTER the client-component CSS
+    #     (`ruact_head_assets`), so the app's own CSS loads last and wins ties.
+    #
+    #     Defaults to `[:app]`, what `rails new` 8.x puts in its layout: under
+    #     Propshaft it expands to every stylesheet on the load path, including a
+    #     Tailwind build. Under Sprockets `:app` means a file called `app.css`,
+    #     which is why `rails generate ruact:install` writes `["application"]`
+    #     there instead. `[]` links none. Anything more than a list of names —
+    #     a media attribute, fonts, other `<head>` tags — is what ejecting the
+    #     layout is for: `rails generate ruact:layout`.
+    #   @example A Sprockets app
+    #     Ruact.configure { |c| c.layout_stylesheets = ["application"] }
     ATTRIBUTES.each do |attr|
       attr_reader attr
 
@@ -231,6 +248,7 @@ module Ruact
         @signed_global_id_default_expires_in = nil
         @shadcn_compatible_versions = [1, 2]
         @layout = false
+        @layout_stylesheets = [:app]
       end
     end
 
@@ -266,6 +284,10 @@ module Ruact
         # reference, but a caller probing `frozen?` would see the right answer.
         if value.is_a?(Proc)
           value.freeze
+        elsif value.is_a?(Array)
+          # Story 17.0b — `layout_stylesheets` holds Strings; freezing only the
+          # Array would leave `Ruact.config.layout_stylesheets.first << "x"` open.
+          instance_variable_set("@#{attr}", value.map { |item| item.frozen? ? item : item.dup.freeze }.freeze)
         else
           instance_variable_set("@#{attr}", value.dup.freeze)
         end
@@ -293,6 +315,7 @@ module Ruact
       when :query_parent_controller then validate_query_parent_controller!(value)
       when :shadcn_compatible_versions then validate_shadcn_compatible_versions!(value)
       when :layout                     then validate_layout!(value)
+      when :layout_stylesheets         then validate_layout_stylesheets!(value)
       end
     end
 
@@ -323,6 +346,22 @@ module Ruact
             "got #{value.inspect} (#{value.class.name}). " \
             "true renders through your app's layout (which must call ruact_js_assets); " \
             "false uses ruact's built-in shell."
+    end
+
+    # Story 17.0b — the arguments `layouts/ruact` passes to `stylesheet_link_tag`.
+    # Checked at boot because the layout splats them straight into a Rails
+    # helper, where a stray nil or Hash would surface as a first-render error
+    # instead of a legible configuration one.
+    def validate_layout_stylesheets!(value)
+      valid = value.is_a?(Array) &&
+              value.all? { |name| name.is_a?(Symbol) || (name.is_a?(String) && !name.empty?) }
+      return if valid
+
+      raise Ruact::ConfigurationError,
+            "Ruact::Configuration#layout_stylesheets must be an Array of stylesheet names " \
+            "(Symbols or non-empty Strings, as you would pass to stylesheet_link_tag), " \
+            "e.g. [:app] or [\"application\"]; got #{value.inspect} (#{value.class.name}). " \
+            "Use [] to link none of your app's stylesheets."
     end
 
     def validate_max_upload_bytes!(value)

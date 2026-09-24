@@ -138,6 +138,193 @@ RSpec.describe Ruact::Doctor do
 
   # --- check_layout ---
 
+  # Story 17.0b (issue #63) — client-component CSS that nothing links.
+  #
+  # The failure being guarded is silent and production-only: Vite records the
+  # stylesheets on the manifest entry, the build serves them, and nothing
+  # references them. Development hides it, because the dev server injects that
+  # CSS through JS.
+  #
+  # The decision here is MECHANICAL — read the manifest, read the layout. Layout
+  # auto-detection was removed deliberately after three rounds of pattern-matching
+  # failures, so `LayoutSource.head_wired?` (which strips comments) is the only
+  # thing allowed to answer "is it wired?".
+  describe "#check_head_assets (Story 17.0b)", :story_17_0b do
+    subject(:doctor) { described_class.new }
+
+    def write_manifest(entry)
+      dir = tmpdir.join("public", "assets", ".vite")
+      FileUtils.mkdir_p(dir)
+      File.write(dir.join("manifest.json"), JSON.generate({ Ruact.bootstrap_virtual_id => entry }))
+    end
+
+    def write_head(body)
+      dir = tmpdir.join("app", "views", "layouts")
+      FileUtils.mkdir_p(dir)
+      File.write(dir.join("application.html.erb"), body)
+    end
+
+    before { Ruact.configure { |c| c.layout = true } }
+
+    context "when the build emits CSS and the layout does not link it" do
+      before do
+        write_manifest({ "file" => "bootstrap-abc.js", "css" => ["bootstrap-def.css"] })
+        write_head("<html><head><%= stylesheet_link_tag :app %></head><body></body></html>")
+      end
+
+      it "FAILS, and names the file and the line to paste", :aggregate_failures do
+        status, message, remediation = doctor.send(:check_head_assets)
+
+        expect(status).to eq(:fail)
+        expect(message).to include("1 client-component stylesheet")
+        # `Doctor#run` prints MESSAGE only — remediation reaches `-- --json`
+        # alone. A reader in the terminal has to get the file from the message.
+        expect(message).to include("application.html.erb")
+        expect(message).to include("ruact_head_assets")
+        expect(remediation).to include("ruact_head_assets")
+        expect(remediation).to include("app/views/layouts/application.html.erb")
+        # The cascade instruction is load-bearing: linking it below the app's own
+        # stylesheet would put third-party CSS after the app's, so it wins ties.
+        expect(remediation).to include("ABOVE your stylesheet_link_tag")
+      end
+
+      it "is a failure status, not a warning" do
+        expect(described_class::SUCCESS_STATUSES).not_to include(:fail)
+      end
+    end
+
+    context "when the layout links it" do
+      before do
+        write_manifest({ "file" => "bootstrap-abc.js", "css" => ["bootstrap-def.css"] })
+        write_head("<html><head><%= ruact_head_assets %><%= stylesheet_link_tag :app %></head><body></body></html>")
+      end
+
+      it "returns :pass" do
+        expect(doctor.send(:check_head_assets).first).to eq(:pass)
+      end
+    end
+
+    context "when the helper is only MENTIONED IN A COMMENT" do
+      before do
+        write_manifest({ "file" => "bootstrap-abc.js", "css" => ["bootstrap-def.css"] })
+        write_head("<html><head><%# ruact_head_assets %></head><body></body></html>")
+      end
+
+      it "still FAILS — a mention is not a call" do
+        # This is the shape that fooled layout auto-detection three times.
+        expect(doctor.send(:check_head_assets).first).to eq(:fail)
+      end
+    end
+
+    # Under `layout = false` the built-in shell links this CSS itself, so there is
+    # no layout to check and nothing to report. Losing that early return made the
+    # doctor fail an app that was already correct.
+    context "when config.layout is false" do
+      before do
+        write_manifest({ "file" => "b.js", "css" => ["a.css"] })
+        write_head("<html><head></head><body></body></html>")
+        Ruact.configure { |c| c.layout = false }
+      end
+
+      it "passes — the built-in shell links it, and no layout is consulted" do
+        status, message = doctor.send(:check_head_assets)
+
+        expect(status).to eq(:pass)
+        expect(message).to include("shell")
+      end
+    end
+
+    context "when the build emits no CSS" do
+      before do
+        write_manifest({ "file" => "bootstrap-abc.js" })
+        write_head("<html><head></head><body></body></html>")
+      end
+
+      it "returns :pass — there is nothing to link" do
+        expect(doctor.send(:check_head_assets).first).to eq(:pass)
+      end
+    end
+
+    context "when there is no build at all" do
+      it "returns :pass rather than failing on a missing manifest" do
+        expect(doctor.send(:check_head_assets).first).to eq(:pass)
+      end
+    end
+
+    # Review round 1: the check read application.html.erb regardless of what
+    # `config.layout` names, so an app rendering through `admin` passed on a
+    # layout it never uses.
+    context "when config.layout names ANOTHER layout" do
+      before do
+        write_manifest({ "file" => "b.js", "css" => ["a.css"] })
+        write_head("<html><head><%= ruact_head_assets %></head><body></body></html>")
+        dir = tmpdir.join("app", "views", "layouts")
+        File.write(dir.join("admin.html.erb"), "<html><head></head><body></body></html>")
+        Ruact.configure { |c| c.layout = "admin" }
+      end
+
+      it "FAILS on the layout that actually renders, not on application", :aggregate_failures do
+        status, _message, remediation = doctor.send(:check_head_assets)
+
+        expect(status).to eq(:fail)
+        expect(remediation).to include("admin.html.erb")
+      end
+    end
+
+    # Rails accepts both `admin` and `layouts/admin`. Doubling the prefix looked
+    # for app/views/layouts/layouts/admin.html.erb and declared it missing.
+    context "when config.layout carries the conventional layouts/ prefix" do
+      before do
+        write_manifest({ "file" => "b.js", "css" => ["a.css"] })
+        dir = tmpdir.join("app", "views", "layouts")
+        FileUtils.mkdir_p(dir)
+        File.write(dir.join("admin.html.erb"), "<html><head><%= ruact_head_assets %></head><body></body></html>")
+        Ruact.configure { |c| c.layout = "layouts/admin" }
+      end
+
+      it "resolves to the same file as the bare name" do
+        expect(doctor.send(:check_head_assets).first).to eq(:pass)
+      end
+    end
+
+    context "when config.layout names a layout that does not exist" do
+      before do
+        write_manifest({ "file" => "b.js", "css" => ["a.css"] })
+        Ruact.configure { |c| c.layout = "missing" }
+      end
+
+      it "FAILS naming the missing file rather than claiming the shell covers it" do
+        status, message = doctor.send(:check_head_assets)
+
+        expect(status).to eq(:fail)
+        expect(message).to include("missing.html.erb")
+      end
+    end
+
+    # An unreadable manifest is not "nothing to link" — the same file is parsed
+    # at render time, where a parse error raises. A green doctor on an app that
+    # 500s is worse than no check.
+    context "when the manifest is corrupt" do
+      before do
+        dir = tmpdir.join("public", "assets", ".vite")
+        FileUtils.mkdir_p(dir)
+        File.write(dir.join("manifest.json"), "{")
+        write_head("<html><head></head><body></body></html>")
+      end
+
+      it "FAILS naming the file, instead of passing as if there were no CSS", :aggregate_failures do
+        status, message = doctor.send(:check_head_assets)
+
+        expect(status).to eq(:fail)
+        expect(message).to include("not valid JSON")
+      end
+    end
+
+    it "is registered in CHECKS, so a real doctor run reaches it" do
+      expect(described_class::CHECKS).to include(:head_assets)
+    end
+  end
+
   describe "#check_layout (AC#1, #5)" do
     subject(:doctor) { described_class.new }
 

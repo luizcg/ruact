@@ -17,6 +17,8 @@ require "action_view/railtie"
 require "spec_helper"
 
 require "rack/test"
+require "stringio"
+require "logger"
 require "tmpdir"
 require "fileutils"
 require "pathname"
@@ -369,6 +371,33 @@ module Ruact # rubocop:disable Style/OneClassPerFile
                                           "expected the layout NOT to be rendered; got " \
                                           "#{last_response.status} body=#{last_response.body[0, 300]}")
           expect(last_response.body).to include("Rails RSC")
+        end
+      end
+
+      # Story 17.0b — `"ruact"` names the layout the GEM ships; its view path is
+      # appended by the Railtie. This app boots WITHOUT the Railtie (the concern
+      # is required by hand at the top of this file), so here the path never
+      # arrives — the one way "ruact's own layout is missing" happens. It has to
+      # degrade and say so in terms of the Railtie, not tell the developer to
+      # edit a layout they never wrote. The resolving path is proven by
+      # spec/ruact/gem_layout_boot_spec.rb, which boots through the Railtie.
+      context "when config.layout is \"ruact\" but the gem's view path never reached the controller",
+              :story_17_0b do
+        before { configure_layout("ruact") }
+
+        it "degrades to the shell and names the Railtie as the thing to check", :aggregate_failures do
+          log = StringIO.new
+          original = ActionController::Base.logger
+          ActionController::Base.logger = Logger.new(log)
+          begin
+            get "/layout-demo/show"
+          ensure
+            ActionController::Base.logger = original
+          end
+
+          expect(last_response.status).to eq(200)
+          expect(last_response.body).to include("Rails RSC")
+          expect(log.string).to include("layouts/ruact").and include("Railtie")
         end
       end
 
