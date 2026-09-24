@@ -129,6 +129,27 @@ RSpec.describe "the gem's layout in a booted app (Story 17.0b)", :story_17_0b do
     expect(shipped).to eq(["layouts/ruact.html.erb"])
   end
 
+  # Review round 1 — the view-path ORDER alone does not prove an ejected layout
+  # wins (the order spec below stays green even with prepend). This does: an app
+  # file with the gem layout's name, and the page rendered through it.
+  context "when the app has its own layouts/ruact.html.erb (ejected)" do
+    before do
+      write("app/views/layouts/ruact.html.erb", <<~ERB)
+        <!DOCTYPE html>
+        <html><head><title>EJECTED</title><%= ruact_head_assets %></head>
+        <body><div id="root"></div><%= ruact_js_assets %></body></html>
+      ERB
+    end
+
+    it "renders through the app's copy, with no setting changed", :aggregate_failures do
+      result = boot("development")
+
+      expect(result["ruact_layout"]).to end_with("app/views/layouts/ruact.html.erb")
+      expect(result["ruact_layout"]).not_to start_with(Ruact.views_path)
+      expect(result["html"]).to include("<title>EJECTED</title>")
+    end
+  end
+
   %w[development production].each do |env|
     context "when booted in #{env}" do
       subject(:result) { boot(env) }

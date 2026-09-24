@@ -94,7 +94,7 @@ module Ruact
       # success. An unexpected status (rendered `✗`) fails loudly rather than
       # being silently treated as a pass (review finding R1).
       passed = passed?(computed)
-      puts "Run rails generate ruact:install to fix configuration issues" unless passed
+      puts "Run rails ruact:doctor -- --json for how to fix each failure" unless passed
       passed
     end
 
@@ -227,9 +227,8 @@ module Ruact
         kind == :gem
       return layout_missing_result(path) unless File.exist?(path)
 
-      content = File.read(path)
-      wired = Ruact::LayoutSource.root?(content) && Ruact::LayoutSource.wired?(content)
-      return layout_unwired_result(path) unless wired
+      missing = missing_layout_pieces(File.read(path))
+      return layout_unwired_result(path, missing) unless missing.empty?
       return layout_not_opted_in_result if kind == :shell
 
       [:pass, "#{path.basename} owns the document (React root + ruact_js_assets, config.layout on)"]
@@ -263,16 +262,34 @@ module Ruact
       entry = doctor_manifest_entry
       return head_assets_unreadable_result if entry == :unreadable
 
+      kind, path = rendering_layout
+      return head_assets_unbuilt_result(path) if entry.nil? && kind == :app && !head_wired_file?(path)
+
       css = Array(entry && entry["css"])
       return [:pass, "no client-component CSS in the build (nothing to link)"] if css.empty?
 
-      kind, path = rendering_layout
       return [:pass, "client-component CSS present; the built-in shell links it"] if kind == :shell
       return [:pass, "client-component CSS is linked by ruact's layout"] if kind == :gem
       return head_assets_no_layout_result(path) if kind == :missing
-      return head_assets_missing_result(css.length, path) unless Ruact::LayoutSource.head_wired?(File.read(path))
+      return head_assets_missing_result(css.length, path) unless head_wired_file?(path)
 
       [:pass, "client-component CSS is linked (ruact_head_assets in #{path.basename})"]
+    end
+
+    def head_wired_file?(path)
+      Ruact::LayoutSource.head_wired?(File.read(path))
+    end
+
+    # No build yet — the normal state in development with the Vite dev server,
+    # which injects component CSS itself. A layout of the app's own that never
+    # calls the helper passes there and loses that CSS in production, which is
+    # exactly what this check exists to catch: a warning, not a pass.
+    def head_assets_unbuilt_result(path)
+      [:warn,
+       "#{path.basename} does not call ruact_head_assets — client-component CSS will not reach production",
+       "Add <%= ruact_head_assets %> as the first thing inside <head> in #{path}, above your " \
+       "stylesheet_link_tag. There is no production build to check yet, so this is a warning; with " \
+       "a build that emits component CSS it is a failure."]
     end
 
     def head_assets_no_layout_result(path)
@@ -320,12 +337,28 @@ module Ruact
       :unreadable
     end
 
-    def layout_unwired_result(path)
-      [:fail, "#{path.basename} is missing the React root and/or the ruact_js_assets call",
-       "Add <%= ruact_js_assets %> next to <div id=\"root\"></div> in #{path} " \
-       "(rails generate ruact:install prints the missing lines), or set " \
-       "config.layout = \"#{Ruact::GEM_LAYOUT}\" to use the layout ruact ships. Without both, ruact renders " \
-       "its built-in shell and your app's CSS never reaches the page."]
+    # The exact lines the layout lacks, named in the MESSAGE (`Doctor#run` prints
+    # only the message; the remediation reaches `-- --json` alone).
+    def missing_layout_pieces(content)
+      missing = []
+      missing << %(<div id="root"></div>) unless Ruact::LayoutSource.root?(content)
+      missing << "<%= ruact_js_assets %>" unless Ruact::LayoutSource.wired?(content)
+      missing
+    end
+
+    def layout_unwired_result(path, missing)
+      [:fail, "#{path.basename} is missing #{missing.join(' and ')}",
+       "Add #{missing.join(' and ')} to #{path} (the root div in <body>, the helper right after it). " \
+       "#{layout_alternative(path)}Without both, ruact renders its built-in shell and your app's CSS never " \
+       "reaches the page."]
+    end
+
+    # Suggesting `config.layout = "ruact"` to an app whose file IS the ejected
+    # `ruact` layout would be advice to change nothing.
+    def layout_alternative(path)
+      return "" if path.basename.to_s == "#{Ruact::GEM_LAYOUT}.html.erb"
+
+      "Or set config.layout = \"#{Ruact::GEM_LAYOUT}\" to use the layout ruact ships. "
     end
 
     def layout_not_opted_in_result

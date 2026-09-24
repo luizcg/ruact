@@ -3,10 +3,11 @@
 module Ruact
   # Answers one question in ONE place: does this layout actually wire ruact up?
   #
-  # Two callers need that answer and must not disagree about it — the runtime
+  # Three callers need that answer and must not disagree about it — the runtime
   # (`Ruact::Controller::DocumentRendering`, deciding whether it is safe to
-  # render through the host layout) and `ruact:install` (deciding whether the
-  # layout still needs migrating). When they each carried their own notion of
+  # render through the host layout), `ruact:install` (reading an app-owned
+  # layout to print the lines it lacks — it never writes one) and
+  # `ruact:doctor`. When they each carried their own notion of
   # "present", they drifted: the generator skipped a layout as already-migrated
   # on a `<%# TODO: add ruact_js_assets %>` comment, while the runtime read the
   # same layout as unwired. Both were string-matching a NAME where only a CALL
@@ -43,9 +44,6 @@ module Ruact
     # no real root gives React nothing to mount into. Unquoted `id=root` is
     # valid HTML and is accepted.
     ROOT_ATTRIBUTE = /(?<![-\w])id\s*=\s*(?:"root"|'root'|root(?=[\s>]))/
-
-    # The whole element, for a generator that needs something to inject AFTER.
-    ROOT_ELEMENT = %r{<div\s[^>]*#{ROOT_ATTRIBUTE.source}[^>]*>\s*</div>}
 
     class << self
       # Does this ERB source actually CALL `ruact_js_assets`?

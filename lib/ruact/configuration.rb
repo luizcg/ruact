@@ -9,7 +9,7 @@ module Ruact
   # `Ruact::ConfigurationError` with the offending attribute, the caller's
   # file:line, and the suggested fix. Re-calling `Ruact.configure` after boot
   # replaces the configuration atomically and emits a `[ruact]` warning.
-  class Configuration
+  class Configuration # rubocop:disable Metrics/ClassLength -- an attribute list with a validator per attribute; Doctor and InstallGenerator carry the same disable
     # The set of public attributes; new attributes added here automatically
     # inherit the freeze contract via the `define_method` writer below.
     ATTRIBUTES = %i[
@@ -356,7 +356,18 @@ module Ruact
     # Checked at boot because the layout splats them straight into a Rails
     # helper, where a stray nil or Hash would surface as a first-render error
     # instead of a legible configuration one.
+    #
+    # Propshaft reads `:app` / `:all` ONLY as the first item, and then ignores
+    # every other one (`case sources.first when :app then sources = …`): so
+    # `[:app, "theme"]` silently drops "theme", and `["reset", :app]` looks for
+    # a file named app.css and raises. Either is allowed only on its own.
     def validate_layout_stylesheets!(value)
+      if value.is_a?(Array) && value.length > 1 && value.intersect?(%i[app all])
+        raise Ruact::ConfigurationError,
+              "Ruact::Configuration#layout_stylesheets: :app and :all stand alone — Propshaft reads " \
+              "them only as the whole list and drops anything next to them; got #{value.inspect}. " \
+              "Use [:app], or list the stylesheets by name."
+      end
       return if value.is_a?(Array) && value.all? { |name| name.is_a?(Symbol) || (name.is_a?(String) && !name.empty?) }
 
       raise Ruact::ConfigurationError,

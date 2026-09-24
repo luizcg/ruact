@@ -134,15 +134,10 @@ module Ruact
       end
 
       def __ruact_handle_unready_layout(layout, reason)
+        return __ruact_handle_missing_gem_layout if reason == :missing && layout == Ruact::GEM_LAYOUT
+
         detail =
-          if reason == :missing && layout == Ruact::GEM_LAYOUT
-            # Story 17.0b — `layouts/ruact` ships with the gem and the Railtie
-            # appends its view path. Missing means that path never reached this
-            # controller (the Railtie did not run, or the view paths were reset),
-            # not that the app forgot to write a file.
-            "ruact's own layout (`layouts/ruact`, shipped with the gem) could not be found — " \
-              "its view path is added by the Ruact Railtie; check that the app boots through it"
-          elsif reason == :missing
+          if reason == :missing
             "no layout could be resolved for it"
           else
             "the layout it rendered emitted no `ruact_js_assets` output (or no " \
@@ -152,7 +147,7 @@ module Ruact
         message = <<~MSG.strip
           ruact: #{controller_path}##{action_name} fell back to ruact's built-in HTML shell — #{detail}.
             `Ruact.config.layout` is set, so this is a configuration error, not a default:
-            the built-in shell has no stylesheet slot, so your app's CSS does not reach this page.
+            the built-in shell has none of your stylesheets, so your app's CSS does not reach this page.
             Add `<%= ruact_js_assets %>` next to the `<div id="root"></div>` in your layout
             (`rails ruact:doctor` names the layout and the missing line), use the layout ruact ships
             with `config.layout = "ruact"`, or set `config.layout = false` for the built-in shell.
@@ -174,6 +169,23 @@ module Ruact
         raise Ruact::Error, message if __ruact_local_env?
 
         logger&.error(message)
+      end
+
+      # Story 17.0b — `layouts/ruact` ships with the gem and the Railtie appends
+      # its view path. Missing means that path never reached this controller: the
+      # Railtie did not run, or something REPLACED the view paths instead of
+      # adding to them. Not a per-controller choice, so it is logged in
+      # production too — a page served without the app's CSS and no trace of why
+      # is the failure this layout exists to prevent.
+      def __ruact_handle_missing_gem_layout
+        message = <<~MSG.strip
+          ruact: #{controller_path}##{action_name} fell back to ruact's built-in HTML shell — ruact's own
+            layout (`layouts/ruact`, shipped with the gem) could not be found for this controller.
+            Its view path is added by the Ruact Railtie: check that the app boots through it, and that
+            nothing replaces this controller's view paths (`self.view_paths = …`) instead of adding to them.
+            Or copy the layout into your app with `rails generate ruact:layout`.
+        MSG
+        __ruact_local_env? ? logger&.info(message) : logger&.error(message)
       end
 
       def __ruact_local_env?

@@ -32,10 +32,15 @@ module Ruact
         copy_file "layouts/ruact.html.erb", DESTINATION
       end
 
+      # Only on `generate` (not `destroy`), and phrased for what is true: the copy
+      # renders ruact pages while `config.layout` is "ruact" — under `true` or
+      # `false` it is not used at all.
       def explain
+        return unless behavior == :invoke
+
         say ""
-        say "  #{DESTINATION} now renders every ruact page, in place of the one"
-        say "  ruact ships. It will no longer change when you upgrade the gem —"
+        say "  #{DESTINATION} renders ruact pages in place of the one ruact ships,"
+        say "  as long as config.layout is \"ruact\". It will no longer change when you upgrade the gem —"
         say "  compare it with #{File.join(Ruact.views_path, 'layouts/ruact.html.erb')}"
         say "  after an upgrade. Keep `<%= ruact_head_assets %>` in <head>, and"
         say "  `<div id=\"root\"></div>` with `<%= ruact_js_assets %>` in <body>:"
