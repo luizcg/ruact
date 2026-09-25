@@ -35,6 +35,17 @@ module Ruact
       end
     end
 
+    # Story 17.0f (FR117) — answer the ruact router before any action runs when
+    # the route it asked for is not a ruact page. See Ruact::NavigationBoundary.
+    #
+    # `use` appends: the middleware sits after Rack::MethodOverride when the app
+    # has it, so a form's `_method=delete` is already DELETE when the verb is
+    # read, and an app without it (API-shaped) does not fail to boot the way
+    # `insert_after Rack::MethodOverride` would.
+    initializer "ruact.navigation_boundary" do |app|
+      app.config.middleware.use Ruact::NavigationBoundary::Middleware
+    end
+
     rake_tasks { load File.expand_path("../tasks/ruact.rake", __dir__) }
 
     # Load the client manifest at boot (and on each code reload in development).

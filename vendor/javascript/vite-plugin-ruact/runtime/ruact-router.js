@@ -275,6 +275,101 @@ function _buildFormData(form, submitter) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Story 17.0f — the navigation boundary
+// ---------------------------------------------------------------------------
+
+function _isNativeBoundary(response) {
+  return response.headers?.get("ruact-boundary") === "native";
+}
+
+function _isFlight(response) {
+  return (response.headers?.get("content-type") || "").includes("text/x-component");
+}
+
+// A full document load of the final URL (after any redirect the fetch
+// followed). `replace` for back/forward, so no entry is pushed mid-history.
+//
+// `response.url` never carries the #fragment (Fetch strips it), so the one
+// the link asked for is put back.
+function _fullLoad(response, targetUrl, { replace = false } = {}) {
+  const requested = new URL(targetUrl, location.href);
+  const destination = new URL(response.url || requested.href);
+  if (!destination.hash && requested.hash) destination.hash = requested.hash;
+  if (replace) location.replace(destination.href);
+  else location.assign(destination.href);
+}
+
+function _escapedFormMessage(method, targetUrl, response) {
+  const path = new URL(targetUrl, location.href).pathname;
+  const type = response.headers?.get("content-type") || "no content type";
+  return `[ruact] ${method} ${path} answered ${response.status} with ${type}, not a ruact page. ` +
+    "The action already ran, so ruact will not submit the form again. " +
+    'Add data-ruact="false" to this <form> to let the browser submit it, ' +
+    "or have the action answer through ruact.";
+}
+
+// Submits the form as the browser would, WITHOUT dispatching a `submit` event —
+// so neither this router nor Turbo intercepts it again. The browser only sends
+// the clicked button's `name=value` (and honours its `formaction` / `formmethod`
+// / `formtarget`) when that button is the submitter, which `submit()` has no way
+// to express: both are carried over onto the form first.
+//
+// Everything added to the form is taken back right after: `submit()` builds its
+// entry list synchronously, and a page that survives the submit (a download, a
+// 204, a return from the back-forward cache) must not keep the last button's
+// overrides and value for the next one.
+//
+// A form rendered by a React component has no `authenticity_token` field — the
+// router's own fetch sent the token as a header. A native submit cannot, so the
+// token from `<meta name="csrf-token">` goes in as a field, the way rails-ujs
+// does it.
+const _SUBMITTER_OVERRIDES = [
+  ["formaction", "action"], ["formmethod", "method"], ["formtarget", "target"], ["formenctype", "enctype"],
+];
+
+function _nativeSubmit(form, submitter) {
+  const restore = [];
+  const added = [];
+
+  if (submitter) {
+    for (const [override, attribute] of _SUBMITTER_OVERRIDES) {
+      if (!submitter.hasAttribute(override)) continue;
+      restore.push([attribute, form.hasAttribute(attribute) ? form.getAttribute(attribute) : null]);
+      form.setAttribute(attribute, submitter.getAttribute(override));
+    }
+    if (submitter.name) added.push(_hiddenField(submitter.name, submitter.value));
+  }
+
+  const csrfParam = document.querySelector('meta[name="csrf-param"]')?.content;
+  const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+  if (csrfParam && csrfToken && !_hasField(form, csrfParam)) added.push(_hiddenField(csrfParam, csrfToken));
+
+  added.forEach((field) => form.appendChild(field));
+  try {
+    HTMLFormElement.prototype.submit.call(form);
+  } finally {
+    added.forEach((field) => field.remove?.());
+    restore.forEach(([attribute, value]) => {
+      if (value === null) form.removeAttribute?.(attribute);
+      else form.setAttribute(attribute, value);
+    });
+  }
+}
+
+function _hiddenField(name, value) {
+  const field = document.createElement("input");
+  field.type = "hidden";
+  field.name = name;
+  field.value = value;
+  return field;
+}
+
+function _hasField(form, name) {
+  const quoted = name.replace(/["\\]/g, "\\$&");
+  return Boolean(form.elements?.namedItem?.(name) ?? form.querySelector?.(`[name="${quoted}"]`));
+}
+
 async function _submitForm(form, submitter = null) {
   clearPendingChunks();
 
@@ -317,7 +412,18 @@ async function _submitForm(form, submitter = null) {
       headers,
       signal:  controller.signal,
     });
-    await _processFlightResponse(response, { push: true, targetUrl: action });
+    // Story 17.0f — not a ruact page, and the action did NOT run: this native
+    // submit is its one and only run, and its real response (a 422 with the
+    // validation errors included) is what the user sees.
+    if (_isNativeBoundary(response)) {
+      // The boundary answer came at the END of a redirect the fetch followed:
+      // the form's action already ran (a real 3xx, e.g. to another scheme), and
+      // resubmitting would run it twice. Load where it redirected to instead.
+      if (response.redirected) _fullLoad(response, action);
+      else _nativeSubmit(form, submitter);
+      return;
+    }
+    await _processFlightResponse(response, { push: true, targetUrl: action, method: htmlMethod });
   } catch (err) {
     if (err.name === "AbortError") return;
     console.error("[ruact-router] Form submission error:", err);
@@ -330,7 +436,9 @@ async function _submitForm(form, submitter = null) {
 // ---------------------------------------------------------------------------
 
 function handlePopstate() {
-  navigate(location.pathname + location.search + location.hash, { push: false, scroll: false });
+  // Story 17.0f — `replace`: if this entry turns out not to be a ruact page, the
+  // full load must not push a NEW entry into the history being walked.
+  navigate(location.pathname + location.search + location.hash, { push: false, scroll: false, replace: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -346,7 +454,7 @@ function handlePopstate() {
  * REJECTS on a failed Flight fetch — without this, callers cannot
  * branch on success vs. failure of a programmatic refetch.
  */
-async function navigate(url, { push = true, scroll = true, throwOnError = false } = {}) {
+async function navigate(url, { push = true, scroll = true, throwOnError = false, replace = false } = {}) {
   // Clear stale lazy refs from any previous streaming navigation
   clearPendingChunks();
 
@@ -359,11 +467,21 @@ async function navigate(url, { push = true, scroll = true, throwOnError = false 
       headers: { Accept: "text/x-component", "Ruact-Request": "1" },
       signal:  controller.signal,
     });
+    // Story 17.0f — the server said the destination is not a ruact page, and
+    // ran nothing to say so. The browser takes it from here.
+    if (_isNativeBoundary(response)) {
+      // A caller that asked to be told (revalidate) refetches the page it is
+      // ON; "not a ruact page" there is a failure to report, not a reload.
+      if (throwOnError) throw new Error(`[ruact] ${url} is not a ruact page`);
+      _fullLoad(response, url, { replace });
+      return;
+    }
     await _processFlightResponse(response, {
       push,
       targetUrl: url,
       scroll,
       throwOnError,
+      replace,
     });
   } catch (err) {
     if (err.name === "AbortError") {
@@ -380,7 +498,41 @@ async function navigate(url, { push = true, scroll = true, throwOnError = false 
 // Shared Flight response processor (used by navigate + _submitForm)
 // ---------------------------------------------------------------------------
 
-async function _processFlightResponse(response, { push, targetUrl, scroll = true, throwOnError = false }) {
+async function _processFlightResponse(response, {
+  push, targetUrl, scroll = true, throwOnError = false, replace = false, method = "GET",
+}) {
+  // Story 17.0f — a response that is not Flight escaped the server's boundary
+  // classifier. Feeding it to the line parser was the old dead click: every HTML
+  // line parses to null, nothing renders, nothing reports.
+  //
+  // A non-Flight GET — a page, or an error page (404, 500, a 401 from auth) —
+  // is loaded in full so the user SEES it: the default app passes no onError,
+  // and a console line is a dead click by another name. Repeating a GET is
+  // harmless. A caller that asked to be told (`throwOnError`: revalidate)
+  // gets the error instead of a reload.
+  if (!_isFlight(response)) {
+    if (method === "GET" && !throwOnError) {
+      _fullLoad(response, targetUrl, { replace });
+      return;
+    }
+    // A form whose action answered HTML — it ran, so it will not be resubmitted.
+    // Only a 2xx or a 422 is that; a 403 (CSRF) or a 500 is a failure, below.
+    if (method !== "GET" && (response.ok || response.status === 422)) {
+      const err = new Error(_escapedFormMessage(method, targetUrl, response));
+      console.error(err.message);
+      _onError?.(err);
+      if (throwOnError) throw err;
+      return;
+    }
+    if (response.ok) {
+      const err = new Error(`[ruact] ${targetUrl} did not answer with a ruact response`);
+      console.error(err.message);
+      _onError?.(err);
+      if (throwOnError) throw err;
+      return;
+    }
+  }
+
   if (!response.ok) {
     const msg = `[ruact] Request failed: ${response.status} ${response.statusText}`;
     console.error(msg);

@@ -19,6 +19,10 @@ require_relative "ruact/view_helper"
 require_relative "ruact/erb_preprocessor_hook"
 require_relative "ruact/server_functions"
 require_relative "ruact/query"
+# Story 17.0f — loaded here, not only by the Railtie initializer that installs
+# it, so `config.middleware.delete Ruact::NavigationBoundary::Middleware` in
+# config/application.rb can name the constant before initializers run.
+require_relative "ruact/navigation_boundary"
 # Railtie loads ruact/controller when inside a Rails app
 require_relative "ruact/railtie" if defined?(Rails)
 

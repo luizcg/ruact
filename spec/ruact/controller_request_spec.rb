@@ -125,6 +125,8 @@ module ControllerRequestSpecSupport
           get "/exploding-layout-demo/show", to: "controller_request_spec_support/exploding_layout_demo#show"
           get "/rootless-layout-demo/show", to: "controller_request_spec_support/rootless_layout_demo#show"
           get "/ghost-layout-demo/show", to: "controller_request_spec_support/ghost_layout_demo#show"
+          # Story 17.0f — a plain Rails page through the SAME host layout.
+          get "/plain-layout-demo/show", to: "controller_request_spec_support/plain_layout_demo#show"
         end
       end
     end
@@ -209,6 +211,20 @@ module ControllerRequestSpecSupport
 
     def show
       ruact_render
+    end
+  end
+
+  # Story 17.0f — whole-app mode: the app's layout calls ruact_head_assets and
+  # ALSO renders pages ruact never touched. Those must not carry the Turbo meta.
+  class PlainLayoutDemoController < ActionController::Base
+    include Ruact::ViewHelper
+
+    helper Ruact::ViewHelper
+    append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
+    layout "ruact_host"
+
+    def show
+      render html: "<p>plain page</p>".html_safe, layout: "ruact_host"
     end
   end
 
@@ -361,6 +377,13 @@ module Ruact # rubocop:disable Style/OneClassPerFile
           expect(last_response.body).to include("DemoButton")
         end
 
+        # Story 17.0f — the shell is a ruact document too.
+        it "tells Turbo Drive to reload rather than swap the shell in", :story_17_0f do
+          get "/layout-demo/show"
+
+          expect(last_response.body).to include(%(<meta name="turbo-visit-control" content="reload">))
+        end
+
         # This layout raises if it is rendered (it reads an ivar a ruact action
         # never sets) — the shape of a real pre-migration app. Nothing may
         # execute it.
@@ -411,6 +434,22 @@ module Ruact # rubocop:disable Style/OneClassPerFile
                                           "expected 200, got #{last_response.status} " \
                                           "body=#{last_response.body[0, 400]}")
           expect(last_response.body).to include('<link rel="stylesheet" href="/host-app.css" />')
+        end
+
+        # Story 17.0f (AC5) at integration level: the same app layout, one ruact
+        # page and one plain Rails page.
+        it "puts the Turbo meta on the ruact page and not on a plain page through the same layout",
+           :aggregate_failures, :story_17_0f do
+          meta = %(<meta name="turbo-visit-control" content="reload">)
+
+          get "/layout-demo/show"
+          expect(last_response.body).to include(meta)
+
+          get "/plain-layout-demo/show"
+          expect(last_response.status).to eq(200)
+          expect(last_response.body).to include("plain page")
+          expect(last_response.body).not_to include(meta)
+          expect(last_response.body).not_to include("turbo-prefetch")
         end
 
         it "keeps the host layout's own <title> instead of ruact's placeholder" do
