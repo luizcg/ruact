@@ -285,17 +285,23 @@ describe("ruact-router — the navigation boundary (Story 17.0f)", () => {
   });
 
   describe("review round 1 — errors stay errors", () => {
-    // A full load would run the failing action again, and turn a rejected
-    // revalidate() into a success.
-    it("keeps a GET error page (500 HTML) on the error path, with no full load", async () => {
-      fetch.mockResolvedValue(respond({ status: 500, contentType: "text/html", body: "<h1>oops</h1>" }));
+    // Review round 2 — the default app passes no onError: an error page kept
+    // on the error path is a console line and a dead click. Load it, so the
+    // user sees it; repeating a GET is harmless.
+    it("loads a GET error page (500 HTML) in full so the user sees it", async () => {
+      fetch.mockResolvedValue(respond({ status: 500, contentType: "text/html", body: "<h1>oops</h1>", url: `${ORIGIN}/products/9` }));
 
       click(dom.listeners, "/products/9");
       await settle();
 
+      expect(location.assign).toHaveBeenCalledWith(`${ORIGIN}/products/9`);
+    });
+
+    it("rejects revalidate() when the server says the page is not ruact's", async () => {
+      fetch.mockResolvedValue(respond({ contentType: "text/plain", boundary: "native" }));
+
+      await expect(globalThis.__ruact_revalidate()).rejects.toThrow("is not a ruact page");
       expect(location.assign).not.toHaveBeenCalled();
-      expect(onError).toHaveBeenCalledTimes(1);
-      expect(onError.mock.calls[0][0].message).toContain("500");
     });
 
     it("rejects revalidate() on a non-Flight answer instead of reloading", async () => {

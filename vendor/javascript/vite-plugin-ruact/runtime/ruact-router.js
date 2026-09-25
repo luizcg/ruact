@@ -470,6 +470,9 @@ async function navigate(url, { push = true, scroll = true, throwOnError = false,
     // Story 17.0f — the server said the destination is not a ruact page, and
     // ran nothing to say so. The browser takes it from here.
     if (_isNativeBoundary(response)) {
+      // A caller that asked to be told (revalidate) refetches the page it is
+      // ON; "not a ruact page" there is a failure to report, not a reload.
+      if (throwOnError) throw new Error(`[ruact] ${url} is not a ruact page`);
       _fullLoad(response, url, { replace });
       return;
     }
@@ -502,12 +505,13 @@ async function _processFlightResponse(response, {
   // classifier. Feeding it to the line parser was the old dead click: every HTML
   // line parses to null, nothing renders, nothing reports.
   //
-  // Only a SUCCESSFUL non-Flight GET is a page to load in full. An error page
-  // (a 500 or 404 HTML) keeps the error path below — a full load would run the
-  // failing action again and turn `await revalidate()` into a success — and so
-  // does any non-Flight answer to a caller that asked to be told (`throwOnError`).
+  // A non-Flight GET — a page, or an error page (404, 500, a 401 from auth) —
+  // is loaded in full so the user SEES it: the default app passes no onError,
+  // and a console line is a dead click by another name. Repeating a GET is
+  // harmless. A caller that asked to be told (`throwOnError`: revalidate)
+  // gets the error instead of a reload.
   if (!_isFlight(response)) {
-    if (method === "GET" && response.ok && !throwOnError) {
+    if (method === "GET" && !throwOnError) {
       _fullLoad(response, targetUrl, { replace });
       return;
     }

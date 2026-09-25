@@ -87,7 +87,7 @@ module Ruact
       # @return [Symbol] `:ruact`, `:native`, or `:pass` (could not tell)
       def classify(env)
         request = ActionDispatch::Request.new(env.dup)
-        verdict_in(@router || application_router, request)
+        verdict_in(@router || application_router, request) || :pass
       rescue StandardError => e
         Rails.logger&.debug do
           "[ruact] navigation boundary could not classify #{env['PATH_INFO']}: #{e.class}: #{e.message}"
@@ -107,8 +107,11 @@ module Ruact
         app.routes.router
       end
 
+      # @return [Symbol, nil] nil when nothing in THIS router answers — the
+      #   caller keeps scanning, the way Rails cascades past an engine (or a Rack
+      #   app at "/") whose own routes do not match
       def verdict_in(router, request, in_engine: false)
-        mounted_app = false
+        root_app = false
         router.recognize(request) do |route, params|
           app = route.app
           if app.is_a?(ActionDispatch::Routing::Mapper::Constraints)
@@ -118,18 +121,22 @@ module Ruact
             app = app.app
           end
 
-          # A mounted Rack app may answer — or pass (`X-Cascade: pass`, what
-          # Grape and Sinatra do at "/"), and Rails moves on. Keep looking: a
-          # later route is what Rails would reach. Only when nothing later
-          # matches does the Rack app own the request.
           if mounted_rack_app?(route, app)
-            mounted_app = true
-            next
+            # A Rack app mounted at "/" (Grape, Sinatra) passes on what it does
+            # not know with `X-Cascade: pass`, and Rails moves on: keep looking.
+            # Mounted anywhere else, it owns its prefix — Sidekiq at /sidekiq is
+            # not reclassified by a catch-all route drawn after it.
+            if route.path.spec.to_s == "/"
+              root_app = true
+              next
+            end
+            return :native
           end
 
-          return verdict_for(route, app, request, params, in_engine: in_engine)
+          verdict = verdict_for(route, app, request, params, in_engine: in_engine)
+          return verdict if verdict # an engine with no matching route cascades: keep looking
         end
-        mounted_app ? :native : :pass # no route: the 404 goes the normal way
+        root_app ? :native : nil
       end
 
       def mounted_rack_app?(route, app)
@@ -142,7 +149,9 @@ module Ruact
 
       def verdict_for(route, app, request, params, in_engine:)
         return action_verdict(request, params[:controller], params[:action], in_engine) if route.dispatcher?
-        return redirect_verdict(app, request, params) if app.is_a?(ActionDispatch::Routing::Redirect)
+        # A route that redirects answers the router itself; there is no "no
+        # match" for it, so an unclassifiable one passes rather than cascading.
+        return redirect_verdict(app, request, params) || :pass if app.is_a?(ActionDispatch::Routing::Redirect)
 
         # Inside `recognize`'s block the request's path_info is already relative
         # to the mount point, which is what the engine's own router expects.
@@ -152,7 +161,20 @@ module Ruact
       # Same origin: the fetch follows the redirect and the target is
       # classified when it arrives. Another origin: the fetch cannot follow it
       # (CORS), so the browser has to — native.
+      #
+      # A 307/308 on a form re-sends the POST to the target; if that target is
+      # not ruact, the router could only answer with a GET there and the POST
+      # would never run. The browser's own submit follows it correctly: native.
+      #
+      # A `redirect { |params, req| … }` BLOCK is application code — it may
+      # query the database — and is never run here: it passes through.
+      EVALUATED_REDIRECTS = %w[ActionDispatch::Routing::PathRedirect ActionDispatch::Routing::OptionRedirect].freeze
+      private_constant :EVALUATED_REDIRECTS
+
       def redirect_verdict(redirect, request, params)
+        return :native if [307, 308].include?(redirect.status) && !(request.get? || request.head?)
+        return :pass unless EVALUATED_REDIRECTS.include?(redirect.class.name)
+
         target = URI.parse(redirect.path(params, request).to_s)
         same_origin = target.host == request.host && (target.port || request.port) == request.port
         return :pass if target.host.nil? || same_origin
@@ -178,13 +200,24 @@ module Ruact
       # is signed out and the router has nothing to render. An engine's actions
       # speak the engine's protocol, not ruact's. Its GET pages still count when
       # the APP provides the template (the way apps override engine views).
+      #
+      # The same holds for a controller a GEM defines even when its routes are
+      # drawn into the app's own table — `devise_for` mounts no engine, and
+      # `Devise::SessionsController#destroy` is the sign-out the rule exists
+      # for. So a non-GET is ruact only when the controller is the app's own:
+      # defined under `Rails.root/app`.
       def action_verdict(request, controller, action, in_engine)
         klass = "#{controller.to_s.camelize}Controller".safe_constantize
         return :pass unless klass.is_a?(Class)
         return :native unless klass.include?(Ruact::Controller)
-        return (in_engine ? :native : :ruact) unless request.get? || request.head?
+        return (!in_engine && app_owned?(klass) ? :ruact : :native) unless request.get? || request.head?
 
         klass.ruact_page?(action) ? :ruact : :native
+      end
+
+      def app_owned?(klass)
+        file = Object.const_source_location(klass.name)&.first
+        !file.nil? && File.expand_path(file).start_with?("#{Rails.root.join('app')}/")
       end
     end
   end

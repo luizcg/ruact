@@ -38,6 +38,15 @@ GEM_BOUNDARY_BOOT_SCRIPT = <<~RUBY
     end
   end
 
+  # An engine mounted at "/" (the Solidus/Spree install shape) whose routes
+  # match none of the app's paths: Rails cascades past it, and so must the
+  # classifier.
+  module Shop
+    class Engine < ::Rails::Engine
+      isolate_namespace Shop
+    end
+  end
+
   class BoundaryApp < Rails::Application
     config.root = BOOT_ROOT
     config.eager_load = false
@@ -62,6 +71,17 @@ GEM_BOUNDARY_BOOT_SCRIPT = <<~RUBY
 
   # Drawn AFTER boot: initialize! loads config/routes.rb (there is none here)
   # and would clear anything drawn before it.
+  # Review round 2 — a controller a GEM defines (here: this script, outside
+  # Rails.root/app) whose routes the app draws itself, the way `devise_for`
+  # does. It inherits the app's ruact controller; its sign-out answers a bare
+  # 204. Defined after boot so ApplicationController autoloads first.
+  class VendoredSessionsController < ApplicationController
+    before_action { RUNS["vendored_sessions#\#{action_name}"] += 1 }
+    def destroy = head(:no_content)
+  end
+
+  Shop::Engine.routes.draw { get "shop_home", to: proc { [200, {}, ["shop"]] } }
+
   AdminPanel::Engine.routes.draw do
     get "reports", to: "dashboard#reports"
     get "session/new", to: "sessions#new"
@@ -100,7 +120,12 @@ GEM_BOUNDARY_BOOT_SCRIPT = <<~RUBY
     "ruact page inside an engine" => [:get, "/admin/pages/1", ROUTER],
     "DELETE to an engine controller inheriting the app's" => [:post, "/admin/pages/1", ROUTER, { "_method" => "delete" }],
     "redirect route to another origin" => [:get, "/elsewhere", ROUTER],
-    "controller named ...ControllersController" => [:get, "/remote_controllers", ROUTER]
+    "controller named ...ControllersController" => [:get, "/remote_controllers", ROUTER],
+    "DELETE to a gem's controller drawn into the app's routes" =>
+      [:post, "/sign_out", ROUTER, { "_method" => "delete" }],
+    "POST to a 307 redirect route" => [:post, "/old_form", ROUTER],
+    "block redirect route" => [:get, "/blocky", ROUTER],
+    "rack app under its own prefix, with a catch-all after it" => [:get, "/sidekiq", ROUTER]
   }
   requests = requests.slice(*ENV["BOUNDARY_ONLY"].split("|")) if ENV["BOUNDARY_ONLY"]
 
@@ -189,7 +214,10 @@ RSpec.describe "the navigation boundary in a booted app (Story 17.0f)", :story_1
         # A Rack app at "/" that passes on what it does not know (Grape and
         # Sinatra do this): Rails moves on to the routes below, and so must the
         # classifier.
-        mount ->(_env) { [404, { "x-cascade" => "pass" }, []] }, at: "/" if ENV["BOUNDARY_ROOT_MOUNT"]
+        if ENV["BOUNDARY_ROOT_MOUNT"]
+          mount Shop::Engine, at: "/"
+          mount ->(_env) { [404, { "x-cascade" => "pass" }, []] }, at: "/"
+        end
         resources :people, only: %i[show create destroy]
         resources :products, only: %i[show create destroy]
         get "item/:id", to: "people#show", constraints: ->(req) { req.path_parameters[:id].to_i.odd? }
@@ -199,6 +227,13 @@ RSpec.describe "the navigation boundary in a booted app (Story 17.0f)", :story_1
         get "remote_controllers", to: "remote_controllers#index"
         mount AdminPanel::Engine, at: "/admin"
         mount ->(_env) { RUNS["rack"] += 1; [200, { "content-type" => "text/html" }, ["rack"]] }, at: "/rack"
+        delete "sign_out", to: "vendored_sessions#destroy"
+        post "old_form", to: redirect("/people", status: 307)
+        get "blocky", to: redirect { |_params, _req| RUNS["redirect-block"] += 1; "/people/1" }
+        mount ->(_env) { RUNS["sidekiq"] += 1; [200, { "content-type" => "text/html" }, ["sq"]] }, at: "/sidekiq"
+        # A catch-all, drawn last as apps do: it must not reclassify what a
+        # mounted app under its own prefix answers.
+        match "*path", to: "products#show", via: %i[get post] if ENV["BOUNDARY_ROOT_MOUNT"]
       end
     RUBY
     write(root, "public/react-client-manifest.json", "{}")
@@ -246,6 +281,11 @@ RSpec.describe "the navigation boundary in a booted app (Story 17.0f)", :story_1
   it_behaves_like "answered native without running the action", "_method=delete to rails controller"
   it_behaves_like "answered native without running the action", "DELETE to an engine controller inheriting the app's"
   it_behaves_like "answered native without running the action", "redirect route to another origin"
+  it_behaves_like "answered native without running the action",
+                  "DELETE to a gem's controller drawn into the app's routes"
+  it_behaves_like "answered native without running the action", "POST to a 307 redirect route"
+  it_behaves_like "answered native without running the action",
+                  "rack app under its own prefix, with a catch-all after it"
 
   it_behaves_like "passed through to the app", "ruact page (GET)"
   it_behaves_like "passed through to the app", "constraint, even -> ruact"
@@ -267,17 +307,33 @@ RSpec.describe "the navigation boundary in a booted app (Story 17.0f)", :story_1
     expect(outcome("ruact page inside an engine")["runs"]).to eq(1)
   end
 
+  # Review round 2 — a redirect BLOCK is application code; classifying must not
+  # run it. It runs once: when Rails serves the redirect.
+  it "passes a block redirect through without running the block", :aggregate_failures do
+    expect(outcome("block redirect route")["boundary"]).to be_nil
+    expect(outcome("block redirect route")["runs"]).to eq(1)
+  end
+
   it "never touches a request the ruact router did not send", :aggregate_failures do
     expect(outcome("rails page, browser navigation")).to include("boundary" => nil, "runs" => 1)
     expect(outcome("rails page, server-function JSON")).to include("boundary" => nil, "runs" => 1)
   end
 
   context "when a Rack app mounted at / passes on what it does not know" do
-    it "keeps classifying the routes below it", :aggregate_failures do
-      results = self.class.boot("BOUNDARY_ROOT_MOUNT" => "1", "BOUNDARY_ONLY" => "ruact page (GET)|rails page (GET)")
+    it "keeps classifying the routes below it — past an engine at / too", :aggregate_failures do
+      results = self.class.boot(
+        "BOUNDARY_ROOT_MOUNT" => "1",
+        "BOUNDARY_ONLY" => "ruact page (GET)|rails page (GET)|POST to rails controller|" \
+                           "rack app under its own prefix, with a catch-all after it"
+      )
 
       expect(results["ruact page (GET)"]).to include("boundary" => nil, "runs" => 1)
       expect(results["rails page (GET)"]).to include("boundary" => "native", "runs" => 0)
+      expect(results["POST to rails controller"]).to include("boundary" => "native", "runs" => 0)
+      # Sidekiq-like: mounted under its own prefix, a catch-all drawn after it
+      # does not make it a ruact page.
+      expect(results["rack app under its own prefix, with a catch-all after it"])
+        .to include("boundary" => "native", "runs" => 0)
     end
   end
 
