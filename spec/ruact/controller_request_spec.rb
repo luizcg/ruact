@@ -449,6 +449,7 @@ module Ruact # rubocop:disable Style/OneClassPerFile
           expect(last_response.status).to eq(200)
           expect(last_response.body).to include("plain page")
           expect(last_response.body).not_to include(meta)
+          expect(last_response.body).not_to include("turbo-prefetch")
         end
 
         it "keeps the host layout's own <title> instead of ruact's placeholder" do

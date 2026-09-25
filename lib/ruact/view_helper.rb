@@ -114,7 +114,7 @@ module Ruact
     #   </head>
     def ruact_head_assets
       tags = []
-      tags << TURBO_VISIT_CONTROL if ruact_document?
+      tags.push(TURBO_VISIT_CONTROL, TURBO_PREFETCH) if ruact_document?
       tags.concat(ruact_component_stylesheets) unless Rails.env.development? && vite_dev_running?
       tags.join("\n").html_safe
     end
@@ -127,6 +127,13 @@ module Ruact
     # meta Turbo does a full load instead. It does not depend on Vite, so it is
     # emitted in development too.
     TURBO_VISIT_CONTROL = %(<meta name="turbo-visit-control" content="reload">)
+
+    # Story 17.0f (decided by Luiz, 2026-09-25) — in a document ruact rendered,
+    # the ruact router owns every click, but a layout that also loads Turbo 8
+    # still lets Turbo PREFETCH links on hover: a GET that runs the destination's
+    # action for a click Turbo will never handle (seen in playgrounds/
+    # nav-islands). Off in ruact documents; untouched everywhere else.
+    TURBO_PREFETCH = %(<meta name="turbo-prefetch" content="false">)
 
     private
 

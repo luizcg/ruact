@@ -182,6 +182,7 @@ module Ruact
     # 2026-09-12 spike: S3–S7, dead links and blank pages after one round trip).
     describe "#ruact_head_assets — the Turbo meta", :story_17_0f do
       let(:meta) { %(<meta name="turbo-visit-control" content="reload">) }
+      let(:prefetch) { %(<meta name="turbo-prefetch" content="false">) }
       let(:asset_helper) do
         obj = Object.new
         obj.extend(described_class)
@@ -199,7 +200,18 @@ module Ruact
         allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new("development"))
         allow(asset_helper).to receive(:vite_dev_running?).and_return(true)
 
-        expect(in_ruact_render(asset_helper).ruact_head_assets).to eq(meta)
+        expect(in_ruact_render(asset_helper).ruact_head_assets).to eq("#{meta}\n#{prefetch}")
+      end
+
+      # Turbo 8 prefetches links on hover; in a ruact document the ruact router
+      # owns the click, so a prefetch only runs the destination's action for
+      # nothing.
+      it "turns Turbo's hover prefetch off in a ruact document, and only there", :aggregate_failures do
+        allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new("development"))
+        allow(asset_helper).to receive(:vite_dev_running?).and_return(true)
+
+        expect(asset_helper.ruact_head_assets).not_to include("turbo-prefetch")
+        expect(in_ruact_render(asset_helper).ruact_head_assets).to include(prefetch)
       end
 
       it "comes before the component stylesheets in production", :aggregate_failures do
