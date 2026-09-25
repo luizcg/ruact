@@ -1441,6 +1441,47 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(output).to include("update")
       end
 
+      # Review round 2 — the round-1 pattern swallowed the rest of the line, so a
+      # one-line block got the settings written AFTER its `end`, outside it.
+      it "never writes after a one-line block's end — it asks instead" do
+        body = "Ruact.configure do |config| config.strict_serialization = true end\n"
+        path = write_initializer(body)
+
+        output = run_create
+
+        expect(File.read(path)).to eq(body)
+        expect(output).to include("could not find the Ruact.configure block")
+      end
+
+      it "edits the real block, once, when a commented-out example sits above it" do
+        path = write_initializer("# Ruact.configure do |config|\nRuact.configure do |c|\nend\n")
+
+        run_create
+
+        result = File.read(path)
+        expect(result.scan('.layout = "ruact"').size).to eq(1)
+        expect(result).to include(%(c.layout = "ruact"))
+        expect { RubyVM::InstructionSequence.compile(result) }.not_to raise_error
+      end
+
+      # The one-line form the configuration docs themselves show.
+      it "sees a setting inside a one-line brace block as already set" do
+        path = write_initializer("Ruact.configure { |c| c.layout = true }\n")
+
+        output = run_create
+
+        expect(File.read(path)).to eq("Ruact.configure { |c| c.layout = true }\n")
+        expect(output).to include("already set")
+      end
+
+      it "names the block's own variable when it has to ask" do
+        write_initializer("Ruact.configure { |c| c.strict_serialization = true }\n")
+
+        output = run_create
+
+        expect(output).to include(%(c.layout = "ruact")).and include("c.layout_stylesheets")
+      end
+
       it "edits a CRLF initializer" do
         path = write_initializer("Ruact.configure do |config|\r\nend\r\n")
 
