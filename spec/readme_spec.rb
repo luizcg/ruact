@@ -63,7 +63,7 @@ RSpec.describe "README.md", :story_5_14 do
       # 2. Add the gem
       bundle add ruact
 
-      # 3. Write the config, the layout wiring and an AGENTS.md — then run npm install
+      # 3. Write the config and an AGENTS.md (no layout of yours is edited) — then run npm install
       rails generate ruact:install
 
       # 4. Rails + Vite, one command

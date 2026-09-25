@@ -448,6 +448,54 @@ module Ruact
       end
     end
 
+    # Story 17.0b — what the gem's layout (`layouts/ruact`) passes to
+    # `stylesheet_link_tag`, after the client-component CSS.
+    describe "Story 17.0b — layout_stylesheets attribute", :story_17_0b do
+      it "defaults to [:app], what `rails new` 8.x links" do
+        expect(Ruact.config.layout_stylesheets).to eq([:app])
+      end
+
+      it "accepts Strings, Symbols and an empty list" do
+        Ruact.configure { |c| c.layout_stylesheets = ["application", :print] }
+        expect(Ruact.config.layout_stylesheets).to eq(["application", :print])
+
+        Ruact.configure { |c| c.layout_stylesheets = [] }
+        expect(Ruact.config.layout_stylesheets).to eq([])
+      end
+
+      it "deep-freezes the list AND its Strings, so nothing mutates it after boot", :aggregate_failures do
+        # `+""` — this file's literals are already frozen, which would make the
+        # String half of this assertion pass with no deep freeze at all.
+        Ruact.configure { |c| c.layout_stylesheets = [+"application"] }
+
+        expect { Ruact.config.layout_stylesheets << "x" }.to raise_error(FrozenError)
+        expect { Ruact.config.layout_stylesheets.first << "x" }.to raise_error(FrozenError)
+      end
+
+      it "survives atomic re-configuration" do
+        Ruact.configure { |c| c.layout_stylesheets = ["application"] }
+        Ruact.configure { |c| c.suspense_timeout = 6.0 }
+        expect(Ruact.config.layout_stylesheets).to eq(["application"])
+      end
+
+      describe "writer-time validation" do
+        # Review round 1 — Propshaft reads :app/:all only as the WHOLE list.
+        [[:app, "theme"], ["reset", :app], %i[all app]].each do |mixed|
+          it "rejects #{mixed.inspect}: :app and :all stand alone" do
+            expect { Ruact.configure { |c| c.layout_stylesheets = mixed } }
+              .to raise_error(Ruact::ConfigurationError, /:app and :all stand alone/)
+          end
+        end
+
+        [nil, :app, "application", [nil], [""], [{ media: "print" }]].each do |bad|
+          it "rejects #{bad.inspect} with a message that shows the accepted shape" do
+            expect { Ruact.configure { |c| c.layout_stylesheets = bad } }
+              .to raise_error(Ruact::ConfigurationError, /layout_stylesheets must be an Array of stylesheet names/)
+          end
+        end
+      end
+    end
+
     describe "Story 10.5 — shadcn_compatible_versions attribute", :story_10_5 do
       it "defaults to [1, 2]" do
         expect(Ruact.config.shadcn_compatible_versions).to eq([1, 2])

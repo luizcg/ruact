@@ -9,7 +9,7 @@ module Ruact
   # `Ruact::ConfigurationError` with the offending attribute, the caller's
   # file:line, and the suggested fix. Re-calling `Ruact.configure` after boot
   # replaces the configuration atomically and emits a `[ruact]` warning.
-  class Configuration
+  class Configuration # rubocop:disable Metrics/ClassLength -- an attribute list with a validator per attribute; Doctor and InstallGenerator carry the same disable
     # The set of public attributes; new attributes added here automatically
     # inherit the freeze contract via the `define_method` writer below.
     ATTRIBUTES = %i[
@@ -25,6 +25,7 @@ module Ruact
       signed_global_id_default_expires_in
       shadcn_compatible_versions
       layout
+      layout_stylesheets
     ].freeze
 
     # @!attribute [r] manifest_path
@@ -144,17 +145,21 @@ module Ruact
     #     full-document render a browser gets on a normal navigation.
     #
     #     - `false` (default) — render the gem's built-in minimal shell.
+    #     - `"ruact"` — render through the layout the gem ships
+    #       (`lib/ruact/views/layouts/ruact.html.erb`, Story 17.0b): CSRF, CSP,
+    #       the client-component CSS, then the app stylesheets named in
+    #       {#layout_stylesheets}. What `rails generate ruact:install` writes.
+    #       It edits no layout of the app; an app that puts its own
+    #       `app/views/layouts/ruact.html.erb` in place (`rails generate
+    #       ruact:layout` copies the gem's) wins by view-path order.
     #     - `true` — render through the controller's normal Rails layout.
-    #     - a String — render through that named layout (e.g. `"ruact"`).
+    #     - another String — render through that named layout.
     #
-    #     The layout path exists because the document `<head>` belongs to the
-    #     host app: `stylesheet_link_tag`, favicons, fonts, analytics and any
-    #     `<head>`-writing gem only reach the page when Rails' own layout owns
-    #     the document. The built-in shell carries no stylesheet slot, so under
-    #     the `false` default a ruact page renders with no app CSS at all —
-    #     which is why `rails generate ruact:install` writes `config.layout =
-    #     true` into the generated initializer and adds `<%= ruact_js_assets %>`
-    #     to your layout in the same run.
+    #     The trade-off between the last two and `"ruact"`: the app's own layout
+    #     brings its whole `<head>` (favicons, fonts, analytics, `<head>`-writing
+    #     gems) but has to be wired by hand; the gem's layout needs no wiring but
+    #     brings only the stylesheets. The built-in shell carries neither — under
+    #     the `false` default a ruact page renders with no app CSS at all.
     #
     #     **This setting is deliberately explicit — there is no auto-detection.**
     #     ruact used to try to infer whether your layout was ready by inspecting
@@ -173,10 +178,26 @@ module Ruact
     #   @note A ruact view is rendered in its own pass (it produces the component
     #     tree), so `content_for` declared inside the view does NOT reach the
     #     layout. Set document metadata from the controller instead.
-    #   @example Let your layout own the document (what ruact:install writes)
-    #     Ruact.configure { |c| c.layout = true }
-    #   @example Use a dedicated layout for ruact pages only
+    #   @example Render through the layout ruact ships (what ruact:install writes)
     #     Ruact.configure { |c| c.layout = "ruact" }
+    #   @example Let your own application layout own the document
+    #     Ruact.configure { |c| c.layout = true }
+    #
+    # @!attribute [r] layout_stylesheets
+    #   @return [Array<Symbol, String>] The app stylesheets the gem's layout
+    #     (`layouts/ruact`, used when `layout` is `"ruact"`) links, passed as-is
+    #     to `stylesheet_link_tag`. They come AFTER the client-component CSS
+    #     (`ruact_head_assets`), so the app's own CSS loads last and wins ties.
+    #
+    #     Defaults to `[:app]`, what `rails new` 8.x puts in its layout: under
+    #     Propshaft it expands to every stylesheet on the load path, including a
+    #     Tailwind build. Under Sprockets `:app` means a file called `app.css`,
+    #     which is why `rails generate ruact:install` writes `["application"]`
+    #     there instead. `[]` links none. Anything more than a list of names —
+    #     a media attribute, fonts, other `<head>` tags — is what ejecting the
+    #     layout is for: `rails generate ruact:layout`.
+    #   @example A Sprockets app
+    #     Ruact.configure { |c| c.layout_stylesheets = ["application"] }
     ATTRIBUTES.each do |attr|
       attr_reader attr
 
@@ -231,6 +252,7 @@ module Ruact
         @signed_global_id_default_expires_in = nil
         @shadcn_compatible_versions = [1, 2]
         @layout = false
+        @layout_stylesheets = [:app]
       end
     end
 
@@ -266,6 +288,10 @@ module Ruact
         # reference, but a caller probing `frozen?` would see the right answer.
         if value.is_a?(Proc)
           value.freeze
+        elsif value.is_a?(Array)
+          # Story 17.0b — `layout_stylesheets` holds Strings; freezing only the
+          # Array would leave `Ruact.config.layout_stylesheets.first << "x"` open.
+          instance_variable_set("@#{attr}", value.map { |item| item.frozen? ? item : item.dup.freeze }.freeze)
         else
           instance_variable_set("@#{attr}", value.dup.freeze)
         end
@@ -293,6 +319,7 @@ module Ruact
       when :query_parent_controller then validate_query_parent_controller!(value)
       when :shadcn_compatible_versions then validate_shadcn_compatible_versions!(value)
       when :layout                     then validate_layout!(value)
+      when :layout_stylesheets         then validate_layout_stylesheets!(value)
       end
     end
 
@@ -323,6 +350,31 @@ module Ruact
             "got #{value.inspect} (#{value.class.name}). " \
             "true renders through your app's layout (which must call ruact_js_assets); " \
             "false uses ruact's built-in shell."
+    end
+
+    # Story 17.0b — the arguments `layouts/ruact` passes to `stylesheet_link_tag`.
+    # Checked at boot because the layout splats them straight into a Rails
+    # helper, where a stray nil or Hash would surface as a first-render error
+    # instead of a legible configuration one.
+    #
+    # Propshaft reads `:app` / `:all` ONLY as the first item, and then ignores
+    # every other one (`case sources.first when :app then sources = …`): so
+    # `[:app, "theme"]` silently drops "theme", and `["reset", :app]` looks for
+    # a file named app.css and raises. Either is allowed only on its own.
+    def validate_layout_stylesheets!(value)
+      if value.is_a?(Array) && value.length > 1 && value.intersect?(%i[app all])
+        raise Ruact::ConfigurationError,
+              "Ruact::Configuration#layout_stylesheets: :app and :all stand alone — Propshaft reads " \
+              "them only as the whole list and drops anything next to them; got #{value.inspect}. " \
+              "Use [:app], or list the stylesheets by name."
+      end
+      return if value.is_a?(Array) && value.all? { |name| name.is_a?(Symbol) || (name.is_a?(String) && !name.empty?) }
+
+      raise Ruact::ConfigurationError,
+            "Ruact::Configuration#layout_stylesheets must be an Array of stylesheet names " \
+            "(Symbols or non-empty Strings, as you would pass to stylesheet_link_tag), " \
+            "e.g. [:app] or [\"application\"]; got #{value.inspect} (#{value.class.name}). " \
+            "Use [] to link none of your app's stylesheets."
     end
 
     def validate_max_upload_bytes!(value)

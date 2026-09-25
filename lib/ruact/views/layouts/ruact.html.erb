@@ -1,0 +1,32 @@
+<%# The document a ruact page renders into when `config.layout = "ruact"` (what
+    `rails generate ruact:install` writes). It ships with the gem and is found by
+    name through a view path the Railtie appends, behind the app's — so an
+    `app/views/layouts/ruact.html.erb` wins over it. `rails generate ruact:layout`
+    puts a copy there; once copied, that file is the app's and no longer changes
+    when the gem does.
+
+    What reaches the <head>: CSRF and CSP, the stylesheets Vite built for the
+    client components, then the app's stylesheets named in
+    `config.layout_stylesheets` — in that order, so the app's CSS loads last and
+    wins ties. What does NOT: the app's JavaScript (importmap, Turbo, Stimulus)
+    and anything else its own layout adds. The page that rendered the document
+    owns its navigation; to bring more of the app in, copy this file.
+
+    The <title> is the app's name on every page: a ruact view renders in its own
+    pass, so nothing it sets can reach this layout. A copied layout can title
+    pages however it likes. %>
+<!DOCTYPE html>
+<html>
+  <head>
+    <title><%= (Rails.application.class.module_parent_name || Rails.application.class.name).to_s.titleize %></title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <%= csrf_meta_tags %>
+    <%= csp_meta_tag %>
+    <%= ruact_head_assets %>
+    <%= stylesheet_link_tag(*Ruact.config.layout_stylesheets) if Ruact.config.layout_stylesheets.any? %>
+  </head>
+  <body>
+    <div id="root"></div>
+    <%= ruact_js_assets %>
+  </body>
+</html>

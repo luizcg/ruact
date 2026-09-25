@@ -94,15 +94,4 @@ RSpec.describe Ruact::LayoutSource do
       expect(described_class.root?(%(<div id="rootish"></div>))).to be false
     end
   end
-
-  # The anchor `ruact:install` injects after.
-  describe "::ROOT_ELEMENT" do
-    it "anchors on a whole empty root div" do
-      expect(described_class::ROOT_ELEMENT).to match(%(<div id="root"></div>))
-    end
-
-    it "does not anchor on a look-alike attribute" do
-      expect(described_class::ROOT_ELEMENT).not_to match(%(<div data-id="root"></div>))
-    end
-  end
 end

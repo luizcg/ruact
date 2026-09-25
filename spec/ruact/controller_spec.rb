@@ -2,6 +2,11 @@
 
 require "spec_helper"
 require "active_support/concern"
+# Order independence (project rule, project-context §11): this file exercises
+# helpers that call `html_safe`, and it was relying on some OTHER spec file
+# having loaded the core_ext first. Run alone it failed 12 examples. Required
+# here so the file stands on its own.
+require "active_support/core_ext/string/output_safety"
 # Re-run-5 (2026-05-15) — the `:current_user` inherited-helper clobber
 # test creates a `Class.new(ActionController::Base)`, which requires
 # `action_controller` to be loaded. Pre-Re-run-5 this test was the
@@ -213,9 +218,35 @@ module Ruact
       # ViewHelper#ruact_vite_tags (which needs Rails.env / a live Vite probe).
       # Stub it to "" so we test the shell structure + the __FLIGHT_DATA script
       # (still emitted by ruact_js_assets) in isolation.
-      before { allow(controller).to receive(:ruact_vite_tags).and_return("") }
+      #
+      # Story 17.0b — the shell now also calls `ruact_head_assets`, which reads
+      # the Vite manifest under `Rails.root`. Stubbed for the same reason: in
+      # isolation `Rails.root` is nil here, and these examples only passed in
+      # the full suite because another file had set it first.
+      before do
+        allow(controller).to receive_messages(ruact_vite_tags: "", ruact_head_assets: "")
+      end
 
       let(:payload) { "0:[\"$\",\"div\",null,{}]\n" }
+
+      # Story 17.0b — the built-in shell links the CLIENT-COMPONENT CSS.
+      #
+      # Deliberately asymmetric with the app's CSS, and the asymmetry is the
+      # point: the `<head>` belongs to the host app, so the shell does not
+      # presume the app's stylesheets — that is why `config.layout = false` is
+      # documented as "your app's CSS does not reach this page", and that stays
+      # true. But the component CSS is ruact's own; it belongs to the very
+      # components the shell exists to render. Not linking it was the shell
+      # sabotaging its own job.
+      it "links client-component CSS in <head> (Story 17.0b)", :aggregate_failures, :story_17_0b do
+        allow(controller).to receive(:ruact_head_assets)
+          .and_return(%(<link rel="stylesheet" href="/assets/x.css">))
+
+        html = controller.send(:ruact_html_shell, payload)
+        head = html[%r{<head>.*?</head>}m]
+
+        expect(head).to include(%(<link rel="stylesheet" href="/assets/x.css">))
+      end
 
       it "returns a string containing window.__FLIGHT_DATA" do
         html = controller.send(:ruact_html_shell, payload)
@@ -268,7 +299,7 @@ module Ruact
         # so the outer `before` stub does not reach it. Stub its entry-tag
         # emission too (the real path would hit Rails.root in a non-booted env),
         # keeping these CSRF tests order-independent.
-        before { allow(csrf_controller).to receive(:ruact_vite_tags).and_return("") }
+        before { allow(csrf_controller).to receive_messages(ruact_vite_tags: "", ruact_head_assets: "") }
 
         it "embeds <meta name=\"csrf-token\" content=\"...\"> when the host exposes form_authenticity_token" do
           allow(csrf_controller).to receive(:form_authenticity_token).and_return("test-csrf-token-value")
@@ -315,6 +346,7 @@ module Ruact
 
       it "delegates the JS block to ruact_js_assets (single implementation)" do
         allow(controller).to receive(:ruact_js_assets).with(payload).and_return("<!--RUACT-JS-->".html_safe)
+        allow(controller).to receive(:ruact_head_assets).and_return("") # Story 17.0b — reads Rails.root
         html = controller.send(:ruact_html_shell, payload)
         expect(html).to include("<!--RUACT-JS-->")
         expect(controller).to have_received(:ruact_js_assets).with(payload)

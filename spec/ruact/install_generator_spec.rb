@@ -284,7 +284,7 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         silently do
           expect do
             gen.inject_controller_concern
-            gen.inject_layout_shell
+            gen.advise_app_layout
             gen.create_components_directory
             gen.create_server_functions_directory
             gen.append_gitignore_entries
@@ -295,8 +295,9 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
 
         expect(File.read(File.join(app_root, "app/controllers/application_controller.rb")))
           .to include("include Ruact::Controller")
+        # Story 17.0b — the install edits no layout of the app.
         expect(File.read(File.join(app_root, "app/views/layouts/application.html.erb")))
-          .to include('<div id="root"></div>')
+          .not_to include("ruact")
         expect(File).to exist(File.join(app_root, "app/javascript/components/.keep"))
         expect(File).to exist(File.join(app_root, "app/javascript/.ruact/.gitkeep"))
         expect(File.read(File.join(app_root, ".gitignore")))
@@ -1194,11 +1195,6 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
       end
     end
 
-    # Codex review finding: the layout-migration branch was pinned only by the
-    # REPRODUCTION helper above, which cannot see the real generator's anchor
-    # regex. Invoking the actual generator caught that a layout written with
-    # single quotes matched nothing while the generator still printed a success
-    # message. These specs drive `InstallGenerator#inject_layout_shell` itself.
     # Thor registers every PUBLIC instance method of a generator as a command and
     # runs it in declaration order. A helper left public therefore executes on
     # its own, out of context — this has bitten three times in this branch: a
@@ -1210,7 +1206,7 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(Ruact::Generators::InstallGenerator.commands.keys).to contain_exactly(
           "create_initializer",
           "inject_controller_concern",
-          "inject_layout_shell",
+          "advise_app_layout",
           "create_shadcn_prerequisites",
           "create_components_directory",
           "create_server_functions_directory",
@@ -1247,7 +1243,7 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         path
       end
 
-      it "adds config.layout without touching the app's existing settings" do
+      it "adds config.layout = \"ruact\" without touching the app's existing settings" do
         path = write_initializer(<<~RUBY)
           Ruact.configure do |config|
             config.strict_serialization = true
@@ -1258,7 +1254,8 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         silently { build_generator(app_root).create_initializer }
 
         result = File.read(path)
-        expect(result).to include("config.layout = true")
+        expect(result).to include(%(config.layout = "ruact"))
+        expect(result).to include("config.layout_stylesheets = [:app]")
         expect(result).to include("config.strict_serialization = true")
         expect(result).to include("config.max_upload_bytes = 25 * 1024 * 1024")
       end
@@ -1280,7 +1277,7 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         silently { build_generator(app_root).create_initializer }
         silently { build_generator(app_root).create_initializer }
 
-        expect(File.read(path).scan("config.layout").size).to eq(1)
+        expect(File.read(path).scan(/config\.layout\s*=/).size).to eq(1)
       end
 
       # Never guess at an initializer we do not recognise — say what to add,
@@ -1291,7 +1288,7 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         output = capture_generator_output { build_generator(app_root).create_initializer }
 
         expect(output).to include("could not find the Ruact.configure block")
-        expect(output).to include("config.layout = true")
+        expect(output).to include(%(config.layout = "ruact"))
       end
 
       def capture_generator_output
@@ -1304,220 +1301,276 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
       end
     end
 
-    describe "inject_layout_shell — the REAL generator", :aggregate_failures do
-      def write_layout(body)
-        path = File.join(app_root, "app/views/layouts/application.html.erb")
+    # Story 17.0b — the install READS an app-owned layout and prints what is
+    # missing; it never writes it. (The previous `inject_layout_shell` wrote it,
+    # through an anchor that took three review rounds without a correct version.)
+    describe "advise_app_layout — the REAL generator, read-only", :aggregate_failures, :story_17_0b do
+      def write_app_file(relative, body)
+        path = File.join(app_root, relative)
         FileUtils.mkdir_p(File.dirname(path))
         File.write(path, body)
         path
       end
 
-      def layout_after_run(body)
-        path = write_layout(body)
-        silently { build_generator(app_root).inject_layout_shell }
-        File.read(path)
+      def advise(layout_setting:, layout_file: "application", layout_body: nil)
+        write_app_file("config/initializers/ruact.rb",
+                       "Ruact.configure do |config|\n  config.layout = #{layout_setting}\nend\n")
+        path = layout_body && write_app_file("app/views/layouts/#{layout_file}.html.erb", layout_body)
+        output = capture { build_generator(app_root).advise_app_layout }
+        [output, path]
       end
 
-      # The fresh-install path. Previously covered only by a REPRODUCTION of the
-      # generator's logic, which twice drifted from the generator itself and hid
-      # real defects; the reproduction is gone and these drive the real thing.
-      it "adds both the root div and the asset call to a layout that has neither" do
-        path = write_layout(<<~HTML)
-          <html>
-            <body>
-              <%= yield %>
-            </body>
-          </html>
-        HTML
-
-        silently { build_generator(app_root).inject_layout_shell }
-
-        result = File.read(path)
-        expect(result).to include(%(<div id="root"></div>))
-        expect(result).to include("<%= ruact_js_assets %>")
-        expect(result).to include("ruact: root")
-      end
-
-      it "places them inside the body, before the closing tag" do
-        path = write_layout("<html>\n  <body>\n    <%= yield %>\n  </body>\n</html>\n")
-
-        silently { build_generator(app_root).inject_layout_shell }
-
-        result = File.read(path)
-        expect(result.index(%(<div id="root">))).to be < result.index("</body>")
-        expect(result.index(%(<div id="root">))).to be < result.index("ruact_js_assets")
-      end
-
-      it "is a no-op on a layout that is already migrated" do
-        path = write_layout(<<~HTML)
-          <html>
-            <body>
-              <%# ruact: root %>
-              <div id="root"></div>
-              <%= ruact_js_assets %>
-            </body>
-          </html>
-        HTML
-        before = File.read(path)
-
-        silently { build_generator(app_root).inject_layout_shell }
-
-        expect(File.read(path)).to eq(before)
-      end
-
-      it "migrates a layout whose root div uses single quotes" do
-        result = layout_after_run(<<~HTML)
-          <html>
-            <body>
-              <%# ruact: root %>
-              <div id='root'></div>
-            </body>
-          </html>
-        HTML
-
-        expect(result).to include("<%= ruact_js_assets %>")
-      end
-
-      it "migrates a layout whose root div carries extra attributes" do
-        result = layout_after_run(<<~HTML)
-          <html>
-            <body>
-              <%# ruact: root %>
-              <div class="app" id="root" data-turbo="false"></div>
-            </body>
-          </html>
-        HTML
-
-        expect(result).to include("<%= ruact_js_assets %>")
-      end
-
-      it "migrates a layout with the marker and the div on one line" do
-        result = layout_after_run(
-          %(<html><body><%# ruact: root %><div id="root"></div></body></html>\n)
-        )
-
-        expect(result).to include("<%= ruact_js_assets %>")
-      end
-
-      it "is idempotent — a second run adds nothing" do
-        path = write_layout(<<~HTML)
-          <html>
-            <body>
-              <%# ruact: root %>
-              <div id="root"></div>
-            </body>
-          </html>
-        HTML
-        silently { build_generator(app_root).inject_layout_shell }
-        silently { build_generator(app_root).inject_layout_shell }
-
-        expect(File.read(path).scan("ruact_js_assets").size).to eq(1)
-      end
-
-      # Round-2 finding: the anchor matched any attribute ENDING in `id`, so a
-      # layout with `data-id="root"` and no real mount point got the helper
-      # injected and a success message. It now reads as "no root present" and
-      # the generator writes a proper root + helper instead of warning — the
-      # look-alike div is left alone, being none of its business.
-      it "does not mistake a look-alike attribute for the React root" do
-        path = write_layout(<<~HTML)
-          <html>
-            <body>
-              <%# ruact: root %>
-              <div data-id="root"></div>
-            </body>
-          </html>
-        HTML
-
-        silently { build_generator(app_root).inject_layout_shell }
-
-        result = File.read(path)
-        expect(result).to match(%r{<div id="root"></div>})
-        expect(result).to include("<%= ruact_js_assets %>")
-      end
-
-      # The mirror of the legacy migration: the call is there, the mount target
-      # is not. Injecting the whole block would duplicate the helper.
-      it "adds only the missing root when the layout already calls the helper" do
-        path = write_layout(<<~HTML)
-          <html>
-            <body>
-              <%= yield %>
-              <%= ruact_js_assets %>
-            </body>
-          </html>
-        HTML
-
-        silently { build_generator(app_root).inject_layout_shell }
-
-        result = File.read(path)
-        expect(result).to match(%r{<div id="root"></div>})
-        expect(result.scan("ruact_js_assets").size).to eq(1)
-        expect(result.index(%(<div id="root">))).to be < result.index("ruact_js_assets")
-      end
-
-      # A root that is NOT an empty paired div (a spinner placeholder, say) has
-      # nothing safe to inject after, so the generator says so instead of
-      # guessing where the call belongs.
-      it "warns when the root div is not the empty form it knows how to anchor on" do
-        write_layout(<<~HTML)
-          <html>
-            <body>
-              <%# ruact: root %>
-              <div id="root">loading…</div>
-            </body>
-          </html>
-        HTML
-
-        output = capture_generator_output { build_generator(app_root).inject_layout_shell }
-
-        expect(output).to include("could not locate the React root div")
-      end
-
-      # Round-2 finding: the "already migrated, skip" guard was a substring
-      # match, so a TODO note about the helper made the generator skip an app
-      # that was never migrated.
-      it "does not treat a TODO comment naming the helper as already migrated" do
-        path = write_layout(<<~HTML)
-          <html>
-            <body>
-              <%# TODO: add ruact_js_assets %>
-              <%# ruact: root %>
-              <div id="root"></div>
-            </body>
-          </html>
-        HTML
-
-        silently { build_generator(app_root).inject_layout_shell }
-
-        expect(File.read(path)).to include("<%= ruact_js_assets %>")
-      end
-
-      # Silence here is the dangerous outcome: the app keeps rendering through
-      # ruact's CSS-less shell and nothing ever says why.
-      it "says so LOUDLY when it cannot find the root div, instead of claiming success" do
-        write_layout(<<~HTML)
-          <html>
-            <body>
-              <%# ruact: root %>
-              <span id="root"></span>
-            </body>
-          </html>
-        HTML
-
-        output = capture_generator_output { build_generator(app_root).inject_layout_shell }
-
-        expect(output).to include("could not locate the React root div")
-        expect(output).not_to include("added ruact_js_assets")
-      end
-
-      def capture_generator_output
+      def capture
         original = $stdout
         $stdout = StringIO.new
         yield
         $stdout.string
       ensure
         $stdout = original
+      end
+
+      let(:stock) do
+        "<html>\n  <head>\n    <%= stylesheet_link_tag :app %>\n  </head>\n  " \
+          "<body>\n    <%= yield %>\n  </body>\n</html>\n"
+      end
+
+      it "prints all three lines for an app layout that has none, and leaves the file alone" do
+        output, path = advise(layout_setting: "true", layout_body: stock)
+
+        expect(output).to include("<%= ruact_head_assets %>")
+        expect(output).to include(%(<div id="root"></div>))
+        expect(output).to include("<%= ruact_js_assets %>")
+        expect(output).to include("application.html.erb")
+        expect(File.read(path)).to eq(stock)
+      end
+
+      it "is silent for an app layout that already has all three" do
+        wired = "<html><head><%= ruact_head_assets %></head>" \
+                "<body><div id=\"root\"></div><%= ruact_js_assets %></body></html>\n"
+        output, = advise(layout_setting: "true", layout_body: wired)
+
+        expect(output).to be_empty
+      end
+
+      it "prints only what is missing — an app installed before ruact_head_assets existed" do
+        pre = "<html><head></head><body><div id=\"root\"></div><%= ruact_js_assets %></body></html>\n"
+        output, = advise(layout_setting: "true", layout_body: pre)
+
+        expect(output).to include("<%= ruact_head_assets %>")
+        expect(output).not_to include(%(<div id="root"></div>))
+      end
+
+      it "does not count a helper mentioned inside a comment" do
+        commented = "<html><head><%# ruact_head_assets %></head>" \
+                    "<body><div id=\"root\"></div><%= ruact_js_assets %></body></html>\n"
+        output, = advise(layout_setting: "true", layout_body: commented)
+
+        expect(output).to include("<%= ruact_head_assets %>")
+      end
+
+      it "reads the layout config.layout NAMES, not application" do
+        output, = advise(layout_setting: '"layouts/admin"', layout_file: "admin", layout_body: stock)
+
+        expect(output).to include("admin.html.erb")
+      end
+
+      it "says nothing when ruact's own layout renders ruact pages" do
+        output, = advise(layout_setting: '"ruact"', layout_body: stock)
+
+        expect(output).to be_empty
+      end
+
+      it "says nothing under the built-in shell" do
+        output, = advise(layout_setting: "false", layout_body: stock)
+
+        expect(output).to be_empty
+      end
+
+      it "names a layout that does not exist instead of printing lines for it" do
+        output, = advise(layout_setting: '"ghost"')
+
+        expect(output).to include("ghost.html.erb").and include("does not exist")
+      end
+    end
+
+    # Review round 1 — the install must edit an existing initializer whatever its
+    # block variable is called, and never claim an edit it did not make.
+    describe "create_initializer on unusual existing initializers", :aggregate_failures, :story_17_0b do
+      def write_initializer(body)
+        path = File.join(app_root, "config/initializers/ruact.rb")
+        FileUtils.mkdir_p(File.dirname(path))
+        File.binwrite(path, body)
+        path
+      end
+
+      def run_create
+        out = StringIO.new
+        original = $stdout
+        $stdout = out
+        build_generator(app_root).create_initializer
+        out.string
+      ensure
+        $stdout = original
+      end
+
+      it "writes with the block's own variable, so the app still boots" do
+        path = write_initializer("Ruact.configure do |c|\n  c.strict_serialization = true\nend\n")
+
+        run_create
+
+        result = File.read(path)
+        expect(result).to include(%(c.layout = "ruact"))
+        expect(result).not_to include("config.")
+        expect { RubyVM::InstructionSequence.compile(result) }.not_to raise_error
+      end
+
+      it "sees a setting under any receiver as already set" do
+        path = write_initializer("Ruact.configure do |c|\n  c.layout = true\nend\n")
+
+        run_create
+
+        expect(File.read(path).scan(/\.layout\s*=/).size).to eq(1)
+      end
+
+      it "edits a block whose opening line carries a comment" do
+        path = write_initializer("Ruact.configure do |config| # ruact settings\nend\n")
+
+        output = run_create
+
+        expect(File.read(path)).to include(%(config.layout = "ruact"))
+        expect(output).to include("update")
+      end
+
+      # Review round 2 — the round-1 pattern swallowed the rest of the line, so a
+      # one-line block got the settings written AFTER its `end`, outside it.
+      it "never writes after a one-line block's end — it asks instead" do
+        body = "Ruact.configure do |config| config.strict_serialization = true end\n"
+        path = write_initializer(body)
+
+        output = run_create
+
+        expect(File.read(path)).to eq(body)
+        expect(output).to include("could not find the Ruact.configure block")
+      end
+
+      it "edits the real block, once, when a commented-out example sits above it" do
+        path = write_initializer("# Ruact.configure do |config|\nRuact.configure do |c|\nend\n")
+
+        run_create
+
+        result = File.read(path)
+        expect(result.scan('.layout = "ruact"').size).to eq(1)
+        expect(result).to include(%(c.layout = "ruact"))
+        expect { RubyVM::InstructionSequence.compile(result) }.not_to raise_error
+      end
+
+      # The one-line form the configuration docs themselves show.
+      it "sees a setting inside a one-line brace block as already set" do
+        path = write_initializer("Ruact.configure { |c| c.layout = true }\n")
+
+        output = run_create
+
+        expect(File.read(path)).to eq("Ruact.configure { |c| c.layout = true }\n")
+        expect(output).to include("already set")
+      end
+
+      it "names the block's own variable when it has to ask" do
+        write_initializer("Ruact.configure { |c| c.strict_serialization = true }\n")
+
+        output = run_create
+
+        expect(output).to include(%(c.layout = "ruact")).and include("c.layout_stylesheets")
+      end
+
+      it "edits a CRLF initializer" do
+        path = write_initializer("Ruact.configure do |config|\r\nend\r\n")
+
+        run_create
+
+        expect(File.read(path)).to include(%(config.layout = "ruact"))
+      end
+    end
+
+    describe "layout_stylesheets beyond the two common pipelines", :aggregate_failures, :story_17_0b do
+      def lock(name, gems)
+        File.write(File.join(app_root, name), "GEM\n  specs:\n#{gems.map { |g| "    #{g}\n" }.join}")
+      end
+
+      def written
+        silently { build_generator(app_root).create_initializer }
+        read("config/initializers/ruact.rb")[/config\.layout_stylesheets = (.+)$/, 1]
+      end
+
+      # Propshaft learned :app in 0.9.0; on 0.8 it would look for app.css and 500.
+      it "writes [\"application\"] for Propshaft older than 0.9" do
+        lock("Gemfile.lock", ["propshaft (0.8.0)"])
+        expect(written).to eq('["application"]')
+      end
+
+      it "writes [:app] for Propshaft 0.9 and later" do
+        lock("Gemfile.lock", ["propshaft (0.9.0)"])
+        expect(written).to eq("[:app]")
+      end
+
+      it "writes [] when the app has neither Propshaft nor Sprockets" do
+        lock("Gemfile.lock", ["rails (8.0.0)", "vite_ruby (3.9.0)"])
+        expect(written).to eq("[]")
+      end
+
+      it "reads gems.locked too" do
+        lock("gems.locked", ["sprockets-rails (3.5.0)"])
+        expect(written).to eq('["application"]')
+      end
+    end
+
+    # Story 17.0b — `config.layout_stylesheets` is decided once, at install, by
+    # the app's asset pipeline, and written where the app can read it.
+    describe "layout_stylesheets written for the app's asset pipeline", :aggregate_failures, :story_17_0b do
+      def lockfile(gems)
+        File.write(File.join(app_root, "Gemfile.lock"), "GEM\n  specs:\n#{gems.map { |g| "    #{g} (1.0.0)\n" }.join}")
+      end
+
+      def fresh_initializer
+        silently { build_generator(app_root).create_initializer }
+        read("config/initializers/ruact.rb")
+      end
+
+      it "writes [:app] for Propshaft" do
+        lockfile(%w[propshaft rails])
+
+        expect(fresh_initializer).to include("config.layout_stylesheets = [:app]")
+      end
+
+      it "writes [\"application\"] for Sprockets, where :app would be a missing app.css" do
+        lockfile(%w[sprockets-rails sprockets rails])
+
+        expect(fresh_initializer).to include('config.layout_stylesheets = ["application"]')
+      end
+
+      it "prefers Propshaft when both are locked" do
+        lockfile(%w[propshaft sprockets-rails])
+
+        expect(fresh_initializer).to include("config.layout_stylesheets = [:app]")
+      end
+
+      it "falls back to the default [:app] with no lockfile" do
+        expect(fresh_initializer).to include("config.layout_stylesheets = [:app]")
+      end
+
+      it "produces an initializer that is valid Ruby" do
+        lockfile(%w[sprockets-rails])
+        fresh_initializer
+
+        expect { RubyVM::InstructionSequence.compile_file(File.join(app_root, "config/initializers/ruact.rb")) }
+          .not_to raise_error
+      end
+
+      it "tells a Sprockets app under --shadcn to add the Tailwind build" do
+        lockfile(%w[sprockets-rails])
+        gen = build_generator(app_root, shadcn: true)
+
+        expect { gen.create_initializer && gen.create_shadcn_prerequisites }
+          .to output(/config\.layout_stylesheets = \["application", "tailwind"\]/).to_stdout
       end
     end
 
@@ -1544,6 +1597,96 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
 
         expect(read("Procfile.dev")).not_to include("css:")
       end
+    end
+  end
+
+  # Story 17.0b, Mode A — ruact pages render through a layout the GEM ships, so
+  # the install edits NO layout of the app. The previous design injected into
+  # application.html.erb and took three review rounds of `high` findings on the
+  # anchor alone: matching HTML+ERB with a regex has no correct version.
+  describe "install generator — edits no app layout (Story 17.0b)", :story_17_0b do
+    require "stringio"
+    require "generators/ruact/install/install_generator"
+
+    let(:app_root) { Dir.mktmpdir("ruact_install_17_0b") }
+    # Every command the generator runs, minus the two that shell out (npm, and
+    # the rake task that primes the server-functions codegen). Enumerated from
+    # Thor rather than listed by hand, so a command added later is covered too.
+    let(:commands) do
+      Ruact::Generators::InstallGenerator.all_commands.keys -
+        %w[install_javascript_dependencies prime_server_functions_codegen]
+    end
+    let(:stock_layout) do
+      <<~ERB
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title><%= content_for(:title) || "App" %></title>
+            <%= csrf_meta_tags %>
+            <%= stylesheet_link_tag :app, "data-turbo-track": "reload" %>
+            <%= javascript_importmap_tags %>
+          </head>
+          <body>
+            <%= yield %>
+          </body>
+        </html>
+      ERB
+    end
+
+    after { FileUtils.rm_rf(app_root) }
+
+    def run_install(opts = {})
+      gen = Ruact::Generators::InstallGenerator.new([], { skip_npm: true }.merge(opts), destination_root: app_root)
+      original = $stdout
+      $stdout = StringIO.new
+      commands.each { |command| gen.public_send(command) }
+      $stdout.string
+    ensure
+      $stdout = original
+    end
+
+    def write(relative, body)
+      path = File.join(app_root, relative)
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, body)
+      path
+    end
+
+    before do
+      write("app/controllers/application_controller.rb", "class ApplicationController < ActionController::Base\nend\n")
+      write(".gitignore", "/log/*\n")
+    end
+
+    it "leaves application.html.erb byte-identical on a fresh install" do
+      path = write("app/views/layouts/application.html.erb", stock_layout)
+
+      run_install
+
+      expect(File.read(path)).to eq(stock_layout)
+    end
+
+    it "creates no layout file in the app either" do
+      write("app/views/layouts/application.html.erb", stock_layout)
+
+      run_install
+
+      expect(Dir.children(File.join(app_root, "app/views/layouts"))).to eq(["application.html.erb"])
+    end
+
+    it "writes config.layout = \"ruact\" into a fresh initializer" do
+      write("app/views/layouts/application.html.erb", stock_layout)
+
+      run_install
+
+      expect(File.read(File.join(app_root, "config/initializers/ruact.rb"))).to match(/^\s*config\.layout = "ruact"$/)
+    end
+
+    it "does not edit the layout under --shadcn either" do
+      path = write("app/views/layouts/application.html.erb", stock_layout)
+
+      run_install(shadcn: true)
+
+      expect(File.read(path)).to eq(stock_layout)
     end
   end
 end
