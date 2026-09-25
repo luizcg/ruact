@@ -386,8 +386,10 @@ module Ruact
       def layout_summary
         own = configured_app_layout
         return "ruact pages render through your #{own} layout (see any lines printed above)." if own
-        if configured_layout_value == "false"
-          return "ruact pages render through its built-in shell (config.layout = false)."
+
+        value = configured_layout_value
+        if value.nil? || value == "false"
+          return "ruact pages render through its built-in shell (config.layout is #{value || 'not set'})."
         end
 
         "ruact pages render through ruact's own layout — your layouts are untouched.\n" \
@@ -459,7 +461,17 @@ module Ruact
         path = Pathname(destination_root).join("config/initializers/ruact.rb")
         return nil unless path.exist?
 
-        path.read.scan(/^\s*[\w.]+\.layout\s*=\s*([^\s#]+)/).flatten.last
+        layout_assignments(path.read).last
+      end
+
+      # The right-hand side of every `<receiver>.layout =` outside a comment
+      # line, in order — the one-line `Ruact.configure { |c| c.layout = true }`
+      # the configuration docs show included. `layout_stylesheets =` never
+      # matches: `.layout` must be followed by `=`.
+      def layout_assignments(source)
+        source.each_line.reject { |line| line.lstrip.start_with?("#") }.flat_map do |line|
+          line.scan(/\b\w+\.layout\s*=(?!=)\s*([^\s#;}]+)/).flatten
+        end
       end
 
       # Each call the app's own layout is missing, with where it goes. Read
@@ -484,16 +496,19 @@ module Ruact
       def inject_layout_setting(path)
         content = path.read
 
-        if content.match?(LAYOUT_ASSIGNMENT)
+        if layout_assignments(content).any?
           say_status "skip", "config.layout already set in config/initializers/ruact.rb", :yellow
           return
         end
 
-        block = content.match(CONFIGURE_BLOCK)
-        return warn_initializer_not_injectable unless block
+        blocks = content.scan(CONFIGURE_BLOCK)
+        # Exactly one multi-line block, or nothing: Thor's injection edits EVERY
+        # match, and a one-line block has no line of its own to write after.
+        return warn_initializer_not_injectable(content) unless blocks.length == 1
 
-        inject_into_file "config/initializers/ruact.rb", layout_setting_snippet(block[1]), after: CONFIGURE_BLOCK
-        return warn_initializer_not_injectable if path.read == content
+        inject_into_file "config/initializers/ruact.rb", layout_setting_snippet(blocks.first.first),
+                         after: CONFIGURE_BLOCK
+        return warn_initializer_not_injectable(content) if path.read == content && !options[:pretend]
 
         say_status "update", "set config.layout = \"ruact\" (ruact pages render through ruact's layout)", :green
       end
@@ -752,25 +767,30 @@ module Ruact
       # The initializer exists but is not the shape we know how to edit (someone
       # rewrote it, or wrapped the configure call). Never guess at it — say what
       # to add, so the app cannot end up half-migrated in silence.
-      def warn_initializer_not_injectable
+      # The lines are written with the block's OWN variable when one can be read —
+      # `config.` pasted into a `{ |c| … }` block is the NameError at boot this
+      # generator used to cause.
+      def warn_initializer_not_injectable(content = "")
+        variable = content[/Ruact\.configure\s*(?:do|\{)\s*\|(\w+)\|/, 1] || "config"
         say_status "skip", "could not find the Ruact.configure block to update", :red
         say ""
         say "  Add these lines inside `Ruact.configure` in config/initializers/ruact.rb:"
         say ""
-        say "      config.layout = \"ruact\""
-        say "      config.layout_stylesheets = #{detected_layout_stylesheets}"
+        say "      #{variable}.layout = \"ruact\""
+        say "      #{variable}.layout_stylesheets = #{detected_layout_stylesheets}"
         say ""
         say "  Without them ruact keeps using its built-in shell, which carries none"
         say "  of your stylesheets — your app's CSS will not reach a ruact-rendered page."
         say ""
       end
 
-      # Any receiver: `config.layout =`, `c.layout =`, `Ruact.config.layout =`.
-      LAYOUT_ASSIGNMENT = /^\s*[\w.]+\.layout\s*=/
-      # The configure block's opening line, whatever its variable is called and
-      # whatever follows it on the line (a comment), CRLF included.
-      CONFIGURE_BLOCK = /Ruact\.configure\s+do\s*\|(\w+)\|[^\n]*\r?\n/
-      private_constant :LAYOUT_ASSIGNMENT, :CONFIGURE_BLOCK
+      # The configure block's opening line, whatever its variable is called: at
+      # the start of a line (so a commented-out example above it does not match),
+      # followed by nothing but whitespace or a comment (so a one-line block —
+      # body and `end` on the same line — does not match and get code written
+      # after its `end`, outside it), CRLF included.
+      CONFIGURE_BLOCK = /^[ \t]*Ruact\.configure\s+do\s*\|(\w+)\|[ \t]*(?:#[^\r\n]*)?\r?\n/
+      private_constant :CONFIGURE_BLOCK
 
       def shadcn?
         options[:shadcn]

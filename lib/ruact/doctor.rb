@@ -321,7 +321,7 @@ module Ruact
        "— add <%= ruact_head_assets %> to #{path.basename}",
        "Add <%= ruact_head_assets %> as the first thing inside <head> in #{path}, " \
        "ABOVE your stylesheet_link_tag so your own CSS is loaded last and wins ties " \
-       "(rails generate ruact:install prints the missing lines; it does not edit your layout). " \
+       "(ruact never edits your layout). " \
        "Without it that CSS is built and served but never referenced - styling that works in " \
        "development and vanishes in production."]
     end
