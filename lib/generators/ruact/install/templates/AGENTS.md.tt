@@ -16,7 +16,9 @@ truth" below) instead of guessing.
 ## Mental model
 
 - A page is an action rendering a `.html.erb` in a controller with `include Ruact::Controller`
-  (install adds it to none; `ruact:scaffold` does; `ruact_pages only:` narrows it).
+  (install adds it to none — `--app` puts it on ApplicationController; `ruact:scaffold`
+  adds it; `ruact_pages only:` narrows it). The page's renderer owns navigation:
+  going between a ruact page and a plain Rails/Turbo page is a full page load.
 - Interactive components live in `app/javascript/components/` as `"use client"`
   files, mounted from ERB with a PascalCase self-closing tag:
   `<LikeButton postId={@post.id} />`.
@@ -67,10 +69,9 @@ object is instantiated.
 
 ## Ground truth — read the generated file
 
-`app/javascript/.ruact/server-functions.ts` is regenerated from the route
-table (it is gitignored). It is the authoritative list of every accessor and
-its typed params — READ THAT FILE instead of simulating the name generation.
-Regenerate it after changing routes or queries:
+`app/javascript/.ruact/server-functions.ts` (gitignored, regenerated from the
+route table) is the authoritative list of every accessor and its typed params —
+READ IT instead of simulating the name generation. Regenerate after routes/queries change:
 
     bin/rails ruact:server_functions:generate
 
@@ -147,8 +148,7 @@ duration, or a deliberate `expires_in: nil` for a non-expiring token.
   `schema_version` field (currently `0`), do not treat it as a stable contract.
 - `bin/rails ruact:server_functions:generate` — regenerates the TS module;
   exits 1 on a naming collision or an invalid name.
-- `bin/dev` — boots Rails AND Vite (both are required: Vite serves the client
-  components and writes the client manifest).
+- `bin/dev` — boots Rails AND Vite (both required: Vite serves the client components).
 - If your app has TypeScript tooling configured, `npx tsc --noEmit`
   type-checks call sites against the generated accessor types (a fresh
   install does not ship a tsconfig).

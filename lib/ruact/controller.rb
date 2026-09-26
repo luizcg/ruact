@@ -9,13 +9,17 @@ require_relative "controller/document_rendering"
 require_relative "controller/pages"
 
 module Ruact
-  # Include in ApplicationController to enable RSC rendering.
+  # Include in the controllers whose pages render through ruact (island mode,
+  # the install default — Story 17.0g), or in ApplicationController to render
+  # the whole app through it (`rails generate ruact:install --app`).
   #
-  #   class ApplicationController < ActionController::Base
+  #   class ProductsController < ApplicationController
   #     include Ruact::Controller
   #   end
   #
-  # After that, any action whose view is a .html.erb file will automatically:
+  # After that, any action whose view is a .html.erb file (narrowed with
+  # `ruact_pages only:` / `except:`, see Ruact::Controller::Pages) will
+  # automatically:
   # - Respond to text/x-component requests with a raw Flight payload
   # - Respond to text/html requests with an HTML shell + inline Flight payload
   module Controller

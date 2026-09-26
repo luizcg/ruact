@@ -117,9 +117,9 @@ RSpec.describe Ruact::Doctor do
     subject(:doctor) { described_class.new }
 
     def write_controller(name, body)
-      dir = tmpdir.join("app", "controllers")
-      FileUtils.mkdir_p(dir)
-      File.write(dir.join(name), body)
+      file = tmpdir.join("app", "controllers", name)
+      FileUtils.mkdir_p(file.dirname)
+      File.write(file, body)
     end
 
     def write_view(path)
@@ -175,6 +175,41 @@ end
 
         expect(status).to eq(:warn)
         expect(message).to include("include Ruact::Controller").and include("ruact:scaffold")
+      end
+    end
+
+    # Review round 1 (17.0g) — the forms an include takes in real code count;
+    # a concern module, a nested ApplicationController and mailer views don't
+    # say anything about pages.
+    context "when the include takes another form, or lives outside a page controller" do
+      before do
+        make_controller(with_include: false)
+        write_controller("a_controller.rb", "class AController < ApplicationController\n  include(Ruact::Controller)\nend\n")
+        write_controller("b_controller.rb", "class BController < ApplicationController\n  include ::Ruact::Controller\nend\n")
+        write_controller("c_controller.rb", "class CController < ApplicationController\n  include Auth, Ruact::Controller\nend\n")
+        write_controller("concerns/pageable.rb", "module Pageable\n  include Ruact::Controller\nend\n")
+        write_controller("admin/application_controller.rb",
+                         "module Admin\n  class ApplicationController < ::ApplicationController\n    " \
+                         "include Ruact::Controller\n  end\nend\n")
+      end
+
+      it "counts the include forms and the nested base, not the concern", :aggregate_failures do
+        status, message = doctor.send(:check_controller)
+
+        expect(status).to eq(:pass)
+        expect(message).to include("island").and include("4 controllers")
+      end
+    end
+
+    context "when counting whole-app templates" do
+      before do
+        make_controller(with_include: true)
+        write_view("posts/index.html.erb")
+        write_view("user_mailer/welcome.html.erb")
+      end
+
+      it "leaves mailer views out" do
+        expect(doctor.send(:check_controller).last).to include("1 template")
       end
     end
 

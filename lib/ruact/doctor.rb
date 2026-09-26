@@ -176,7 +176,7 @@ module Ruact
     # Mechanical, like the layout checks: it reads files, it never renders.
     def check_controller
       application = Rails.root.join("app", "controllers", "application_controller.rb")
-      if File.exist?(application) && includes_ruact_controller?(File.read(application))
+      if File.exist?(application) && File.read(application).match?(Ruact::CONTROLLER_INCLUDE)
         return [:pass, "whole-app mode: ApplicationController includes Ruact::Controller — " \
                        "#{pluralize_count(ruact_page_templates, 'template')} in app/views render through ruact"]
       end
@@ -188,21 +188,28 @@ module Ruact
       [:pass, "island mode: #{pluralize_count(count, 'controller')} #{verb} ruact pages (include Ruact::Controller)"]
     end
 
-    # A real include line, not a mention in a comment.
-    def includes_ruact_controller?(source)
-      source.match?(/^[ \t]*include[ \t]+Ruact::Controller\b/)
-    end
-
+    # Controller files that include the concern themselves. Approximate by
+    # design — it reads source, it does not load classes: a controller that
+    # gets the concern through a base controller counts through the base.
+    # `concerns/` holds modules, not controllers; only the app's ROOT
+    # ApplicationController is whole-app mode (an `Admin::ApplicationController`
+    # is an island base like any other).
     def island_controllers
-      Dir.glob(Rails.root.join("app", "controllers", "**", "*.rb").to_s).select do |file|
-        !file.end_with?("/application_controller.rb") && includes_ruact_controller?(File.read(file))
+      root = Rails.root.join("app", "controllers")
+      Dir.glob(root.join("**", "*.rb").to_s).select do |file|
+        next false if file == root.join("application_controller.rb").to_s
+        next false if file.start_with?("#{root.join('concerns')}/")
+
+        File.read(file).match?(Ruact::CONTROLLER_INCLUDE)
       end
     end
 
-    # Page templates: `.html.erb` under app/views, not layouts and not partials.
+    # Page templates: `.html.erb` under app/views — not layouts, partials or
+    # mailer views. Approximate: `ruact_pages` narrowing is not read.
     def ruact_page_templates
       Dir.glob(Rails.root.join("app", "views", "**", "*.html.erb").to_s).count do |file|
-        !file.include?("/app/views/layouts/") && !File.basename(file).start_with?("_")
+        !file.include?("/app/views/layouts/") && !File.basename(file).start_with?("_") &&
+          !File.dirname(file).end_with?("_mailer")
       end
     end
 

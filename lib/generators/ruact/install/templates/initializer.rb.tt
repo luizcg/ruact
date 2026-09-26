@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
 Ruact.configure do |config|
-<% if app? -%>
-  # Whole-app mode (`rails generate ruact:install --app`): ApplicationController
+<% if whole_app? -%>
+  # Whole-app mode (`rails generate ruact:install --app`, or an app installed
+  # before island mode was the default): ApplicationController
   # includes Ruact::Controller, so every action with an .html.erb template
   # renders through ruact, into your own layout. That layout needs
   # `<%%= ruact_head_assets %>` in <head> and `<%%= ruact_js_assets %>` next to a

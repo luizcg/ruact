@@ -88,6 +88,11 @@ module Ruact
       def classify(env)
         request = ActionDispatch::Request.new(env.dup)
         verdict_in(@router || application_router, request) || :pass
+      rescue Ruact::ConfigurationError => e
+        # A misdeclared `ruact_pages` is the app's bug to see, not a routing
+        # doubt: say so where it shows, then let the request through.
+        Rails.logger&.warn("[ruact] #{e.message}")
+        :pass
       rescue StandardError => e
         Rails.logger&.debug do
           "[ruact] navigation boundary could not classify #{env['PATH_INFO']}: #{e.class}: #{e.message}"
@@ -210,9 +215,19 @@ module Ruact
         klass = "#{controller.to_s.camelize}Controller".safe_constantize
         return :pass unless klass.is_a?(Class)
         return :native unless klass.include?(Ruact::Controller)
-        return (!in_engine && app_owned?(klass) ? :ruact : :native) unless request.get? || request.head?
+        return non_get_verdict(klass, action, in_engine) unless request.get? || request.head?
 
         klass.ruact_page?(action) ? :ruact : :native
+      end
+
+      # Story 17.0g — a controller that DECLARED its pages (`ruact_pages`) is ruact
+      # only for those: a `create` whose `new` is a plain Rails page re-renders
+      # plain HTML on a validation error, which the router could not show.
+      def non_get_verdict(klass, action, in_engine)
+        return :native if in_engine || !app_owned?(klass)
+        return :native if klass.__ruact_pages && !klass.ruact_page_action?(action)
+
+        :ruact
       end
 
       def app_owned?(klass)

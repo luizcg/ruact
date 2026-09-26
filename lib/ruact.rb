@@ -32,6 +32,12 @@ module Ruact
   # `config.layout`.
   GEM_LAYOUT = "ruact"
 
+  # Story 17.0g — a real `include` of Ruact::Controller in a Ruby source line,
+  # as `ruact:install` and `ruact:doctor` read it: `include Ruact::Controller`,
+  # `include(Ruact::Controller)`, `include ::Ruact::Controller`, or among
+  # others in one `include`. A mention in a comment does not count.
+  CONTROLLER_INCLUDE = /^[ \t]*include\b[^\n#]*?(?<![\w:])(?:::)?Ruact::Controller\b/
+
   class << self
     attr_accessor :manifest, :streaming_mode
 

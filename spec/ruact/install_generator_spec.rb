@@ -112,6 +112,26 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(read_file("app/controllers/application_controller.rb").scan("Ruact::Controller").size).to eq(1)
       end
 
+      # Review round 1 (17.0g) — the include in another form is still the
+      # include: no second one.
+      it "recognises include(Ruact::Controller) and ::Ruact::Controller as already there", :aggregate_failures do
+        forms = ["  include(Ruact::Controller)", "  include ::Ruact::Controller", "  include Auth, Ruact::Controller"]
+        forms.each do |line|
+          existing = "class ApplicationController < ActionController::Base\n#{line}\nend\n"
+          write_file("app/controllers/application_controller.rb", existing)
+          inject(app: true)
+
+          expect(read_file("app/controllers/application_controller.rb")).to eq(existing)
+        end
+      end
+
+      # Review round 1 (17.0g) — `--app` asked for something; with nowhere to
+      # put it, say so.
+      it "says where the include goes when --app finds no ApplicationController" do
+        expect(inject(app: true))
+          .to include("add `include Ruact::Controller` to the controller your pages inherit from")
+      end
+
       # An app installed before 17.0g keeps its include; the install says what
       # mode that is and how to leave it, and removes nothing.
       it "keeps an existing include without --app, and says the app is in whole-app mode", :aggregate_failures do
@@ -1283,6 +1303,47 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         silently { build_generator(app_root).create_initializer }
 
         expect(File.read(path).scan(/config\.layout\s*=/).size).to eq(1)
+      end
+
+      # Review round 1 (17.0g) — whole-app mode wants the app's own layout.
+      it "sets config.layout = true under --app, and says so", :aggregate_failures do
+        path = write_initializer("Ruact.configure do |config|\nend\n")
+
+        output = capture_generator_output { build_generator(app_root, app: true).create_initializer }
+
+        expect(File.read(path)).to match(/^\s*config\.layout = true$/)
+        expect(output).to include("set config.layout = true")
+        expect(output).not_to include(%(set config.layout = "ruact"))
+      end
+
+      # …and so does an app installed before 17.0g, whose ApplicationController
+      # already has the include: every page renders through ruact there.
+      it "treats an ApplicationController that already includes the concern as whole-app" do
+        write_app_file("app/controllers/application_controller.rb",
+                       "class ApplicationController < ActionController::Base\n  include Ruact::Controller\nend\n")
+        path = write_initializer("Ruact.configure do |config|\nend\n")
+
+        silently { build_generator(app_root).create_initializer }
+
+        expect(File.read(path)).to match(/^\s*config\.layout = true$/)
+      end
+
+      # Review round 1 (17.0g) — `--app` over an island install: the setting is
+      # the app's, so it stays; but every page would now lose the app's <head>.
+      it "warns, and changes nothing, when --app meets config.layout = \"ruact\"", :aggregate_failures do
+        body = %(Ruact.configure do |config|\n  config.layout = "ruact"\nend\n)
+        path = write_initializer(body)
+
+        output = capture_generator_output { build_generator(app_root, app: true).create_initializer }
+
+        expect(File.read(path)).to eq(body)
+        expect(output).to include("whole-app mode on ruact's own layout")
+      end
+
+      def write_app_file(relative, body)
+        path = File.join(app_root, relative)
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, body)
       end
 
       # Never guess at an initializer we do not recognise — say what to add,

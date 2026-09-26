@@ -43,11 +43,13 @@ module Ruact
           raise ArgumentError, "ruact_pages takes exactly one of only: or except: (#{name})" if only.nil? == except.nil?
 
           self.__ruact_pages = { only: only && Array(only).map(&:to_s).freeze,
-                                 except: except && Array(except).map(&:to_s).freeze }.freeze
+                                 except: except && Array(except).map(&:to_s).freeze,
+                                 declared_in: self }.freeze
         end
 
         # Whether `action` is a page this controller renders through ruact:
-        # every action unless `ruact_pages` narrowed it. The navigation boundary
+        # every action unless `ruact_pages` narrowed it. Calling `ruact_pages`
+        # again replaces the declaration (it does not accumulate). The navigation boundary
         # (Ruact::NavigationBoundary) and `default_render` both read this.
         #
         # @param action [String, Symbol]
@@ -58,7 +60,7 @@ module Ruact
           declared = __ruact_pages
           return true if declared.nil?
 
-          __ruact_check_declared_pages!(declared)
+          Pages.check_declared!(declared)
           return declared[:only].include?(action.to_s) if declared[:only]
 
           !declared[:except].include?(action.to_s)
@@ -71,17 +73,31 @@ module Ruact
         def ruact_declared_page?(action)
           Array(__ruact_pages&.dig(:only)).include?(action.to_s)
         end
+      end
 
-        # @api private
-        def __ruact_check_declared_pages!(declared)
-          unknown = Array(declared[:only] || declared[:except]) - action_methods.to_a
-          return if unknown.empty?
+      # The typo check, against the class that DECLARED the pages — a base
+      # controller's `ruact_pages` is not about each subclass's actions. Only
+      # `only:` is checked: an `except:` naming a missing action excludes nothing
+      # and harms nothing. A template-only action (no method, a view Rails
+      # renders implicitly) is an action.
+      #
+      # @api private
+      # @param declared [Hash] a `__ruact_pages` declaration
+      # @return [void]
+      # @raise [Ruact::ConfigurationError] when `only:` names no action of it
+      def self.check_declared!(declared)
+        owner = declared[:declared_in]
+        names = Array(declared[:only])
+        return if names.empty? || owner.nil?
 
-          what = unknown.one? ? "is not an action" : "are not actions"
-          raise Ruact::ConfigurationError,
-                "#{name} declares ruact_pages for #{unknown.join(', ')}, which #{what} of this controller. " \
-                "Check the spelling in `ruact_pages`."
-        end
+        unknown = names - owner.action_methods.to_a
+        unknown = unknown.reject { |action| File.exist?(owner.ruact_template_path(action)) }
+        return if unknown.empty?
+
+        what = unknown.one? ? "is not an action" : "are not actions"
+        raise Ruact::ConfigurationError,
+              "#{owner.name} declares ruact_pages for #{unknown.join(', ')}, which #{what} of it " \
+              "(no method and no template). Check the spelling in `ruact_pages`."
       end
     end
   end
