@@ -605,6 +605,18 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(last_response.body).to include("Title can't be blank")
       end
 
+      # Story 17.0g review R3 — a plain 302 (a form outside `ruact_pages`, handed
+      # to the browser) leaves the flash alone: the full page after it renders
+      # a layout, and a layout that prints every flash entry would print the
+      # errors Hash. That action is plain Rails; it re-renders the Rails way.
+      it "does not stash errors on a plain 302", :aggregate_failures, :story_17_0g do
+        post "/errors-demo/create", {}, { "HTTP_ACCEPT" => "text/html" }
+        expect(last_response.status).to eq(302)
+
+        get "/errors-demo/new", {}, flight_headers
+        expect(last_response.body).not_to include("Title can't be blank")
+      end
+
       it "registers errors={} for a successful save and does NOT leak a message across the redirect" do
         post "/errors-demo/create_valid", {}, flight_headers
         get "/errors-demo/new", {}, flight_headers

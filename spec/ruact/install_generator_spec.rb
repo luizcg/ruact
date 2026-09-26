@@ -4,6 +4,7 @@ require "spec_helper"
 require "tmpdir"
 require "fileutils"
 require "json"
+require "stringio"
 require "ruact"
 
 RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
@@ -72,52 +73,75 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
       File.read(File.join(tmpdir, relative_path))
     end
 
-    # Reproduces inject_controller_concern logic from the generator
-    def inject_controller_concern(dest_root)
-      controller_file = File.join(dest_root, "app/controllers/application_controller.rb")
-      return :missing unless File.exist?(controller_file)
+    # Story 17.0g — these drive the REAL generator (the reproduction helper that
+    # stood here encoded the old always-inject behaviour). The concern goes into
+    # ApplicationController only under `--app`.
+    describe "ApplicationController injection (Story 17.0g — only under --app)", :story_17_0g do
+      require "generators/ruact/install/install_generator"
 
-      content = File.read(controller_file)
-      return :already_present if content.include?("Ruact::Controller")
+      let(:controller_content) { "class ApplicationController < ActionController::Base\nend\n" }
 
-      modified = content.sub(
-        /^(class ApplicationController.*)\n/,
-        "\\1\n  include Ruact::Controller\n"
-      )
-      File.write(controller_file, modified)
-      :injected
-    end
-
-    describe "ApplicationController injection (AC#1, AC#3)" do
-      let(:controller_content) do
-        "class ApplicationController < ActionController::Base\nend\n"
+      def inject(opts = {})
+        original = $stdout
+        $stdout = StringIO.new
+        Ruact::Generators::InstallGenerator.new([], opts, destination_root: tmpdir).inject_controller_concern
+        $stdout.string
+      ensure
+        $stdout = original
       end
 
-      it "injects include Ruact::Controller after the class declaration" do
+      it "leaves ApplicationController alone by default (island mode)" do
         write_file("app/controllers/application_controller.rb", controller_content)
-        result = inject_controller_concern(tmpdir)
+        inject
 
-        expect(result).to eq(:injected)
-        content = read_file("app/controllers/application_controller.rb")
-        expect(content).to include("include Ruact::Controller")
+        expect(read_file("app/controllers/application_controller.rb")).to eq(controller_content)
       end
 
-      it "returns :already_present on second run (idempotent, AC#3)" do
-        write_file("app/controllers/application_controller.rb",
-                   "class ApplicationController < ActionController::Base\n  include Ruact::Controller\nend\n")
-
-        result = inject_controller_concern(tmpdir)
-        expect(result).to eq(:already_present)
-      end
-
-      it "does not duplicate the include when run twice (AC#3)" do
+      it "injects include Ruact::Controller under --app" do
         write_file("app/controllers/application_controller.rb", controller_content)
-        inject_controller_concern(tmpdir)
-        inject_controller_concern(tmpdir)
+        inject(app: true)
 
-        content = read_file("app/controllers/application_controller.rb")
-        occurrences = content.scan("Ruact::Controller").size
-        expect(occurrences).to eq(1)
+        expect(read_file("app/controllers/application_controller.rb")).to include("include Ruact::Controller")
+      end
+
+      it "does not duplicate the include when run twice under --app" do
+        write_file("app/controllers/application_controller.rb", controller_content)
+        inject(app: true)
+        inject(app: true)
+
+        expect(read_file("app/controllers/application_controller.rb").scan("Ruact::Controller").size).to eq(1)
+      end
+
+      # Review round 1 (17.0g) — the include in another form is still the
+      # include: no second one.
+      it "recognises include(Ruact::Controller) and ::Ruact::Controller as already there", :aggregate_failures do
+        forms = ["  include(Ruact::Controller)", "  include ::Ruact::Controller", "  include Auth, Ruact::Controller"]
+        forms.each do |line|
+          existing = "class ApplicationController < ActionController::Base\n#{line}\nend\n"
+          write_file("app/controllers/application_controller.rb", existing)
+          inject(app: true)
+
+          expect(read_file("app/controllers/application_controller.rb")).to eq(existing)
+        end
+      end
+
+      # Review round 1 (17.0g) — `--app` asked for something; with nowhere to
+      # put it, say so.
+      it "says where the include goes when --app finds no ApplicationController" do
+        expect(inject(app: true))
+          .to include("add `include Ruact::Controller` to the controller your pages inherit from")
+      end
+
+      # An app installed before 17.0g keeps its include; the install says what
+      # mode that is and how to leave it, and removes nothing.
+      it "keeps an existing include without --app, and says the app is in whole-app mode", :aggregate_failures do
+        existing = "class ApplicationController < ActionController::Base\n  include Ruact::Controller\nend\n"
+        write_file("app/controllers/application_controller.rb", existing)
+
+        output = inject
+
+        expect(read_file("app/controllers/application_controller.rb")).to eq(existing)
+        expect(output).to include("whole-app mode")
       end
     end
 
@@ -293,8 +317,9 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
           end.not_to raise_error
         end
 
+        # Story 17.0g — island mode by default: ApplicationController untouched.
         expect(File.read(File.join(app_root, "app/controllers/application_controller.rb")))
-          .to include("include Ruact::Controller")
+          .not_to include("Ruact::Controller")
         # Story 17.0b — the install edits no layout of the app.
         expect(File.read(File.join(app_root, "app/views/layouts/application.html.erb")))
           .not_to include("ruact")
@@ -1278,6 +1303,47 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         silently { build_generator(app_root).create_initializer }
 
         expect(File.read(path).scan(/config\.layout\s*=/).size).to eq(1)
+      end
+
+      # Review round 1 (17.0g) — whole-app mode wants the app's own layout.
+      it "sets config.layout = true under --app, and says so", :aggregate_failures do
+        path = write_initializer("Ruact.configure do |config|\nend\n")
+
+        output = capture_generator_output { build_generator(app_root, app: true).create_initializer }
+
+        expect(File.read(path)).to match(/^\s*config\.layout = true$/)
+        expect(output).to include("set config.layout = true")
+        expect(output).not_to include(%(set config.layout = "ruact"))
+      end
+
+      # …and so does an app installed before 17.0g, whose ApplicationController
+      # already has the include: every page renders through ruact there.
+      it "treats an ApplicationController that already includes the concern as whole-app" do
+        write_app_file("app/controllers/application_controller.rb",
+                       "class ApplicationController < ActionController::Base\n  include Ruact::Controller\nend\n")
+        path = write_initializer("Ruact.configure do |config|\nend\n")
+
+        silently { build_generator(app_root).create_initializer }
+
+        expect(File.read(path)).to match(/^\s*config\.layout = true$/)
+      end
+
+      # Review round 1 (17.0g) — `--app` over an island install: the setting is
+      # the app's, so it stays; but every page would now lose the app's <head>.
+      it "warns, and changes nothing, when --app meets config.layout = \"ruact\"", :aggregate_failures do
+        body = %(Ruact.configure do |config|\n  config.layout = "ruact"\nend\n)
+        path = write_initializer(body)
+
+        output = capture_generator_output { build_generator(app_root, app: true).create_initializer }
+
+        expect(File.read(path)).to eq(body)
+        expect(output).to include("whole-app mode on ruact's own layout")
+      end
+
+      def write_app_file(relative, body)
+        path = File.join(app_root, relative)
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, body)
       end
 
       # Never guess at an initializer we do not recognise — say what to add,

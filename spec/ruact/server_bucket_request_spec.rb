@@ -209,6 +209,23 @@ module ServerBucketSpecSupport
     def redirecting
       redirect_to "/posts/1"
     end
+
+    # Story 17.0g review R3 — the scaffold's include order: Server's
+    # redirect_to answers a function call without reaching Controller's.
+    def failed_with_redirect
+      post = ServerBucketSpecSupport::ValidatedPost.new(title: nil)
+      post.valid?
+      ruact_errors(post)
+      redirect_to "/errors-demo/new"
+    end
+
+    # …and to another origin, allowed: nothing to carry the errors to.
+    def failed_with_external_redirect
+      post = ServerBucketSpecSupport::ValidatedPost.new(title: nil)
+      post.valid?
+      ruact_errors(post)
+      redirect_to "https://pay.example.com/checkout", allow_other_host: true
+    end
   end
 
   # CSRF-enforcing Bucket-2 host (AC7) — forgery flipped on per-example.
@@ -287,6 +304,9 @@ if defined?(ControllerRequestSpecSupport) &&
     # Story 15.5 (FR109) — a plain Rails GET on a Server controller (non-negotiated).
     get  "/bucket/plain_rails", to: "server_bucket_spec_support/bucket_server#plain_rails"
     post "/bucket/dual_redirecting", to: "server_bucket_spec_support/bucket_dual#redirecting"
+    post "/bucket/dual_failed_with_redirect", to: "server_bucket_spec_support/bucket_dual#failed_with_redirect"
+    post "/bucket/dual_failed_with_external_redirect",
+         to: "server_bucket_spec_support/bucket_dual#failed_with_external_redirect"
     post "/bucket/protected", to: "server_bucket_spec_support/bucket_forgery#create_protected"
     get  "/bucket/csrf_token", to: "server_bucket_spec_support/bucket_forgery#csrf_token"
     # Story 10.0 (AC5) — Server-including controller's implicit GET page action.
@@ -333,6 +353,34 @@ RSpec.describe "Story 9.2: Ruact::Server dual-bucket response negotiation", :sto
       post "/bucket/redirecting", "{}", json_headers
       expect(last_response.status).to eq(200)
       expect(JSON.parse(last_response.body)).to eq("$redirect" => "/posts/1")
+    end
+  end
+
+  # Story 17.0g review R3 — the documented redirect-back works for a function
+  # call too, whichever concern answers it: the errors ride flash to the page
+  # the runtime navigates to (a router Flight GET).
+  describe "Bucket 2 — redirect_to carries ruact_errors through flash", :story_17_0g do
+    {
+      "Ruact::Server alone" => "/bucket/failed_with_redirect",
+      "Ruact::Controller then Ruact::Server (the scaffold's order)" => "/bucket/dual_failed_with_redirect"
+    }.each do |shape, path|
+      it "re-renders the next page with the errors — #{shape}", :aggregate_failures do
+        post path, "{}", json_headers
+        expect(JSON.parse(last_response.body)).to have_key("$redirect")
+
+        get "/errors-demo/new", {}, flight_headers
+        expect(last_response.body).to include("Title can't be blank")
+      end
+    end
+
+    # Review R4 — the user leaves the app; the errors must not surface on
+    # whatever page of it they open next.
+    it "does not stash them for a redirect to another origin", :aggregate_failures do
+      post "/bucket/dual_failed_with_external_redirect", "{}", json_headers
+      expect(JSON.parse(last_response.body)).to eq("$redirect" => "https://pay.example.com/checkout")
+
+      get "/errors-demo/new", {}, flight_headers
+      expect(last_response.body).not_to include("Title can't be blank")
     end
   end
 

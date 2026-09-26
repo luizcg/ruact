@@ -88,6 +88,11 @@ module Ruact
       def classify(env)
         request = ActionDispatch::Request.new(env.dup)
         verdict_in(@router || application_router, request) || :pass
+      rescue Ruact::ConfigurationError => e
+        # A misdeclared `ruact_pages` is the app's bug to see, not a routing
+        # doubt: say so where it shows, then let the request through.
+        Rails.logger&.warn("[ruact] #{e.message}")
+        :pass
       rescue StandardError => e
         Rails.logger&.debug do
           "[ruact] navigation boundary could not classify #{env['PATH_INFO']}: #{e.class}: #{e.message}"
@@ -189,10 +194,11 @@ module Ruact
       # Devise-like controller (it inherits the app's ruact controller, its
       # templates live in the engine) native.
       #
-      # Anything else: including the concern is enough. A `create` has no
-      # template, and answers the router with a Flight redirect row
-      # (Ruact::Controller#redirect_to) — the Story 13.3 redirect-back has to
-      # stay in place, not become a full page load.
+      # Anything else: including the concern is enough — unless the controller
+      # declares its pages (`ruact_pages`, Story 17.0g), and then only for the
+      # declared actions. A `create` has no template, and answers the router
+      # with a Flight redirect row (Ruact::Controller#redirect_to) — the Story
+      # 13.3 redirect-back has to stay in place, not become a full page load.
       #
       # Inside a mounted ENGINE, a non-GET is native even when its controller
       # inherits the app's ruact controller: that is Devise's shape, and its
@@ -210,9 +216,19 @@ module Ruact
         klass = "#{controller.to_s.camelize}Controller".safe_constantize
         return :pass unless klass.is_a?(Class)
         return :native unless klass.include?(Ruact::Controller)
-        return (!in_engine && app_owned?(klass) ? :ruact : :native) unless request.get? || request.head?
+        return non_get_verdict(klass, action, in_engine) unless request.get? || request.head?
 
         klass.ruact_page?(action) ? :ruact : :native
+      end
+
+      # Story 17.0g — a controller that DECLARED its pages (`ruact_pages`) is ruact
+      # only for those: a `create` whose `new` is a plain Rails page re-renders
+      # plain HTML on a validation error, which the router could not show.
+      def non_get_verdict(klass, action, in_engine)
+        return :native if in_engine || !app_owned?(klass)
+        return :native if klass.__ruact_pages && !klass.ruact_page_action?(action)
+
+        :ruact
       end
 
       def app_owned?(klass)

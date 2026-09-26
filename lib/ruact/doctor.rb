@@ -163,14 +163,67 @@ module Ruact
        "Run npm run dev (or bin/dev) to start the Vite dev server."]
     end
 
+    # Story 17.0g (FR116) — reports the ADOPTION MODE instead of demanding one.
+    #
+    # Whole-app (`ruact:install --app`): ApplicationController includes the
+    # concern, and every action with a template renders through ruact — the
+    # message says how many templates that is, which is the cost `--app` hides.
+    # Island (the install default): the concern is on the controllers that
+    # render ruact pages. It used to FAIL every island app, because it only
+    # looked at ApplicationController. With none yet, a warning: the install
+    # worked; there is simply no page.
+    #
+    # Mechanical, like the layout checks: it reads files, it never renders.
     def check_controller
-      path = Rails.root.join("app", "controllers", "application_controller.rb")
-      if File.exist?(path) && File.read(path).include?("Ruact::Controller")
-        [:pass, "Ruact::Controller included in ApplicationController"]
-      else
-        [:fail, "Ruact::Controller not included in ApplicationController",
-         "Run rails generate ruact:install to include Ruact::Controller in ApplicationController."]
+      application = Rails.root.join("app", "controllers", "application_controller.rb")
+      if File.exist?(application) && File.read(application).match?(Ruact::CONTROLLER_INCLUDE)
+        return [:pass, "whole-app mode: ApplicationController includes Ruact::Controller — " \
+                       "#{pluralize_count(ruact_page_templates, 'template')} in app/views render through ruact"]
       end
+
+      count = island_controllers.length
+      return island_without_pages_result if count.zero?
+
+      verb = count == 1 ? "renders" : "render"
+      [:pass, "island mode: #{pluralize_count(count, 'controller')} #{verb} ruact pages (include Ruact::Controller)"]
+    end
+
+    # Controller files that include the concern themselves. Approximate by
+    # design — it reads source, it does not load classes: a controller that
+    # gets the concern through a base controller counts through the base.
+    # `concerns/` holds modules, not controllers; only the app's ROOT
+    # ApplicationController is whole-app mode (an `Admin::ApplicationController`
+    # is an island base like any other).
+    def island_controllers
+      root = Rails.root.join("app", "controllers")
+      Dir.glob(root.join("**", "*.rb").to_s).select do |file|
+        next false if file == root.join("application_controller.rb").to_s
+        next false if file.start_with?("#{root.join('concerns')}/")
+
+        File.read(file).match?(Ruact::CONTROLLER_INCLUDE)
+      end
+    end
+
+    # Page templates: `.html.erb` under app/views — not layouts, partials or
+    # mailer views. Approximate: `ruact_pages` narrowing is not read.
+    def ruact_page_templates
+      Dir.glob(Rails.root.join("app", "views", "**", "*.html.erb").to_s).count do |file|
+        !file.include?("/app/views/layouts/") && !File.basename(file).start_with?("_") &&
+          !File.dirname(file).end_with?("_mailer")
+      end
+    end
+
+    def pluralize_count(count, noun)
+      "#{count} #{noun}#{'s' unless count == 1}"
+    end
+
+    def island_without_pages_result
+      [:warn,
+       "island mode: no controller renders ruact pages yet — add include Ruact::Controller to one, " \
+       "or run rails generate ruact:scaffold",
+       "The install changes no controller (island mode). A page renders through ruact when its " \
+       "controller has `include Ruact::Controller`; narrow it with `ruact_pages only: %i[show]`. " \
+       "`rails generate ruact:install --app` puts it on ApplicationController instead (every page)."]
     end
 
     # Which document a ruact page actually renders into, decided from

@@ -11,7 +11,8 @@ module Ruact
     #
     # Performs the following actions:
     # 1. Creates config/initializers/ruact.rb
-    # 2. Injects `include Ruact::Controller` into ApplicationController
+    # 2. Changes no controller (island mode, Story 17.0g) — unless `--app`, which
+    #    injects `include Ruact::Controller` into ApplicationController
     # 3. Edits NO layout of the app. ruact pages render through the layout the
     #    gem ships (`config.layout = "ruact"`, Story 17.0b), which links the
     #    client-component CSS and the app stylesheets named in
@@ -66,6 +67,15 @@ module Ruact
       # the real shadcn CLI) and then PRINTS the two `npx shadcn` commands
       # rather than running them — they hit the network and `shadcn init` is
       # interactive, so automating them is neither safe nor possible.
+      # Story 17.0g (FR116) — the install changes no controller by default
+      # (island mode): a page becomes ruact when its controller includes
+      # `Ruact::Controller`. `--app` is the explicit way to the other mode.
+      class_option :app,
+                   type: :boolean,
+                   default: false,
+                   desc: "Whole-app mode: include Ruact::Controller in ApplicationController, so EVERY action " \
+                         "with an .html.erb template renders through ruact (and your own layout owns the document)"
+
       class_option :shadcn,
                    type: :boolean,
                    default: false,
@@ -85,15 +95,28 @@ module Ruact
         inject_layout_setting(path)
       end
 
+      # Story 17.0g (FR116) — ONLY under `--app`. Including the concern in
+      # ApplicationController makes every action with a template a ruact page:
+      # installed into an existing app to try one screen, that converted all of
+      # them (a Turbo Frame came back as a React element). An app that already
+      # has it — installed before this — keeps it: removing a line of the app's
+      # is not the install's call, so it says what mode the app is in instead.
       def inject_controller_concern
         controller_file = "app/controllers/application_controller.rb"
-        return unless File.exist?(Pathname(destination_root).join(controller_file))
-
-        content = File.read(Pathname(destination_root).join(controller_file))
-        if content.include?("Ruact::Controller")
-          say_status "skip", "Ruact::Controller already included in ApplicationController", :yellow
+        path = Pathname(destination_root).join(controller_file)
+        unless path.exist?
+          if app?
+            say_status "notice", "no #{controller_file} — add `include Ruact::Controller` to the controller your " \
+                                 "pages inherit from", :yellow
+          end
           return
         end
+
+        if path.read.match?(Ruact::CONTROLLER_INCLUDE)
+          advise_whole_app_install unless app?
+          return
+        end
+        return unless app?
 
         inject_into_file controller_file,
                          "\n  include Ruact::Controller\n",
@@ -384,6 +407,20 @@ module Ruact
       # What the post-install message says about the layout — true for the
       # setting actually in effect, not just for a fresh install.
       def layout_summary
+        [adoption_summary, document_summary].join("\n")
+      end
+
+      def adoption_summary
+        if whole_app?
+          "Whole-app mode: every action with an .html.erb template renders through ruact."
+        else
+          "Island mode: nothing changed in your controllers. A page renders through ruact when its\n" \
+            "controller has `include Ruact::Controller` (narrow it with `ruact_pages only: %i[show]`),\n" \
+            "or run rails generate ruact:scaffold."
+        end
+      end
+
+      def document_summary
         own = configured_app_layout
         return "ruact pages render through your #{own} layout (see any lines printed above)." if own
 
@@ -498,6 +535,7 @@ module Ruact
 
         if layout_assignments(content).any?
           say_status "skip", "config.layout already set in config/initializers/ruact.rb", :yellow
+          warn_whole_app_on_gem_layout if app? && configured_layout_value == %("#{Ruact::GEM_LAYOUT}")
           return
         end
 
@@ -510,7 +548,11 @@ module Ruact
                          after: CONFIGURE_BLOCK
         return warn_initializer_not_injectable(content) if path.read == content && !options[:pretend]
 
-        say_status "update", "set config.layout = \"ruact\" (ruact pages render through ruact's layout)", :green
+        if whole_app?
+          say_status "update", "set config.layout = true (your own layout renders every page)", :green
+        else
+          say_status "update", "set config.layout = \"ruact\" (ruact pages render through ruact's layout)", :green
+        end
       end
 
       # The compiled Tailwind stylesheet still has to be REQUESTED, by whichever
@@ -753,6 +795,8 @@ module Ruact
       # A method, not a constant, because the stylesheet list depends on the
       # app's asset pipeline (see #detected_layout_stylesheets).
       def layout_setting_snippet(variable = "config")
+        return app_layout_setting_snippet(variable) if whole_app?
+
         <<~RUBY
           # Render ruact pages through the layout ruact ships (layouts/ruact). It links
           # the CSS your client components import, then your stylesheets below, and it
@@ -760,6 +804,18 @@ module Ruact
           # stylesheets, copy it into your app: `rails generate ruact:layout`.
           #{variable}.layout = "ruact"
           #{variable}.layout_stylesheets = #{detected_layout_stylesheets}
+
+        RUBY
+      end
+
+      # Whole-app mode (`--app`): the document is the app's own layout, which
+      # then needs the helpers the install prints (see #advise_app_layout).
+      def app_layout_setting_snippet(variable)
+        <<~RUBY
+          # Whole-app mode: every page renders through your own layout, which needs
+          # <%= ruact_head_assets %> in <head> and <%= ruact_js_assets %> next to a
+          # <div id="root"></div> (rails ruact:doctor checks).
+          #{variable}.layout = true
 
         RUBY
       end
@@ -791,6 +847,44 @@ module Ruact
       # after its `end`, outside it), CRLF included.
       CONFIGURE_BLOCK = /^[ \t]*Ruact\.configure\s+do\s*\|(\w+)\|[ \t]*(?:#[^\r\n]*)?\r?\n/
       private_constant :CONFIGURE_BLOCK
+
+      def app?
+        options[:app]
+      end
+
+      def application_controller_includes_ruact?
+        path = Pathname(destination_root).join("app/controllers/application_controller.rb")
+        path.exist? && path.read.match?(Ruact::CONTROLLER_INCLUDE)
+      end
+
+      # Whole-app mode: asked for with `--app`, or already the app's state (an
+      # install from before 17.0g put the include on ApplicationController).
+      def whole_app?
+        app? || application_controller_includes_ruact?
+      end
+
+      # `--app` over an island install: every page now renders through the
+      # layout ruact ships, not the app's own — its <head>, fonts and JavaScript
+      # would be gone app-wide. Said, not changed: the setting is the app's.
+      def warn_whole_app_on_gem_layout
+        say_status "notice", "whole-app mode on ruact's own layout (config.layout = \"ruact\")", :yellow
+        say ""
+        say "  Every page of the app will now render through the layout ruact ships, without"
+        say "  your own layout's <head> and JavaScript. For whole-app mode you probably want"
+        say "  config.layout = true in config/initializers/ruact.rb, with ruact_head_assets and"
+        say "  ruact_js_assets in your layout (rails ruact:doctor checks)."
+        say ""
+      end
+
+      def advise_whole_app_install
+        say_status "notice", "this app is in whole-app mode (ApplicationController includes Ruact::Controller)", :yellow
+        say ""
+        say "  Every action with an .html.erb template renders through ruact. The install"
+        say "  no longer does this by default; your app keeps it. To render only the pages"
+        say "  you choose instead, remove `include Ruact::Controller` from ApplicationController"
+        say "  and add it to the controllers whose pages should be ruact."
+        say ""
+      end
 
       def shadcn?
         options[:shadcn]

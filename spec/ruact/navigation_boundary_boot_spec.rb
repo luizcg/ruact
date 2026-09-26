@@ -92,8 +92,11 @@ GEM_BOUNDARY_BOOT_SCRIPT = <<~RUBY
   def call(method, path, headers: {}, params: nil)
     env = Rack::MockRequest.env_for(path, { method: method, params: params }.merge(headers))
     status, response_headers, body = BoundaryApp.call(env)
+    html = +""
+    body.each { |part| html << part }
     body.close if body.respond_to?(:close)
-    { "status" => status, "boundary" => response_headers["ruact-boundary"] || response_headers["Ruact-Boundary"] }
+    { "status" => status, "boundary" => response_headers["ruact-boundary"] || response_headers["Ruact-Boundary"],
+      "html" => html }
   end
 
   ROUTER = { "HTTP_RUACT_REQUEST" => "1", "HTTP_ACCEPT" => "text/x-component" }.freeze
@@ -121,6 +124,10 @@ GEM_BOUNDARY_BOOT_SCRIPT = <<~RUBY
     "DELETE to an engine controller inheriting the app's" => [:post, "/admin/pages/1", ROUTER, { "_method" => "delete" }],
     "redirect route to another origin" => [:get, "/elsewhere", ROUTER],
     "controller named ...ControllersController" => [:get, "/remote_controllers", ROUTER],
+    "action with a template, not declared a page" => [:get, "/previews", ROUTER],
+    "declared page rendering another template" => [:get, "/previews/1", ROUTER],
+    "undeclared template-only action, browser navigation" => [:get, "/previews", { "HTTP_ACCEPT" => "text/html" }],
+    "POST to an action not declared a page" => [:post, "/previews", ROUTER],
     "DELETE to a gem's controller drawn into the app's routes" =>
       [:post, "/sign_out", ROUTER, { "_method" => "delete" }],
     "POST to a 307 redirect route" => [:post, "/old_form", ROUTER],
@@ -177,6 +184,20 @@ RSpec.describe "the navigation boundary in a booted app (Story 17.0f)", :story_1
       end
     RUBY
     write(root, "app/views/remote_controllers/index.html.erb", "<h1>remotes</h1>\n")
+    # Story 17.0g — pages declared per action. `index` HAS a template (and no
+    # method — Rails renders it implicitly) but is not declared, so it is
+    # ordinary Rails; `show` has NO template of its own (it renders another's)
+    # and is declared, so it is a ruact page — the `ruact_render(template:)`
+    # case 17.0f deferred. `create` is not declared: its POST is the app's.
+    write(root, "app/controllers/previews_controller.rb", <<~RUBY)
+      class PreviewsController < ApplicationController
+        ruact_pages only: %i[show]
+        before_action { RUNS["previews#\#{action_name}"] += 1 }
+        def show = ruact_render(template: "products/show")
+        def create = head(:created)
+      end
+    RUBY
+    write(root, "app/views/previews/index.html.erb", "<h1>list</h1>\n")
     write(root, "app/controllers/admin_panel/dashboard_controller.rb", <<~RUBY)
       module AdminPanel
         class DashboardController < ActionController::Base
@@ -225,6 +246,7 @@ RSpec.describe "the navigation boundary in a booted app (Story 17.0f)", :story_1
         get "go/people", to: redirect("/people/1")
         get "elsewhere", to: redirect("https://blog.example.org/")
         get "remote_controllers", to: "remote_controllers#index"
+        resources :previews, only: %i[index show create]
         mount AdminPanel::Engine, at: "/admin"
         mount ->(_env) { RUNS["rack"] += 1; [200, { "content-type" => "text/html" }, ["rack"]] }, at: "/rack"
         delete "sign_out", to: "vendored_sessions#destroy"
@@ -293,6 +315,21 @@ RSpec.describe "the navigation boundary in a booted app (Story 17.0f)", :story_1
   it_behaves_like "passed through to the app", "no route"
   it_behaves_like "passed through to the app", "ruact page inside an engine"
   it_behaves_like "passed through to the app", "controller named ...ControllersController"
+  it_behaves_like "passed through to the app", "declared page rendering another template"
+  it_behaves_like "answered native without running the action", "action with a template, not declared a page"
+  # Review round 1 (17.0g) — the boundary and default_render read the same
+  # declaration: a non-GET to an action outside `ruact_pages` is the app's too.
+  it_behaves_like "answered native without running the action", "POST to an action not declared a page"
+
+  # Review round 1 (17.0g) — outside `ruact_pages`, an action with a template
+  # renders as plain Rails in the browser: its markup, no ruact document.
+  it "renders an undeclared template-only action as ordinary Rails", :aggregate_failures do
+    page = outcome("undeclared template-only action, browser navigation")
+
+    expect(page).to include("status" => 200, "boundary" => nil, "runs" => 1)
+    expect(page["html"]).to include("<h1>list</h1>")
+    expect(page["html"]).not_to include(%(id="root"))
+  end
 
   # The case the spike missed: no create.html.erb, but the gem's redirect_to
   # answers a ruact request with a Flight redirect row. Classifying it native
@@ -305,6 +342,9 @@ RSpec.describe "the navigation boundary in a booted app (Story 17.0f)", :story_1
     expect(outcome("POST to ruact controller without template")["runs"]).to eq(1)
     expect(outcome("_method=delete to ruact controller")["runs"]).to eq(1)
     expect(outcome("ruact page inside an engine")["runs"]).to eq(1)
+    # 17.0g — and it actually rendered: a NoMethodError on the DSL would also
+    # "pass through", so the status is what proves the page.
+    expect(outcome("declared page rendering another template")).to include("runs" => 1, "status" => 200)
   end
 
   # Review round 2 — a redirect BLOCK is application code; classifying must not

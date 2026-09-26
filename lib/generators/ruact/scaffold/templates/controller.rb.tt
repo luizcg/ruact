@@ -2,9 +2,10 @@
 
 # <%= controller_class_name %>Controller — a complete CRUD on the v2 route-driven contract.
 #
-# `include Ruact::Server` (sibling of the Ruact::Controller already on
-# ApplicationController via `ruact:install`) gives this controller two
-# behaviours at once:
+# `include Ruact::Controller` makes this controller's pages ruact pages — the
+# install no longer puts it on ApplicationController (Story 17.0g: island mode
+# is the default; in whole-app mode, `ruact:install --app`, including it again
+# here is a no-op). `include Ruact::Server` then gives it two behaviours:
 #
 #   - GET actions (index/show/new/edit) need NO explicit `ruact_render` —
 #     Ruact::Controller#default_render activates the RSC pipeline implicitly
@@ -22,6 +23,7 @@
 # NOTE: `include Ruact::Server` must come AFTER `protect_from_forgery` (inherited
 # from ApplicationController) so the CSRF check precedes these actions.
 class <%= controller_class_name %>Controller < ApplicationController
+  include Ruact::Controller
   include Ruact::Server
 
   # --- GET pages (rendered as RSC) -----------------------------------------

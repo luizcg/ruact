@@ -29,7 +29,7 @@ rails generate ruact:install
 bin/dev
 ```
 
-That is the whole install. The [Getting Started guide](https://ruact.dev/docs/getting-started) picks it up from here — first component, first scaffold, `ruact:doctor`. Already have an app? Start at step 2, then read [Progressive migration](https://ruact.dev/docs/guides/progressive-migration) — ruact renders one action at a time and leaves the rest of your views alone.
+That is the whole install. The [Getting Started guide](https://ruact.dev/docs/getting-started) picks it up from here — first component, first scaffold, `ruact:doctor`. Already have an app? Start at step 2, then read [Progressive migration](https://ruact.dev/docs/guides/progressive-migration) — ruact renders only the controllers you include it in and leaves the rest of your views alone.
 
 ## How it works
 
@@ -136,7 +136,7 @@ Everything lives at [ruact.dev](https://ruact.dev):
 - [Getting Started](https://ruact.dev/docs/getting-started) — from `rails new` to a rendered component
 - [Why ruact?](https://ruact.dev/docs/why-ruact) — where it sits next to Hotwire and Inertia
 - [Server functions & queries](https://ruact.dev/docs/api/server-actions) — the full request/response contract
-- [Progressive migration](https://ruact.dev/docs/guides/progressive-migration) — adopting it one action at a time
+- [Progressive migration](https://ruact.dev/docs/guides/progressive-migration) — adopting it one controller at a time
 - [Testing](https://ruact.dev/docs/guides/testing) — render assertions on the server side
 - [Changelog](CHANGELOG.md) — also published at [ruact.dev/docs/changelog](https://ruact.dev/docs/changelog)
 
