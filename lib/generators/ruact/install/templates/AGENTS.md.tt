@@ -15,7 +15,8 @@ truth" below) instead of guessing.
 
 ## Mental model
 
-- A page is a normal Rails controller action rendering a normal `.html.erb`.
+- A page is an action rendering a `.html.erb` in a controller with `include Ruact::Controller`
+  (install adds it to none; `ruact:scaffold` does; `ruact_pages only:` narrows it).
 - Interactive components live in `app/javascript/components/` as `"use client"`
   files, mounted from ERB with a PascalCase self-closing tag:
   `<LikeButton postId={@post.id} />`.

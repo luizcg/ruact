@@ -184,7 +184,8 @@ module Ruact
       count = island_controllers.length
       return island_without_pages_result if count.zero?
 
-      [:pass, "island mode: #{pluralize_count(count, 'controller')} render ruact pages (include Ruact::Controller)"]
+      verb = count == 1 ? "renders" : "render"
+      [:pass, "island mode: #{pluralize_count(count, 'controller')} #{verb} ruact pages (include Ruact::Controller)"]
     end
 
     # A real include line, not a mention in a comment.
