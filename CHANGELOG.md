@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A server-function call's validation errors were lost on `redirect_to`.** An action called from React that registers `ruact_errors(@post)` and then `redirect_to`s answers `{"$redirect": …}`; the page the runtime navigated to was documented to receive those errors, and only did when `Ruact::Controller` sat in front of `Ruact::Server` in the ancestor chain — not with `Ruact::Server` alone, nor in the order `ruact:scaffold` generates. They now ride the flash in every order.
+- **A server-function call's validation errors were lost on `redirect_to`.** An action called from React that registers `ruact_errors(@post)` and then `redirect_to`s answers `{"$redirect": …}`; the page the runtime navigated to was documented to receive those errors, and never did, in any include order. They now ride the flash to it (a same-origin redirect; a redirect to another origin carries none).
 
 - **Clicking from a ruact page to an ordinary Rails page did nothing.** The ruact router intercepts every same-origin link and asked for a ruact response; an ordinary Rails action answered with HTML the router could not render, so the click went nowhere — no page, no URL change, no error. Now the server tells the router, before running anything, when a route is not a ruact page, and the browser loads it normally. A form that posts to such a page is submitted by the browser the same way, so the action runs once and its response — a validation error included — is what you see. `Ruact::NavigationBoundary::Middleware` does this; remove it with `config.middleware.delete Ruact::NavigationBoundary::Middleware` if you need to.
 

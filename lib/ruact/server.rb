@@ -278,18 +278,20 @@ module Ruact
       location = _enforce_open_redirect_protection(location, allow_other_host: allow_other_host)
 
       # Story 13.3 (FR98) — registered errors ride flash to the page the
-      # runtime navigates to (a router Flight GET: no layout prints them). Here
-      # and not only in Ruact::Controller#redirect_to, which this path does not
-      # reach when Server sits in front of it (the scaffold's include order) —
-      # Story 17.0g review R3.
-      __ruact_stash_errors_in_flash
+      # runtime navigates to (a router Flight GET: no layout prints them). A
+      # function call never reaches Ruact::Controller#redirect_to's Flight path,
+      # so the stash lives here too (Story 17.0g review R3). Same-origin only,
+      # like that path: after a redirect to another origin the flash entry
+      # would wait in the session for whatever page the user opens next.
+      path = __ruact_redirect_path(location)
+      __ruact_stash_errors_in_flash if path.start_with?("/") && !path.start_with?("//")
 
       # Story 15.0 (F6) — a Bucket-2 `redirect_to` is a ruact-owned response
       # (`$redirect`; registered errors ride flash), not an injection opt-out.
       @__ruact_function_response_owned = true
       # Story 15.5 (FR109) — mark the `$redirect` sub-shape for the dev log.
       @__ruact_function_redirect = true
-      render json: { "$redirect" => __ruact_redirect_path(location) }
+      render json: { "$redirect" => path }
     end
 
     private
