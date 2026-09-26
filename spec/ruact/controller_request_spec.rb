@@ -605,6 +605,17 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(last_response.body).to include("Title can't be blank")
       end
 
+      # Story 17.0g review R2 — a form whose action is outside `ruact_pages` is
+      # handed to the browser by the navigation boundary: a plain POST, a plain
+      # 302. Its errors must survive that redirect as well.
+      it "survives a plain browser POST and 302, too", :aggregate_failures, :story_17_0g do
+        post "/errors-demo/create", {}, { "HTTP_ACCEPT" => "text/html" }
+        expect(last_response.status).to eq(302)
+
+        get "/errors-demo/new", {}, flight_headers
+        expect(last_response.body).to include("Title can't be blank")
+      end
+
       it "registers errors={} for a successful save and does NOT leak a message across the redirect" do
         post "/errors-demo/create_valid", {}, flight_headers
         get "/errors-demo/new", {}, flight_headers

@@ -27,9 +27,12 @@ module Ruact
         #
         # An action listed in `only:` is a page even without a template of its
         # own — the way to have `ruact_render(template: "posts/show")` treated as
-        # one by the navigation boundary. Names that are not actions of this
-        # controller fail loudly the first time a page is looked up: a typo must
-        # not quietly become "not a ruact page".
+        # one by the navigation boundary. Names that are not actions of the
+        # declaring controller fail loudly the first time one of its pages is
+        # looked up: a typo must not quietly become "not a ruact page". A
+        # declaration a subclass inherits is not checked against it — on a base
+        # controller it is a policy for children that each have some of the
+        # actions.
         #
         # @param only [Symbol, String, Array<Symbol, String>] the page actions
         # @param except [Symbol, String, Array<Symbol, String>] every action but these
@@ -60,35 +63,39 @@ module Ruact
           declared = __ruact_pages
           return true if declared.nil?
 
-          Pages.check_declared!(declared)
+          Pages.check_declared!(self, declared) if declared[:declared_in].equal?(self)
           return declared[:only].include?(action.to_s) if declared[:only]
 
           !declared[:except].include?(action.to_s)
         end
 
-        # Listed in `ruact_pages only:` — a page by declaration, template or not.
+        # Listed in `ruact_pages only:` AND a method of this controller — a page
+        # by declaration, template or not (the method renders another one). A
+        # template-only name still needs the template in this controller's own
+        # folder, which is what `default_render` renders: one inherited through
+        # the view path (a parent's folder) renders as plain Rails, so the
+        # router must not be told it is a ruact page.
         #
         # @param action [String, Symbol]
         # @return [Boolean]
         def ruact_declared_page?(action)
-          Array(__ruact_pages&.dig(:only)).include?(action.to_s)
+          Array(__ruact_pages&.dig(:only)).include?(action.to_s) && action_methods.include?(action.to_s)
         end
       end
 
-      # The typo check, against the class that DECLARED the pages — a base
-      # controller's `ruact_pages` is not about each subclass's actions. Only
-      # `only:` is checked: an `except:` naming a missing action excludes nothing
-      # and harms nothing. A template-only action (no method, a view Rails
-      # renders implicitly) is an action.
+      # The typo check, run for the class that DECLARED the pages (see
+      # `ruact_pages`). Only `only:` is checked: an `except:` naming a missing
+      # action excludes nothing and harms nothing. A template-only action (no
+      # method, a view Rails renders implicitly) is an action.
       #
       # @api private
+      # @param owner [Class] the controller that declared `declared`
       # @param declared [Hash] a `__ruact_pages` declaration
       # @return [void]
       # @raise [Ruact::ConfigurationError] when `only:` names no action of it
-      def self.check_declared!(declared)
-        owner = declared[:declared_in]
+      def self.check_declared!(owner, declared)
         names = Array(declared[:only])
-        return if names.empty? || owner.nil?
+        return if names.empty?
 
         unknown = names - owner.action_methods.to_a
         unknown = unknown.reject { |action| File.exist?(owner.ruact_template_path(action)) }

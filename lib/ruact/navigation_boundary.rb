@@ -194,10 +194,11 @@ module Ruact
       # Devise-like controller (it inherits the app's ruact controller, its
       # templates live in the engine) native.
       #
-      # Anything else: including the concern is enough. A `create` has no
-      # template, and answers the router with a Flight redirect row
-      # (Ruact::Controller#redirect_to) — the Story 13.3 redirect-back has to
-      # stay in place, not become a full page load.
+      # Anything else: including the concern is enough — unless the controller
+      # declares its pages (`ruact_pages`, Story 17.0g), and then only for the
+      # declared actions. A `create` has no template, and answers the router
+      # with a Flight redirect row (Ruact::Controller#redirect_to) — the Story
+      # 13.3 redirect-back has to stay in place, not become a full page load.
       #
       # Inside a mounted ENGINE, a non-GET is native even when its controller
       # inherits the app's ruact controller: that is Devise's shape, and its

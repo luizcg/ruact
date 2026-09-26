@@ -74,10 +74,32 @@ RSpec.describe "Ruact::Controller.ruact_pages", :story_17_0g do
     expect(klass.ruact_page_action?(:about)).to be(true)
   end
 
-  # Review round 1 (17.0g) — a base controller's declaration is checked
-  # against the base: a template-only page lives in the BASE's view folder, not
-  # in each subclass's.
-  it "checks the declaration against the class that made it" do
+  # Review round 2 (17.0g) — on a base controller the declaration is a policy
+  # for the children, each of which has some of the actions; the base itself
+  # has none. Checking it against the base 500'd every child.
+  it "does not check an inherited declaration against the class asking", :aggregate_failures do
+    base = Class.new(ActionController::Base) do
+      include Ruact::Controller
+
+      def self.name = "AdminBaseController"
+      def self.ruact_template_path(action) = Pathname("/nonexistent/admin_base/#{action}.html.erb")
+      ruact_pages only: %i[index show]
+    end
+    child = Class.new(base) do
+      def self.name = "ReportsController"
+      def index; end
+    end
+
+    expect(child.ruact_page_action?(:index)).to be(true)
+    expect(child.ruact_page_action?(:destroy)).to be(false)
+    expect { base.ruact_page_action?(:index) }.to raise_error(Ruact::ConfigurationError)
+  end
+
+  # Review round 2 (17.0g) — `default_render` renders the template in the
+  # controller's OWN folder. A template-only page a child gets from its
+  # parent's folder renders as plain Rails in the child, so the router must not
+  # be told it is a ruact page there.
+  it "does not call a template-only page from a parent's folder a page of the child", :aggregate_failures do
     parent = controller { ruact_pages only: %i[about] }
     allow(parent).to receive(:ruact_template_path).with("about").and_return(Pathname(__FILE__))
     child = Class.new(parent) do
@@ -85,7 +107,8 @@ RSpec.describe "Ruact::Controller.ruact_pages", :story_17_0g do
       def self.ruact_template_path(action) = Pathname("/nonexistent/drafts/#{action}.html.erb")
     end
 
-    expect(child.ruact_page_action?(:about)).to be(true)
+    expect(parent.ruact_page?("about")).to be(true)
+    expect(child.ruact_page?("about")).to be(false)
   end
 
   # An except: naming a missing action excludes nothing — nothing to catch.
