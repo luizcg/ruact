@@ -111,6 +111,20 @@ RSpec.describe "Ruact::Controller.ruact_pages", :story_17_0g do
     expect(child.ruact_page?("about")).to be(false)
   end
 
+  # Review round 3 (17.0g) — the same for an inherited ACTION: the child has
+  # the `show` method, but not `show`'s template in its own folder, so its
+  # `default_render` renders the parent's as plain Rails.
+  it "does not call an inherited action a page of the child without its own template", :aggregate_failures do
+    parent = controller { ruact_pages only: %i[show] }
+    child = Class.new(parent) do
+      def self.name = "ArchivedPostsController"
+      def self.ruact_template_path(action) = Pathname("/nonexistent/archived_posts/#{action}.html.erb")
+    end
+
+    expect(parent.ruact_page?("show")).to be(true)
+    expect(child.ruact_page?("show")).to be(false)
+  end
+
   # An except: naming a missing action excludes nothing — nothing to catch.
   it "does not check the names in except:" do
     klass = controller { ruact_pages except: %i[shwo] }

@@ -229,14 +229,6 @@ module Ruact
     # HTTP round-trip.  Non-RSC requests and external-origin redirects fall through
     # to the standard Rails implementation.
     def redirect_to(options = {}, response_options = {})
-      # Story 13.3 (FR98, AC4) — the Inertia "redirect back with errors" path:
-      # stash any `ruact_errors`-registered errors in flash so they survive the
-      # redirect and re-render as an `errors` prop (no-op when untouched). On
-      # EVERY redirect, not only the Flight one: a form the navigation boundary
-      # hands to the browser (Story 17.0g — its action is outside
-      # `ruact_pages`) redirects with a plain 302, and its errors must survive
-      # that too.
-      __ruact_stash_errors_in_flash
       return super unless ruact_request?
 
       url = url_for(options)
@@ -257,6 +249,15 @@ module Ruact
       rescue ::URI::InvalidURIError
         return super
       end
+
+      # Story 13.3 (FR98, AC4) — the Inertia "redirect back with errors" path:
+      # stash any `ruact_errors`-registered errors in flash so they survive this
+      # Flight redirect and re-render as an `errors` prop (no-op when untouched).
+      # Only here: the next request is the router's Flight GET, which renders
+      # no layout. A plain 302 (a form outside `ruact_pages`, Story 17.0g) is
+      # followed by a full page whose layout may print every flash entry — that
+      # action is plain Rails and re-renders its errors the Rails way.
+      __ruact_stash_errors_in_flash
 
       # Story 15.5 (FR109) — mark the Flight-redirect sub-shape for the dev log.
       @__ruact_negotiated_page = :flight_redirect

@@ -69,17 +69,22 @@ module Ruact
           !declared[:except].include?(action.to_s)
         end
 
-        # Listed in `ruact_pages only:` AND a method of this controller — a page
-        # by declaration, template or not (the method renders another one). A
-        # template-only name still needs the template in this controller's own
-        # folder, which is what `default_render` renders: one inherited through
-        # the view path (a parent's folder) renders as plain Rails, so the
-        # router must not be told it is a ruact page.
+        # Listed in `ruact_pages only:` by THIS controller, as a method of it — a
+        # page by declaration, template or not (the method renders another one).
+        # Everything else needs the template in the controller's own folder,
+        # which is what `default_render` renders: a template reached through a
+        # parent's folder (an inherited declaration, an inherited action, a
+        # template-only name) renders as plain Rails, so the router must not be
+        # told it is a ruact page. A subclass that renders another template on
+        # purpose redeclares its pages.
         #
         # @param action [String, Symbol]
         # @return [Boolean]
         def ruact_declared_page?(action)
-          Array(__ruact_pages&.dig(:only)).include?(action.to_s) && action_methods.include?(action.to_s)
+          declared = __ruact_pages
+          return false unless declared && declared[:declared_in].equal?(self)
+
+          Array(declared[:only]).include?(action.to_s) && action_methods.include?(action.to_s)
         end
       end
 

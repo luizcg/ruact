@@ -277,6 +277,13 @@ module Ruact
       _ensure_url_is_http_header_safe(location)
       location = _enforce_open_redirect_protection(location, allow_other_host: allow_other_host)
 
+      # Story 13.3 (FR98) — registered errors ride flash to the page the
+      # runtime navigates to (a router Flight GET: no layout prints them). Here
+      # and not only in Ruact::Controller#redirect_to, which this path does not
+      # reach when Server sits in front of it (the scaffold's include order) —
+      # Story 17.0g review R3.
+      __ruact_stash_errors_in_flash
+
       # Story 15.0 (F6) — a Bucket-2 `redirect_to` is a ruact-owned response
       # (`$redirect`; registered errors ride flash), not an injection opt-out.
       @__ruact_function_response_owned = true
