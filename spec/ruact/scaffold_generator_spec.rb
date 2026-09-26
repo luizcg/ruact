@@ -90,6 +90,13 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(controller).to include("include Ruact::Server")
     end
 
+    # Story 17.0g — island mode is the install default, so the concern is no
+    # longer on ApplicationController: the generated controller includes it, and
+    # BEFORE Ruact::Server (the CSRF ordering note in the template).
+    it "includes Ruact::Controller before Ruact::Server", :story_17_0g do
+      expect(controller.index("include Ruact::Controller")).to be < controller.index("include Ruact::Server")
+    end
+
     it "does NOT include ActionController::Live (no Suspense in the skeleton)" do
       expect(controller).not_to include("ActionController::Live")
     end

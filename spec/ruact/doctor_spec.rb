@@ -109,29 +109,87 @@ RSpec.describe Ruact::Doctor do
 
   # --- check_controller ---
 
-  describe "#check_controller (AC#1, #4)" do
+  # Story 17.0g (FR116) — the check reports the ADOPTION MODE. Island (the
+  # install default): the concern is on the controllers that render ruact
+  # pages; whole-app (`--app`): it is on ApplicationController. It used to FAIL
+  # every island app, because it only asked about ApplicationController.
+  describe "#check_controller (Story 17.0g — adoption mode)", :story_17_0g do
     subject(:doctor) { described_class.new }
 
-    context "when ApplicationController includes Ruact::Controller" do
-      before { make_controller(with_include: true) }
+    def write_controller(name, body)
+      dir = tmpdir.join("app", "controllers")
+      FileUtils.mkdir_p(dir)
+      File.write(dir.join(name), body)
+    end
 
-      it "returns :pass" do
-        status, = doctor.send(:check_controller)
+    def write_view(path)
+      file = tmpdir.join("app", "views", path)
+      FileUtils.mkdir_p(file.dirname)
+      File.write(file, "<h1>x</h1>")
+    end
+
+    context "when ApplicationController includes Ruact::Controller (whole-app)" do
+      before do
+        make_controller(with_include: true)
+        write_view("posts/index.html.erb")
+        write_view("posts/_row.html.erb")
+        write_view("pages/about.html.erb")
+        write_view("layouts/application.html.erb")
+      end
+
+      it "passes, naming the mode and how many templates now render through ruact", :aggregate_failures do
+        status, message = doctor.send(:check_controller)
+
         expect(status).to eq(:pass)
+        expect(message).to include("whole-app")
+        # Partials and layouts are not pages.
+        expect(message).to include("2 templates")
       end
     end
 
-    context "when Ruact::Controller is not included" do
-      before { make_controller(with_include: false) }
-
-      it "returns :fail" do
-        status, = doctor.send(:check_controller)
-        expect(status).to eq(:fail)
+    context "when a controller of its own includes it (island)" do
+      before do
+        make_controller(with_include: false)
+        write_controller("products_controller.rb", "class ProductsController < ApplicationController
+  include Ruact::Controller
+end
+")
+        write_controller("people_controller.rb", "class PeopleController < ApplicationController
+end
+")
       end
 
-      it "message is 'Ruact::Controller not included in ApplicationController'" do
-        _, msg = doctor.send(:check_controller)
-        expect(msg).to eq("Ruact::Controller not included in ApplicationController")
+      it "passes, naming the mode and how many controllers render ruact pages", :aggregate_failures do
+        status, message = doctor.send(:check_controller)
+
+        expect(status).to eq(:pass)
+        expect(message).to include("island").and include("1 controller")
+      end
+    end
+
+    context "when nothing includes it yet (a fresh island install)" do
+      before { make_controller(with_include: false) }
+
+      it "warns — not a failure — and says how to get a first page", :aggregate_failures do
+        status, message = doctor.send(:check_controller)
+
+        expect(status).to eq(:warn)
+        expect(message).to include("include Ruact::Controller").and include("ruact:scaffold")
+      end
+    end
+
+    # A mention is not an include.
+    context "when the include is commented out" do
+      before do
+        make_controller(with_include: false)
+        write_controller("products_controller.rb", "class ProductsController < ApplicationController
+  # include Ruact::Controller
+end
+")
+      end
+
+      it "does not count it" do
+        expect(doctor.send(:check_controller).first).to eq(:warn)
       end
     end
   end

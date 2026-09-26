@@ -6,6 +6,7 @@ require "uri"
 require_relative "view_helper"
 require_relative "validation_errors_collector"
 require_relative "controller/document_rendering"
+require_relative "controller/pages"
 
 module Ruact
   # Include in ApplicationController to enable RSC rendering.
@@ -31,21 +32,15 @@ module Ruact
     # Who owns the `<head>` — the host app's layout, with ruact's built-in shell
     # as the un-migrated fallback. See Ruact::Controller::DocumentRendering.
     include Ruact::Controller::DocumentRendering
+    # Which actions are ruact pages — the whole controller, or the ones it
+    # declares with `ruact_pages` (Story 17.0g). See Ruact::Controller::Pages.
+    include Ruact::Controller::Pages
 
     # Story 17.0f — "is this action a ruact PAGE?", answered at CLASS level so the
     # navigation boundary (Ruact::NavigationBoundary) can ask it before any action
     # runs, and so it and `default_render` read ONE definition rather than two
     # that could drift (the 2026-09-16 spike's classifier kept its own copy).
     class_methods do
-      # Whether `action` is a page this controller renders through ruact. Every
-      # action is, today; Story 17-0g narrows it (pages declared per action).
-      #
-      # @param _action [String, Symbol]
-      # @return [Boolean]
-      def ruact_page_action?(_action)
-        true
-      end
-
       # The template `default_render` looks for — the literal
       # `Rails.root/app/views/<controller_path>/<action>.html.erb`, not the view
       # path lookup, which is what keeps an engine's own templates (Devise's)
@@ -59,12 +54,13 @@ module Ruact
         Rails.root.join("app", "views", controller_path, "#{action}.html.erb")
       end
 
-      # A GET to `action` renders through ruact when both hold.
+      # A GET to `action` renders through ruact: it is a page, and it either
+      # has its template or was declared by name (it renders another one).
       #
       # @param action [String, Symbol]
       # @return [Boolean]
       def ruact_page?(action)
-        ruact_page_action?(action) && File.exist?(ruact_template_path(action))
+        ruact_page_action?(action) && (ruact_declared_page?(action) || File.exist?(ruact_template_path(action)))
       end
     end
 
@@ -267,8 +263,10 @@ module Ruact
         request.headers["Ruact-Request"] == "1"
     end
 
+    # Implicit rendering needs the action's OWN template: an action declared a
+    # page without one renders itself (`ruact_render(template: …)`).
     def ruact_template_exists?
-      self.class.ruact_page?(action_name)
+      self.class.ruact_page_action?(action_name) && File.exist?(default_template_path)
     end
 
     def default_template_path
