@@ -7,6 +7,7 @@ require_relative "view_helper"
 require_relative "validation_errors_collector"
 require_relative "controller/document_rendering"
 require_relative "controller/pages"
+require_relative "controller/page_rendering"
 
 module Ruact
   # Include in the controllers whose pages render through ruact (island mode,
@@ -39,6 +40,9 @@ module Ruact
     # Which actions are ruact pages — the whole controller, or the ones it
     # declares with `ruact_pages` (Story 17.0g). See Ruact::Controller::Pages.
     include Ruact::Controller::Pages
+    # An explicit `render` of a ruact page goes through ruact (Story 17.0i).
+    # See Ruact::Controller::PageRendering.
+    include Ruact::Controller::PageRendering
 
     # Story 17.0f — "is this action a ruact PAGE?", answered at CLASS level so the
     # navigation boundary (Ruact::NavigationBoundary) can ask it before any action
@@ -138,11 +142,26 @@ module Ruact
     # +template+: logical template name (e.g. "posts/custom"), or nil to use
     #             the current action's default template.
     # +locals+:   hash of local variables to pass to the template.
-    def ruact_render(template: nil, locals: {})
+    # +status+:   the response status, as `render` takes it (Story 17.0i) —
+    #             `:unprocessable_entity`, `422`… — in the HTML document and the
+    #             Flight payload alike. Omitted, the response keeps the status it
+    #             has (200).
+    def ruact_render(template: nil, locals: {}, status: nil)
+      __ruact_render(template: template, locals: locals, status: status)
+    end
+
+    # `ruact_render`, plus the lookup details an explicit `render` carries
+    # (`variants:`, `locale:`, `formats:`, `handlers:` — Story 17.0i review R3):
+    # the page renders with the variant or locale Rails would have used.
+    def __ruact_render(template: nil, locals: {}, status: nil, details: {})
       # Story 13.3 (FR98, AC4) — seed the collector from a redirect-back flash
       # before the view evaluates, so `errors={ruact_errors}` surfaces surviving
       # errors (no-op on a plain render — `ruact_errors` then returns `{}`).
       __ruact_read_errors_from_flash
+      # Resolved the way `render status:` resolves it (Rack::Utils.status_code),
+      # and set BEFORE anything is written: the streamed Flight response sends
+      # its headers on the first row.
+      self.status = status if status
 
       pipeline  = RenderPipeline.new(ruact_manifest, controller_path: controller_path, logger: logger)
       streaming = ruact_request? && self.class.ancestors.include?(ActionController::Live)
@@ -162,7 +181,7 @@ module Ruact
       # (NFR8). See Story 7.9 / Bug 7.8-B.
       with_render_context do |render_context|
         opts = template ? { template: template } : { action: action_name }
-        html = render_to_string(opts.merge(layout: false, locals: locals))
+        html = render_to_string(opts.merge(details).merge(layout: false, locals: locals))
         emit_ruact_response(pipeline, html, render_context, streaming: streaming)
       end
     end
@@ -224,7 +243,8 @@ module Ruact
     end
 
     # Overrides Rails redirect_to for RSC requests: emits a Flight redirect row
-    # (`0:{"redirectUrl":"...","redirectType":"push"}`) instead of a 302 response.
+    # (`0:` followed by a JSON object with `redirectUrl` and `redirectType: "push"`)
+    # instead of a 302 response.
     # This allows the client-side router to handle the navigation without an extra
     # HTTP round-trip.  Non-RSC requests and external-origin redirects fall through
     # to the standard Rails implementation.
@@ -270,6 +290,13 @@ module Ruact
       request.headers["Accept"]&.include?("text/x-component") ||
         request.headers["Ruact-Request"] == "1"
     end
+
+    # Rails keeps `redirect_to` PUBLIC, and this module's body is private from
+    # `private` above: the `responders` gem (Devise's `respond_with`) calls
+    # `controller.redirect_to` with an explicit receiver (Story 17.0i). Public
+    # is not routable here — Rails excludes its own public methods from
+    # `action_methods`.
+    public :redirect_to
 
     # Implicit rendering needs the action's OWN template: an action declared a
     # page without one renders itself (`ruact_render(template: …)`).

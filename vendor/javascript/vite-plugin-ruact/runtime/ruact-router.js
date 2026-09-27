@@ -533,7 +533,12 @@ async function _processFlightResponse(response, {
     }
   }
 
-  if (!response.ok) {
+  // Story 17.0i — a Flight 422 is a page: `render :new, status:
+  // :unprocessable_entity` re-rendering a form with its validation errors. The
+  // errors are the content, not a transport failure. Every other non-2xx stays
+  // a failure — an HTML 422 (Rails' own error page) included.
+  const unprocessable = response.status === 422 && _isFlight(response);
+  if (!response.ok && !unprocessable) {
     const msg = `[ruact] Request failed: ${response.status} ${response.statusText}`;
     console.error(msg);
     const err = new Error(msg);
@@ -543,6 +548,12 @@ async function _processFlightResponse(response, {
     if (throwOnError) throw err;
     return;
   }
+
+  // Story 17.0i — a form's 422 re-render keeps the form's URL: the POST URL is
+  // not one a reload or Back can ask for again (a reload of `/posts` would be
+  // the index). Unless the fetch followed a redirect: it then ended on a GET,
+  // and that URL is the page being shown.
+  const pushEntry = push && !(unprocessable && method !== "GET" && !response.redirected);
 
   // Use final URL after any redirects (response.url is the resolved URL).
   const finalPath = response.url
@@ -574,7 +585,7 @@ async function _processFlightResponse(response, {
       }
       // Normal case: build tree and render immediately.
       const tree = buildTreeFromRows(rows, _moduleRegistry);
-      if (push) history.pushState(null, "", finalPath);
+      if (pushEntry) history.pushState(null, "", finalPath);
       _onNavigate(tree);
       if (scroll) window.scrollTo(0, 0);
       initialTreeSet = true;
@@ -618,7 +629,7 @@ async function _processFlightResponse(response, {
   // Fallback: if row 0 never triggered (shouldn't happen with valid server)
   if (!initialTreeSet && !redirected && rows.has(0)) {
     const tree = buildTreeFromRows(rows, _moduleRegistry);
-    if (push) history.pushState(null, "", finalPath);
+    if (pushEntry) history.pushState(null, "", finalPath);
     _onNavigate(tree);
     if (scroll) window.scrollTo(0, 0);
   }

@@ -42,11 +42,48 @@ module Ruact
         expect(entry[:props]["label"]).to eq("Like")
       end
 
+      # Story 17.0i review R1 — the innermost template can be a partial or a
+      # layout: rendering THAT as the page is not the fix.
+      it "points at the page, not the partial or layout, holding the component", :aggregate_failures do
+        %w[posts/_form layouts/application].each do |path|
+          bare = Object.new
+          bare.extend(described_class)
+          bare.instance_variable_set(:@current_template, Struct.new(:virtual_path).new(path))
+
+          message = begin
+            bare.__ruact_component__("NavBar", {})
+          rescue Ruact::Error => e
+            e.message
+          end
+
+          expect(message).to include("\"#{path}\"")
+          expect(message).not_to include("ruact_render(template: \"#{path}\"")
+          expect(message).to include("the page that renders it")
+        end
+      end
+
+      # Review R2 — in a mailer's view, `controller` is the mailer: not a page a
+      # concern would fix.
+      it "does not tell a mailer to include the concern", :aggregate_failures do
+        mailer = Struct.new(:name).new("UserMailer")
+        bare = Object.new
+        bare.extend(described_class)
+        bare.define_singleton_method(:controller) { mailer }
+        message = begin
+          bare.__ruact_component__("NavBar", {})
+        rescue Ruact::Error => e
+          e.message
+        end
+
+        expect(message).not_to include("include Ruact::Controller`")
+        expect(message).to include("only in a page a ruact controller renders")
+      end
+
       it "raises a clear error when called outside a ruact_render flow" do
         bare = Object.new
         bare.extend(described_class)
         expect { bare.__ruact_component__("NavBar", {}) }
-          .to raise_error(Ruact::Error, /__ruact_component__ called outside a ruact_render flow/)
+          .to raise_error(Ruact::Error, %r{<NavBar /> is a client component.*outside ruact.*ruact_render\(template: }m)
       end
     end
 

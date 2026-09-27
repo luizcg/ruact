@@ -94,12 +94,12 @@ READ IT instead of simulating the name generation. Regenerate after routes/queri
    (a Flight stream for client-side navigation, an HTML page otherwise). You
    cannot infer the response shape from the controller body alone — the
    caller picks it.
-4. **`ruact_errors` requires fall-through.** On the `if @post.save ... else`
-   path, call `ruact_errors(@post)` and let the action END there — ruact's
-   implicit render injects `errors: { attribute: [messages] }` into the JSON.
-   An explicit `render` on that branch opts out of the injection. In the
-   redirect-back flow, `ruact_errors(@post)` then `redirect_to` carries the
-   errors through flash to the next render.
+4. **`ruact_errors` requires fall-through.** On a function call's failed-save
+   branch, call `ruact_errors(@post)` and let the action END — the implicit
+   render injects `errors: { attribute: [messages] }` into the JSON (an explicit
+   `render` opts out). On a page form, `ruact_errors(@post)` then
+   `render :new, status: :unprocessable_entity` re-renders the page through ruact
+   (view: `errors={ruact_errors}`); `redirect_to` instead carries them via flash.
 5. **Accessor names are derived, not declared.** `posts#create` → `createPost`,
    `posts#publish_all` → `publishAllPosts`; query methods camelCase the same
    way (`search_users` → `searchUsers`). Collisions fail loudly at boot;

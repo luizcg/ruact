@@ -33,6 +33,23 @@ require "ruact/controller"
 # resolver finds them. Defined before the describe block so the controller
 # class exists when routes are appended.
 module ControllerRequestSpecSupport
+  # Story 17.0i — the status demos' POST routes (path, controller#action).
+  STATUS_DEMO_ROUTES = [
+    *%w[create_action create_string create_hash create_template create_locals create_json create_plain
+        create_other_folder explicit create_respond_to create_no_status create_delegated redirect_delegated
+        create_scaffold_style create_with_location create_formats_html create_formats_json create_formats_nil
+        create_pdf create_variant create_locale create_assigns create_alert create_prefixes]
+      .map { |action| ["/status-demo/#{action}", "status_demo##{action}"] },
+    ["/status-pages-demo/create", "status_pages_demo#create"],
+    ["/status-demo/create_with_layout", "status_demo#create_with_layout"],
+    ["/status-plain-demo/create", "status_plain_demo#create"],
+    ["/layout-demo/create_unprocessable", "layout_demo#create_unprocessable"],
+    ["/ghost-layout-demo/create_unprocessable", "ghost_layout_demo#create_unprocessable"],
+    ["/unwired-layout-demo/create_unprocessable", "unwired_layout_demo#create_unprocessable"],
+    ["/status-live-demo/create", "status_live_demo#create"],
+    ["/status-rescue-demo/create", "status_rescue_demo#create"]
+  ].freeze
+
   class << self
     attr_reader :manifest_path
 
@@ -127,6 +144,8 @@ module ControllerRequestSpecSupport
           get "/ghost-layout-demo/show", to: "controller_request_spec_support/ghost_layout_demo#show"
           # Story 17.0f — a plain Rails page through the SAME host layout.
           get "/plain-layout-demo/show", to: "controller_request_spec_support/plain_layout_demo#show"
+          # Story 17.0i — a ruact page answers with a status.
+          STATUS_DEMO_ROUTES.each { |(path, target)| post path, to: "controller_request_spec_support/#{target}" }
         end
       end
     end
@@ -199,6 +218,116 @@ module ControllerRequestSpecSupport
     def show; end
   end
 
+  # Story 17.0i — the Rails idiom for a failed save, on a ruact page. The 422
+  # symbol differs across the Rack versions of the CI matrix
+  # (`:unprocessable_entity` on 2.2, `:unprocessable_content` on 3.1+, where the
+  # old name warns): take the one this Rack knows.
+  UNPROCESSABLE = Rack::Utils::SYMBOL_TO_STATUS_CODE.key(422)
+
+  class StatusDemoController < ActionController::Base
+    include Ruact::Controller
+
+    def new; end
+    def create_action = render(:new, status: UNPROCESSABLE)
+    def create_string = render("new", status: 422)
+    def create_hash = render(action: :new, status: 422)
+    def create_template = render(template: "controller_request_spec_support/status_demo/new", status: 422)
+    def create_locals = render(:with_locals, locals: { label: "from-locals" }, status: 422)
+    def create_json = render(json: { ok: false }, status: 422)
+    def create_plain = render(plain: "nope", status: 422)
+    def create_other_folder = render(template: "controller_request_spec_support/implicit_demo/show", status: 422)
+    def explicit = ruact_render(template: "controller_request_spec_support/status_demo/new", status: UNPROCESSABLE)
+    def create_respond_to = respond_to { |format| format.html { render :new, status: 422 } }
+    def create_no_status = render(:new)
+
+    # Review R1 — the stock Rails scaffold: the JSON branch renders `show`, and
+    # `show` has a JSON template next to the ruact page. Rails' negotiated
+    # format decides which one renders, not the Accept header's `*/*`.
+    def create_scaffold_style
+      respond_to do |format|
+        format.html { render :new, status: 422 }
+        format.json { render :show, status: :created, location: "/status-demo/1" }
+      end
+    end
+
+    def create_with_location = render(:new, status: 201, location: "/status-demo/1")
+    def create_with_layout = render(:new, layout: "no_such_layout", status: 422)
+    # Review R2 — `formats:` as Rails takes it: a single value, not only an Array.
+    def create_formats_html = render(:new, formats: :html, status: 422)
+    def create_formats_json = render(:show, formats: :json, status: 201)
+    def create_formats_nil = render(:new, formats: nil, status: 422)
+
+    # Review R2 — an option ruact does not know (wicked_pdf's `pdf:`) is not
+    # ruact's to answer.
+    # Review R3 — options Rails honours on a template render, honoured here too.
+    def create_variant = render(:new, variant: :phone, status: 422)
+    def create_locale = render(:new, locale: :en, status: 422)
+    def create_assigns = render(:with_assigns, assigns: { assigned: "from-assigns" }, status: 422)
+    # Review R3 — a key Rails ignores in silence (it is not the flash).
+    def create_alert = render(:new, status: 422, alert: "Could not save")
+    # Review R4 — `prefixes:` names another folder's template; ruact must not
+    # render its own `show` in its place.
+    def create_prefixes = render(:show, prefixes: ["controller_request_spec_support/implicit_demo"], status: 422)
+
+    def create_pdf
+      render(pdf: "report", template: "controller_request_spec_support/status_demo/new",
+             formats: [:html])
+    end
+
+    # The `responders` gem (Devise's `respond_with`) calls `controller.render`
+    # and `controller.redirect_to` with an explicit receiver: both must stay as
+    # public as Rails makes them.
+    def create_delegated = Delegator.new(self).render_new
+    def redirect_delegated = Delegator.new(self).redirect_home
+  end
+
+  Delegator = Struct.new(:controller) do
+    def render_new = controller.render(:new, status: 422)
+    def redirect_home = controller.redirect_to("/status-demo/new")
+  end
+
+  # Story 17.0i — a streaming controller: the Flight rows go out as they are
+  # written, so the status has to be set before the first one.
+  class StatusLiveDemoController < ActionController::Base
+    include ActionController::Live
+    include Ruact::Controller
+
+    def create = render(:new, status: 422)
+  end
+
+  # Story 17.0i — no `include Ruact::Controller` at all: the view helper is
+  # global, so the error must say to include the concern, not to call a
+  # `ruact_render` this controller does not have.
+  class StatusPlainDemoController < ActionController::Base
+    def create = render(template: "controller_request_spec_support/implicit_demo/show", status: 422)
+  end
+
+  # Story 17.0i review R4 — a render ruact declined (an `alert:`) raises, and a
+  # `rescue_from` renders another template: the second error must not repeat
+  # the first render's explanation.
+  class StatusRescueDemoController < ActionController::Base
+    include Ruact::Controller
+
+    rescue_from RuntimeError, with: :render_fallback
+
+    def create = render(:boom, status: 422, alert: "x")
+
+    private
+
+    def render_fallback(_error) = render(template: "controller_request_spec_support/implicit_demo/show")
+  end
+
+  # Story 17.0i — `new` is not among the declared pages, so its template is not
+  # a ruact page here: Rails renders it, and the component in it fails loudly.
+  class StatusPagesDemoController < ActionController::Base
+    include Ruact::Controller
+
+    ruact_pages only: %i[show]
+
+    def show; end
+    def create = render(:new, status: 422)
+  end
+
   # The layout owns the document. Both controllers declare a NAMED layout
   # instead of relying on `layouts/application`, so adding them cannot change
   # what every other controller in this file renders (the rest have no
@@ -212,6 +341,9 @@ module ControllerRequestSpecSupport
     def show
       ruact_render
     end
+
+    # Story 17.0i — the status survives this document branch.
+    def create_unprocessable = ruact_render(template: "controller_request_spec_support/layout_demo/show", status: 422)
   end
 
   # Story 17.0f — whole-app mode: the app's layout calls ruact_head_assets and
@@ -253,6 +385,12 @@ module ControllerRequestSpecSupport
     def show
       ruact_render
     end
+
+    # Story 17.0i — the status survives this document branch.
+    def create_unprocessable
+      ruact_render(template: "controller_request_spec_support/ghost_layout_demo/show",
+                   status: 422)
+    end
   end
 
   # A layout that calls `ruact_js_assets` but has no root div to mount into.
@@ -278,6 +416,12 @@ module ControllerRequestSpecSupport
     def show
       ruact_render
     end
+
+    # Story 17.0i — the status survives this document branch.
+    def create_unprocessable
+      ruact_render(template: "controller_request_spec_support/unwired_layout_demo/show",
+                   status: 422)
+    end
   end
 end
 
@@ -291,6 +435,64 @@ ControllerRequestSpecSupport.write_view(
     </div>
   ERB
 )
+
+# Story 17.0i — conventional templates for the status demos.
+ControllerRequestSpecSupport.write_view(
+  "controller_request_spec_support/status_demo", "new", <<~ERB
+    <div>
+      <DemoButton label={"status-new"} errors={ruact_errors} />
+    </div>
+  ERB
+)
+ControllerRequestSpecSupport.write_view(
+  "controller_request_spec_support/status_demo", "with_locals", <<~ERB
+    <div>
+      <DemoButton label={label} />
+    </div>
+  ERB
+)
+STATUS_DEMO_VIEWS = ControllerRequestSpecSupport.app_root.join("app/views/controller_request_spec_support/status_demo")
+File.write(STATUS_DEMO_VIEWS.join("new.html+phone.erb"), %(<DemoButton label={"status-new-phone"} />\n))
+ControllerRequestSpecSupport.write_view(
+  "controller_request_spec_support/status_rescue_demo", "boom", %(<% raise "boom" %>\n)
+)
+ControllerRequestSpecSupport.write_view(
+  "controller_request_spec_support/status_demo", "with_assigns", %(<DemoButton label={@assigned} />\n)
+)
+ControllerRequestSpecSupport.write_view(
+  "controller_request_spec_support/status_live_demo", "new", <<~ERB
+    <div>
+      <DemoButton label={"status-new"} />
+    </div>
+  ERB
+)
+ControllerRequestSpecSupport.write_view(
+  "controller_request_spec_support/status_demo", "show", <<~ERB
+    <div>
+      <DemoButton label={"status-show"} />
+    </div>
+  ERB
+)
+# Review R1 — templates of their own, so an action that renders `json:` or
+# `plain:` WOULD be taken for a page if the renderer exclusion broke.
+%w[create_json create_plain].each do |action|
+  ControllerRequestSpecSupport.write_view(
+    "controller_request_spec_support/status_demo", action, %(<DemoButton label={"#{action}-page"} />\n)
+  )
+end
+File.write(
+  ControllerRequestSpecSupport.app_root.join("app/views/controller_request_spec_support/status_demo/show.json.erb"),
+  %({"json":"show"})
+)
+%w[show new].each do |action|
+  ControllerRequestSpecSupport.write_view(
+    "controller_request_spec_support/status_pages_demo", action, <<~ERB
+      <div>
+        <DemoButton label={"pages-#{action}"} />
+      </div>
+    ERB
+  )
+end
 
 # Reset Rails.application so this spec can boot its own minimal app even if a
 # prior spec ran a different Rails::Application subclass (the constant is
@@ -745,6 +947,266 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(last_response.status).to eq(200)
         expect(last_response.headers["Content-Type"]).to include("text/html")
         expect(last_response.body).to include("DemoButton")
+      end
+    end
+
+    # Story 17.0i — `render :new, status: :unprocessable_entity`, the first thing
+    # a Rails developer writes for a failed save, answered 500 on a ruact page
+    # ("__ruact_component__ called outside a ruact_render flow").
+    describe "Story 17.0i: a ruact page answers with a status", :story_17_0i do
+      # Accept only, like the rest of this file: with `Ruact-Request: 1` the
+      # navigation boundary (17.0f) would answer these spec-file controllers
+      # (defined outside Rails.root/app) native, before the action runs.
+      let(:flight_headers) { { "HTTP_ACCEPT" => "text/x-component" } }
+      let(:html_headers)   { { "HTTP_ACCEPT" => "text/html" } }
+
+      shared_examples "a ruact page answering 422" do |path, label|
+        it "#{path}: renders through ruact with 422 — as HTML", :aggregate_failures do
+          post path, {}, html_headers
+
+          expect(last_response.status).to eq(422)
+          expect(last_response.headers["Content-Type"]).to include("text/html")
+          expect(last_response.body).to include(label)
+          expect(last_response.body).to include(%(id="root"))
+        end
+
+        it "#{path}: renders through ruact with 422 — as Flight", :aggregate_failures do
+          post path, {}, flight_headers
+
+          expect(last_response.status).to eq(422)
+          expect(last_response.headers["Content-Type"]).to include("text/x-component")
+          expect(last_response.body).to include(label)
+        end
+      end
+
+      it_behaves_like "a ruact page answering 422", "/status-demo/create_action", "status-new"
+      it_behaves_like "a ruact page answering 422", "/status-demo/create_string", "status-new"
+      it_behaves_like "a ruact page answering 422", "/status-demo/create_hash", "status-new"
+      it_behaves_like "a ruact page answering 422", "/status-demo/create_template", "status-new"
+      it_behaves_like "a ruact page answering 422", "/status-demo/create_locals", "from-locals"
+
+      # `format.html` in a `respond_to` matches the HTML request. A Flight
+      # request matches no format at all (`text/x-component` is not a Rails
+      # MIME type) — a gap older than this story, in deferred-work.
+      it "renders through ruact from a respond_to's format.html", :aggregate_failures do
+        post "/status-demo/create_respond_to", {}, html_headers
+
+        expect(last_response.status).to eq(422)
+        expect(last_response.body).to include("status-new")
+      end
+
+      it_behaves_like "a ruact page answering 422", "/status-demo/explicit", "status-new"
+
+      it "streams a Flight 422 with ActionController::Live", :aggregate_failures do
+        post "/status-live-demo/create", {}, flight_headers
+
+        expect(last_response.status).to eq(422)
+        expect(last_response.headers["Content-Type"]).to include("text/x-component")
+        expect(last_response.body).to include("status-new")
+      end
+
+      it_behaves_like "a ruact page answering 422", "/status-demo/create_delegated", "status-new"
+
+      it "keeps redirect_to callable with an explicit receiver, as Rails does", :aggregate_failures do
+        post "/status-demo/redirect_delegated", {}, flight_headers
+
+        expect(last_response.status).to eq(200)
+        expect(last_response.body).to include("redirectUrl")
+      end
+
+      # Review R1 — what Rails negotiated wins: a `.json` path, `format.json`,
+      # a jQuery-style XHR or an empty Accept all render what Rails picks.
+      context "when Rails negotiated a format other than the page's" do
+        it "renders the JSON template for a .json request with Accept */*", :aggregate_failures do
+          post "/status-demo/create_scaffold_style.json", {}, { "HTTP_ACCEPT" => "*/*" }
+
+          expect(last_response.status).to eq(201)
+          expect(last_response.headers["Content-Type"]).to include("application/json")
+          expect(last_response.body).to eq(%({"json":"show"}))
+          expect(last_response.headers["Location"]).to end_with("/status-demo/1")
+        end
+
+        it "renders JSON for an XHR that prefers it" do
+          post "/status-demo/create_scaffold_style", {},
+               { "HTTP_ACCEPT" => "application/json, text/javascript, */*; q=0.01",
+                 "HTTP_X_REQUESTED_WITH" => "XMLHttpRequest" }
+
+          expect(last_response.body).to eq(%({"json":"show"}))
+        end
+
+        it "renders the ruact page for an empty Accept, as Rails renders HTML", :aggregate_failures do
+          post "/status-demo/create_action", {}, { "HTTP_ACCEPT" => "" }
+
+          expect(last_response.status).to eq(422)
+          expect(last_response.body).to include("status-new")
+        end
+      end
+
+      it "takes formats: as a single value, as Rails does", :aggregate_failures do
+        post "/status-demo/create_formats_html", {}, flight_headers
+        expect(last_response.status).to eq(422)
+        expect(last_response.body).to include("status-new")
+
+        post "/status-demo/create_formats_json", {}, html_headers
+        expect(last_response.status).to eq(201)
+        expect(last_response.body).to eq(%({"json":"show"}))
+
+        post "/status-demo/create_formats_nil", {}, html_headers
+        expect(last_response.status).to eq(422)
+        expect(last_response.body).to include("status-new")
+      end
+
+      # Review R2 — `Controller.render` (Turbo broadcasts use it) runs no action:
+      # including the concern would not route it through ruact either.
+      it "does not tell an off-request render to include the concern" do
+        expect do
+          ControllerRequestSpecSupport::StatusPlainDemoController.render(
+            template: "controller_request_spec_support/implicit_demo/show"
+          )
+        end.to raise_error(ActionView::Template::Error, /only in a page a ruact controller renders/)
+      end
+
+      it "leaves a render with an option it does not know to Rails, and says which option" do
+        expect { post "/status-demo/create_pdf", {}, html_headers }
+          .to raise_error(ActionView::Template::Error, /`pdf:`.*not.*render option ruact takes/m)
+      end
+
+      it "names a stray option Rails would have ignored, instead of pointing at ruact_pages", :aggregate_failures do
+        message = begin
+          post "/status-demo/create_alert", {}, html_headers
+          nil
+        rescue ActionView::Template::Error => e
+          e.message
+        end
+
+        expect(message).to include("`alert:`")
+        expect(message).not_to include("ruact_pages")
+      end
+
+      it "leaves a render with prefixes: to Rails — it names another folder" do
+        expect { post "/status-demo/create_prefixes", {}, html_headers }
+          .to raise_error(ActionView::Template::Error, /implicit_demo/)
+      end
+
+      it "does not carry a declined render's explanation into a later render", :aggregate_failures do
+        message = begin
+          post "/status-rescue-demo/create", {}, html_headers
+          nil
+        rescue ActionView::Template::Error => e
+          e.message
+        end
+
+        expect(message).to include("implicit_demo/show")
+        expect(message).not_to include("`alert:`")
+      end
+
+      it "honours variant:, locale: and assigns: as Rails does", :aggregate_failures do
+        post "/status-demo/create_variant", {}, html_headers
+        expect(last_response.status).to eq(422)
+        expect(last_response.body).to include("status-new-phone")
+
+        post "/status-demo/create_locale", {}, flight_headers
+        expect(last_response.status).to eq(422)
+        expect(last_response.body).to include("status-new")
+
+        post "/status-demo/create_assigns", {}, flight_headers
+        expect(last_response.status).to eq(422)
+        expect(last_response.body).to include("from-assigns")
+      end
+
+      it "keeps the Location header a render asks for" do
+        post "/status-demo/create_with_location", {}, html_headers
+
+        expect(last_response.headers["Location"]).to end_with("/status-demo/1")
+      end
+
+      it "keeps the status Rails would give when none is asked for" do
+        post "/status-demo/create_no_status", {}, flight_headers
+
+        expect(last_response.status).to eq(200)
+      end
+
+      it "leaves every other renderer to Rails", :aggregate_failures do
+        post "/status-demo/create_json", {}, flight_headers
+        expect(last_response.status).to eq(422)
+        expect(JSON.parse(last_response.body)).to eq("ok" => false)
+
+        post "/status-demo/create_plain", {}, flight_headers
+        expect(last_response.status).to eq(422)
+        expect(last_response.body).to eq("nope")
+      end
+
+      # A server-function call asks for JSON only: an HTML template is not its
+      # answer, and ruact does not make it one.
+      it "leaves a JSON-only request to Rails", :aggregate_failures do
+        expect { post "/status-demo/create_action", {}, { "HTTP_ACCEPT" => "application/json" } }
+          .to raise_error(ActionView::MissingTemplate)
+
+        # `show` has a page AND a JSON template: Rails picks the JSON one.
+        post "/status-demo/create_scaffold_style", {}, { "HTTP_ACCEPT" => "application/json" }
+        expect(last_response.body).to eq(%({"json":"show"}))
+      end
+
+      it "ignores a layout: option — a ruact page renders into config.layout", :aggregate_failures do
+        post "/status-demo/create_with_layout", {}, html_headers
+
+        expect(last_response.status).to eq(422)
+        expect(last_response.body).to include("status-new")
+      end
+
+      it "tells a controller without the concern to include it", :aggregate_failures do
+        expect { post "/status-plain-demo/create", {}, html_headers }
+          .to raise_error(ActionView::Template::Error) { |error|
+                expect(error.message).to include("include Ruact::Controller")
+                expect(error.message).not_to include("ruact_render(")
+                expect(error.line_number).to eq("2")
+              }
+      end
+
+      # AC3 — what Rails renders on its own fails naming the call that works.
+      it "names ruact_render when Rails renders a template of another folder" do
+        expect { post "/status-demo/create_other_folder", {}, flight_headers }
+          .to raise_error(ActionView::Template::Error,
+                          Regexp.new('<DemoButton />.*"controller_request_spec_support/implicit_demo/show".*' \
+                                     'ruact_render\\(template: "controller_request_spec_support/implicit_demo/show"',
+                                     Regexp::MULTILINE))
+      end
+
+      # AC4 — every document branch keeps the status.
+      context "when the document renders through a layout" do
+        def configure_layout(value)
+          Ruact.configure do |c|
+            c.manifest_path = ControllerRequestSpecSupport.manifest_path
+            c.layout = value
+          end
+        end
+
+        before { configure_layout(true) }
+
+        it "keeps the status through the app's layout" do
+          post "/layout-demo/create_unprocessable", {}, html_headers
+
+          expect(last_response.status).to eq(422)
+        end
+
+        it "keeps the status when a declared layout does not exist (degraded to the shell)" do
+          post "/ghost-layout-demo/create_unprocessable", {}, html_headers
+
+          expect(last_response.status).to eq(422)
+        end
+
+        it "keeps the status when the layout cannot mount the app (production degrades)" do
+          allow_any_instance_of(ControllerRequestSpecSupport::UnwiredLayoutDemoController) # rubocop:disable RSpec/AnyInstance
+            .to receive(:__ruact_local_env?).and_return(false)
+          post "/unwired-layout-demo/create_unprocessable", {}, html_headers
+
+          expect(last_response.status).to eq(422)
+        end
+      end
+
+      it "names ruact_pages when the template is not a declared page" do
+        expect { post "/status-pages-demo/create", {}, flight_headers }
+          .to raise_error(ActionView::Template::Error, /ruact_pages/)
       end
     end
   end
