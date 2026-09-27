@@ -191,20 +191,22 @@ module Ruact
 
       # Story 17.0h — a form on a Turbo page that posts to a ruact action. Turbo
       # fetches it and gets back a ruact document, which carries
-      # `turbo-visit-control=reload`: Turbo reloads the page it is on, and the
-      # response — the validation errors, what was typed — is gone without a
-      # trace. The browser, submitting natively, would show it. Said in
-      # development only (decision of Luiz); every Turbo request carries
-      # `X-Turbo-Request-Id`.
+      # `turbo-visit-control=reload`. What Turbo then does depends on the status
+      # and on a surrounding Turbo Frame (a 4xx reloads the form's page, a 2xx
+      # is dropped, a 5xx is pasted into the Turbo page), but never shows the
+      # answer — the validation errors, what was typed. The browser, submitting
+      # natively, would. Said in development and test (decision of Luiz); every
+      # Turbo request carries `X-Turbo-Request-Id`.
       def __ruact_warn_turbo_form_submission
         return if request.nil? || request.get? || request.head?
         return if request.headers["X-Turbo-Request-Id"].blank?
 
         logger&.warn(<<~MSG.strip)
           [ruact] #{self.class.name}##{action_name} answered a Turbo form submission
-            (#{request.request_method} #{request.path}) with a ruact page (#{response.status}). Turbo will reload
-            the page the form is on instead of showing this one — validation errors and what was typed are
-            lost. Add data-turbo="false" to that form, so the browser submits it and shows the answer.
+            (#{request.request_method} #{request.path}) with a ruact page (#{response.status}). Turbo does not
+            show a ruact page as a form's answer — it reloads a page, drops the answer, or pastes this document
+            into its own — so validation errors and what was typed are lost. Add data-turbo="false" to that
+            form, so the browser submits it and shows the answer.
         MSG
       end
 

@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **A development warning when a Turbo form gets a ruact page back.** A form on a Turbo page that posts to a ruact action is fetched by Turbo; the ruact page that answers (a `422` with validation errors, say) tells Turbo to reload, so Turbo reloads the page the form is on and the answer is lost without a trace. In development ruact now logs a `[ruact]` warning naming the action, the request and the fix: `data-turbo="false"` on that form, so the browser submits it and shows the answer.
+- **A development warning when a Turbo form gets a ruact page back.** A form on a Turbo page that posts to a ruact action is fetched by Turbo; Turbo does not show the ruact page that answers (a `422` with validation errors, say): it reloads the form's page, drops the answer or pastes the document into its own, depending on the status. In development and test ruact now logs a `[ruact]` warning naming the action, the request and the fix: `data-turbo="false"` on that form, so the browser submits it and shows the answer.
 
 ### Fixed
 
