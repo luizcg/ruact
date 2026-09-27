@@ -37,7 +37,8 @@ module ControllerRequestSpecSupport
   STATUS_DEMO_ROUTES = [
     *%w[create_action create_string create_hash create_template create_locals create_json create_plain
         create_other_folder explicit create_respond_to create_no_status create_delegated redirect_delegated
-        create_scaffold_style create_with_location]
+        create_scaffold_style create_with_location create_formats_html create_formats_json create_formats_nil
+        create_pdf]
       .map { |action| ["/status-demo/#{action}", "status_demo##{action}"] },
     ["/status-pages-demo/create", "status_pages_demo#create"],
     ["/status-demo/create_with_layout", "status_demo#create_with_layout"],
@@ -250,6 +251,18 @@ module ControllerRequestSpecSupport
 
     def create_with_location = render(:new, status: 201, location: "/status-demo/1")
     def create_with_layout = render(:new, layout: "no_such_layout", status: 422)
+    # Review R2 — `formats:` as Rails takes it: a single value, not only an Array.
+    def create_formats_html = render(:new, formats: :html, status: 422)
+    def create_formats_json = render(:show, formats: :json, status: 201)
+    def create_formats_nil = render(:new, formats: nil, status: 422)
+
+    # Review R2 — an option ruact does not know (wicked_pdf's `pdf:`) is not
+    # ruact's to answer.
+    def create_pdf
+      render(pdf: "report", template: "controller_request_spec_support/status_demo/new",
+             formats: [:html])
+    end
+
     # The `responders` gem (Devise's `respond_with`) calls `controller.render`
     # and `controller.redirect_to` with an explicit receiver: both must stay as
     # public as Rails makes them.
@@ -993,6 +1006,35 @@ module Ruact # rubocop:disable Style/OneClassPerFile
           expect(last_response.status).to eq(422)
           expect(last_response.body).to include("status-new")
         end
+      end
+
+      it "takes formats: as a single value, as Rails does", :aggregate_failures do
+        post "/status-demo/create_formats_html", {}, flight_headers
+        expect(last_response.status).to eq(422)
+        expect(last_response.body).to include("status-new")
+
+        post "/status-demo/create_formats_json", {}, html_headers
+        expect(last_response.status).to eq(201)
+        expect(last_response.body).to eq(%({"json":"show"}))
+
+        post "/status-demo/create_formats_nil", {}, html_headers
+        expect(last_response.status).to eq(422)
+        expect(last_response.body).to include("status-new")
+      end
+
+      # Review R2 — `Controller.render` (Turbo broadcasts use it) runs no action:
+      # including the concern would not route it through ruact either.
+      it "does not tell an off-request render to include the concern" do
+        expect do
+          ControllerRequestSpecSupport::StatusPlainDemoController.render(
+            template: "controller_request_spec_support/implicit_demo/show"
+          )
+        end.to raise_error(ActionView::Template::Error, /only in a page a ruact controller renders/)
+      end
+
+      it "leaves a render with an option it does not know to Rails" do
+        expect { post "/status-demo/create_pdf", {}, html_headers }
+          .to raise_error(ActionView::Template::Error, /outside ruact/)
       end
 
       it "keeps the Location header a render asks for" do

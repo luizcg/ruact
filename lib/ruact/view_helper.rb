@@ -39,10 +39,14 @@ module Ruact
     def __ruact_outside_render_message(name)
       template = @current_template&.virtual_path
       where = template ? "\"#{template}\"" : "this template"
-      # The helper is in every view: a controller without the concern has no
-      # `ruact_render` to call.
+      # The helper is in every view. A controller action without the concern
+      # has no `ruact_render` to call; a mailer (its view's `controller`) or a
+      # `Controller.render` that ran no action cannot render through ruact at all.
       owner = respond_to?(:controller) ? controller : nil
-      if owner && !owner.class.include?(Ruact::Controller)
+      if owner && !(defined?(Ruact::Controller) && owner.class.include?(Ruact::Controller) &&
+                    __ruact_page_request?(owner))
+        return __ruact_not_a_page_message(name, where) unless __ruact_page_request?(owner)
+
         return "ruact: <#{name} /> is a client component, and #{where} is being rendered by " \
                "#{owner.class.name}, which does not include Ruact::Controller. Add " \
                "`include Ruact::Controller` to it: its pages then render through ruact."
@@ -58,7 +62,20 @@ module Ruact
         "Render it through ruact: #{call} — or, when it is this controller's page and the controller " \
         "declares `ruact_pages`, add the action there (`render :action` then goes through ruact)."
     end
-    private :__ruact_outside_render_message
+
+    # A controller answering a request with an action — not a mailer, not an
+    # `ActionController::Renderer` (no action ran).
+    def __ruact_page_request?(owner)
+      defined?(ActionController::Metal) && owner.is_a?(ActionController::Metal) && owner.action_name.present?
+    end
+
+    def __ruact_not_a_page_message(name, where)
+      "ruact: <#{name} /> is a client component, and #{where} is being rendered outside a request to a " \
+        "ruact controller (a mailer, or `Controller.render`). Client components render only in a page a " \
+        "ruact controller renders."
+    end
+
+    private :__ruact_outside_render_message, :__ruact_page_request?, :__ruact_not_a_page_message
 
     # Story 14.2 (FR104) — emits ruact's full JavaScript asset block: the
     # dev/prod bootstrap entry `<script>` tags (re-targeting the virtual entry

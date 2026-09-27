@@ -310,11 +310,13 @@ module Ruact
     # public methods from `action_methods`.
     public :render, :redirect_to
 
-    # The renderers that are not a template: Rails' registered ones (`json`,
-    # `js`, `xml`, and any an app or gem adds, `turbo_stream` among them) plus
-    # the built-in non-template options.
-    NON_TEMPLATE_RENDER_OPTIONS = %i[plain html body partial inline file renderable].freeze
-    private_constant :NON_TEMPLATE_RENDER_OPTIONS
+    # The options of a plain template render — the only `render` ruact takes
+    # over. Anything else (`json:`, `plain:`, `partial:`, a registered renderer
+    # like `turbo_stream:`, or an option a gem adds, like wicked_pdf's `pdf:`)
+    # means the render is not ruact's to answer.
+    TEMPLATE_RENDER_OPTIONS = %i[action template prefixes locals status location layout content_type
+                                 formats variants handlers].freeze
+    private_constant :TEMPLATE_RENDER_OPTIONS
 
     # The `ruact_render` arguments for an explicit `render` of one of this
     # controller's ruact pages, or nil. Rails' own `_normalize_args` reads the
@@ -322,7 +324,7 @@ module Ruact
     # copy: it hands a Hash argument back as itself.
     def __ruact_page_render(args)
       options = _normalize_args(*args.map { |arg| arg.is_a?(Hash) ? arg.dup : arg })
-      return nil if options.keys.intersect?(NON_TEMPLATE_RENDER_OPTIONS + ActionController::Renderers::RENDERERS.to_a)
+      return nil unless (options.keys - TEMPLATE_RENDER_OPTIONS).empty?
 
       action = __ruact_render_target(options)
       return nil unless action && self.class.ruact_page_action?(action)
@@ -341,8 +343,9 @@ module Ruact
     # `format.json` branch negotiates JSON — the JSON template, or Rails' own
     # MissingTemplate.
     def __ruact_rails_would_render?(action, options, page)
-      template = lookup_context.find_template(action, [controller_path], false, [],
-                                              options.slice(:formats, :variants, :handlers))
+      # As Rails' own render passes them: each detail an Array, a nil ignored.
+      details = options.slice(:formats, :variants, :handlers).compact.transform_values { |value| Array(value) }
+      template = lookup_context.find_template(action, [controller_path], false, [], details)
       File.identical?(template.identifier, page.to_s)
     rescue ActionView::MissingTemplate
       false

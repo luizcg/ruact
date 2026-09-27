@@ -62,6 +62,23 @@ module Ruact
         end
       end
 
+      # Review R2 — in a mailer's view, `controller` is the mailer: not a page a
+      # concern would fix.
+      it "does not tell a mailer to include the concern", :aggregate_failures do
+        mailer = Struct.new(:name).new("UserMailer")
+        bare = Object.new
+        bare.extend(described_class)
+        bare.define_singleton_method(:controller) { mailer }
+        message = begin
+          bare.__ruact_component__("NavBar", {})
+        rescue Ruact::Error => e
+          e.message
+        end
+
+        expect(message).not_to include("include Ruact::Controller`")
+        expect(message).to include("only in a page a ruact controller renders")
+      end
+
       it "raises a clear error when called outside a ruact_render flow" do
         bare = Object.new
         bare.extend(described_class)
