@@ -38,7 +38,7 @@ module ControllerRequestSpecSupport
     *%w[create_action create_string create_hash create_template create_locals create_json create_plain
         create_other_folder explicit create_respond_to create_no_status create_delegated redirect_delegated
         create_scaffold_style create_with_location create_formats_html create_formats_json create_formats_nil
-        create_pdf create_variant create_locale create_assigns create_alert]
+        create_pdf create_variant create_locale create_assigns create_alert create_prefixes]
       .map { |action| ["/status-demo/#{action}", "status_demo##{action}"] },
     ["/status-pages-demo/create", "status_pages_demo#create"],
     ["/status-demo/create_with_layout", "status_demo#create_with_layout"],
@@ -46,7 +46,8 @@ module ControllerRequestSpecSupport
     ["/layout-demo/create_unprocessable", "layout_demo#create_unprocessable"],
     ["/ghost-layout-demo/create_unprocessable", "ghost_layout_demo#create_unprocessable"],
     ["/unwired-layout-demo/create_unprocessable", "unwired_layout_demo#create_unprocessable"],
-    ["/status-live-demo/create", "status_live_demo#create"]
+    ["/status-live-demo/create", "status_live_demo#create"],
+    ["/status-rescue-demo/create", "status_rescue_demo#create"]
   ].freeze
 
   class << self
@@ -264,6 +265,9 @@ module ControllerRequestSpecSupport
     def create_assigns = render(:with_assigns, assigns: { assigned: "from-assigns" }, status: 422)
     # Review R3 — a key Rails ignores in silence (it is not the flash).
     def create_alert = render(:new, status: 422, alert: "Could not save")
+    # Review R4 — `prefixes:` names another folder's template; ruact must not
+    # render its own `show` in its place.
+    def create_prefixes = render(:show, prefixes: ["controller_request_spec_support/implicit_demo"], status: 422)
 
     def create_pdf
       render(pdf: "report", template: "controller_request_spec_support/status_demo/new",
@@ -296,6 +300,21 @@ module ControllerRequestSpecSupport
   # `ruact_render` this controller does not have.
   class StatusPlainDemoController < ActionController::Base
     def create = render(template: "controller_request_spec_support/implicit_demo/show", status: 422)
+  end
+
+  # Story 17.0i review R4 — a render ruact declined (an `alert:`) raises, and a
+  # `rescue_from` renders another template: the second error must not repeat
+  # the first render's explanation.
+  class StatusRescueDemoController < ActionController::Base
+    include Ruact::Controller
+
+    rescue_from RuntimeError, with: :render_fallback
+
+    def create = render(:boom, status: 422, alert: "x")
+
+    private
+
+    def render_fallback(_error) = render(template: "controller_request_spec_support/implicit_demo/show")
   end
 
   # Story 17.0i — `new` is not among the declared pages, so its template is not
@@ -434,6 +453,9 @@ ControllerRequestSpecSupport.write_view(
 )
 STATUS_DEMO_VIEWS = ControllerRequestSpecSupport.app_root.join("app/views/controller_request_spec_support/status_demo")
 File.write(STATUS_DEMO_VIEWS.join("new.html+phone.erb"), %(<DemoButton label={"status-new-phone"} />\n))
+ControllerRequestSpecSupport.write_view(
+  "controller_request_spec_support/status_rescue_demo", "boom", %(<% raise "boom" %>\n)
+)
 ControllerRequestSpecSupport.write_view(
   "controller_request_spec_support/status_demo", "with_assigns", %(<DemoButton label={@assigned} />\n)
 )
@@ -1059,6 +1081,23 @@ module Ruact # rubocop:disable Style/OneClassPerFile
 
         expect(message).to include("`alert:`")
         expect(message).not_to include("ruact_pages")
+      end
+
+      it "leaves a render with prefixes: to Rails — it names another folder" do
+        expect { post "/status-demo/create_prefixes", {}, html_headers }
+          .to raise_error(ActionView::Template::Error, /implicit_demo/)
+      end
+
+      it "does not carry a declined render's explanation into a later render", :aggregate_failures do
+        message = begin
+          post "/status-rescue-demo/create", {}, html_headers
+          nil
+        rescue ActionView::Template::Error => e
+          e.message
+        end
+
+        expect(message).to include("implicit_demo/show")
+        expect(message).not_to include("`alert:`")
       end
 
       it "honours variant:, locale: and assigns: as Rails does", :aggregate_failures do

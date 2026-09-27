@@ -34,6 +34,12 @@ module Ruact
         # As Rails' own `assigns:` does: instance variables of the view.
         page[:assigns]&.each { |name, value| instance_variable_set(:"@#{name}", value) }
         __ruact_render(**page.slice(:template, :locals, :status, :details))
+      ensure
+        # The declined-option note explains THIS render only (review R4): a
+        # later render in the request — a `rescue_from`'s — must not inherit it.
+        if instance_variable_defined?(:@__ruact_declined_render_options)
+          remove_instance_variable(:@__ruact_declined_render_options)
+        end
       end
 
       private
@@ -44,7 +50,9 @@ module Ruact
       # key Rails ignores, like `alert:`) means the render is not ruact's to
       # answer — Rails renders it, and the error that follows names the option
       # (Story 17.0i review R3, decision of Luiz).
-      TEMPLATE_RENDER_OPTIONS = %i[action template prefixes locals status location layout content_type
+      # `prefixes:` is not among them (review R4): it names the folders to look
+      # in, and a page is this controller's own folder only.
+      TEMPLATE_RENDER_OPTIONS = %i[action template locals status location layout content_type
                                    formats variants variant handlers locale assigns].freeze
       private_constant :TEMPLATE_RENDER_OPTIONS
 
