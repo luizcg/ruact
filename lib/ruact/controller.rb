@@ -283,20 +283,24 @@ module Ruact
     # Story 17.0i — `render :new, status: :unprocessable_entity`, the Rails idiom
     # for a failed save, on a ruact page. Rails would render the template itself,
     # outside a `ruact_render`, and the first client component in it would raise.
-    # So a `render` whose target is a ruact PAGE of this controller — the same
-    # predicate `default_render` uses: `ruact_page_action?` and the template in
-    # this controller's own folder — goes through `ruact_render`, with its
-    # `status:` and `locals:`. Everything else is Rails' own: other renderers
-    # (`json:`, `plain:`, `partial:`…, including the `render plain:` / `html:`
-    # ruact itself issues), a template of another folder, an action outside
-    # `ruact_pages`, and a request that takes neither Flight nor HTML (a
-    # server-function call). A `layout:` option does not apply: a ruact page is
-    # rendered into `config.layout`, like every ruact page.
+    # So a `render` of a ruact PAGE of this controller — the same predicate
+    # `default_render` uses: `ruact_page_action?` and the template in this
+    # controller's own folder — goes through `ruact_render`, with its `status:`,
+    # `locals:` and `location:`, when that `.html.erb` is the template RAILS
+    # would pick for this request: the format it negotiated (a `.json` path,
+    # `params[:format]`, the `respond_to` branch, the Accept header) decides, so
+    # a scaffold's `format.json { render :show }` still renders `show.json`.
+    # Everything else is Rails' own: other renderers (`json:`, `plain:`,
+    # `partial:`…, including the `render plain:` / `html:` ruact itself issues),
+    # a template of another folder, an action outside `ruact_pages`. `layout:`
+    # and `content_type:` do not apply: a ruact page is rendered into
+    # `config.layout`, as HTML or Flight, like every ruact page.
     def render(*args, &block)
       page = block ? nil : __ruact_page_render(args)
       return super unless page
 
-      ruact_render(**page)
+      self.location = url_for(page.delete(:location)) if page[:location]
+      ruact_render(**page.except(:location))
     end
 
     # Both override methods Rails keeps PUBLIC, and this module's body is
@@ -317,17 +321,31 @@ module Ruact
     # arguments (`render :new` → action, `render "posts/new"` → template), on a
     # copy: it hands a Hash argument back as itself.
     def __ruact_page_render(args)
-      return nil unless ruact_request? || ruact_html_acceptable?
-
       options = _normalize_args(*args.map { |arg| arg.is_a?(Hash) ? arg.dup : arg })
       return nil if options.keys.intersect?(NON_TEMPLATE_RENDER_OPTIONS + ActionController::Renderers::RENDERERS.to_a)
-      return nil if options.key?(:formats) && !Array(options[:formats]).map(&:to_sym).include?(:html)
 
       action = __ruact_render_target(options)
-      return nil unless action && self.class.ruact_page_action?(action) &&
-                        File.exist?(self.class.ruact_template_path(action))
+      return nil unless action && self.class.ruact_page_action?(action)
 
-      { template: "#{controller_path}/#{action}", locals: options[:locals] || {}, status: options[:status] }
+      page = self.class.ruact_template_path(action)
+      return nil unless File.exist?(page) && __ruact_rails_would_render?(action, options, page)
+
+      { template: "#{controller_path}/#{action}", locals: options[:locals] || {}, status: options[:status],
+        location: options[:location] }
+    end
+
+    # Whether Rails, left alone, would render `page` for `action`: the lookup
+    # it does itself, with the formats it negotiated for this request (and a
+    # render's own `formats:` / `variants:` / `handlers:`). A Flight request
+    # negotiates every format, HTML first — the page; a `.json` request or a
+    # `format.json` branch negotiates JSON — the JSON template, or Rails' own
+    # MissingTemplate.
+    def __ruact_rails_would_render?(action, options, page)
+      template = lookup_context.find_template(action, [controller_path], false, [],
+                                              options.slice(:formats, :variants, :handlers))
+      File.identical?(template.identifier, page.to_s)
+    rescue ActionView::MissingTemplate
+      false
     end
 
     # The action whose template `options` name, when it is one of this

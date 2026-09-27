@@ -372,6 +372,39 @@ describe("ruact-router — the navigation boundary (Story 17.0f)", () => {
       expect(onNavigate).toHaveBeenCalledTimes(1);
     });
 
+    // Review R1 — only a FLIGHT 422 is a page. Rails' own HTML 422 error page
+    // (RecordInvalid) on a revalidate is a failure to report, as before.
+    it("still rejects revalidate() on a 422 that is not Flight", async () => {
+      fetch.mockResolvedValue(respond({ status: 422, contentType: "text/html", body: "<h1>Unprocessable</h1>" }));
+
+      await expect(globalThis.__ruact_revalidate()).rejects.toThrow();
+      expect(onNavigate).not.toHaveBeenCalled();
+    });
+
+    // Review R1 — a POST the fetch followed through a redirect ended on a GET:
+    // that URL can be asked for again, and it is the page being shown.
+    it("pushes the URL a form's redirect ended on", async () => {
+      const form = new dom.FakeForm({ action: "/posts", method: "post" });
+      const response = respond({ status: 422, body: tree, url: `${ORIGIN}/drafts/9/edit` });
+      response.redirected = true;
+      fetch.mockResolvedValue(response);
+      globalThis.location._set("/posts/new");
+
+      submit(dom.listeners, form);
+      await settle();
+
+      expect(onNavigate).toHaveBeenCalledTimes(1);
+      expect(history.pushState).toHaveBeenCalledWith(null, "", "/drafts/9/edit");
+    });
+
+    it("still rejects revalidate() on any other failing Flight status", async () => {
+      for (const status of [404, 500]) {
+        fetch.mockResolvedValue(respond({ status, body: tree }));
+        await expect(globalThis.__ruact_revalidate()).rejects.toThrow(`Request failed: ${status}`);
+      }
+      expect(onNavigate).not.toHaveBeenCalled();
+    });
+
     it("keeps every other non-2xx Flight answer on the error path", async () => {
       const form = new dom.FakeForm({ action: "/posts", method: "post" });
       fetch.mockResolvedValue(respond({ status: 500, body: tree }));

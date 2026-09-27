@@ -38,11 +38,25 @@ module Ruact
     # `ActionView::Template::Error` Rails wraps this in.
     def __ruact_outside_render_message(name)
       template = @current_template&.virtual_path
-      "ruact: <#{name} /> is a client component, and #{template ? "\"#{template}\"" : 'this template'} " \
-        "is being rendered by Rails, outside ruact. Render it through ruact: " \
-        "`ruact_render(template: \"#{template || '<template>'}\", status: …)` — or, when it is this " \
-        "controller's page and the controller declares `ruact_pages`, add the action there " \
-        "(`render :action` then goes through ruact)."
+      where = template ? "\"#{template}\"" : "this template"
+      # The helper is in every view: a controller without the concern has no
+      # `ruact_render` to call.
+      owner = respond_to?(:controller) ? controller : nil
+      if owner && !owner.class.include?(Ruact::Controller)
+        return "ruact: <#{name} /> is a client component, and #{where} is being rendered by " \
+               "#{owner.class.name}, which does not include Ruact::Controller. Add " \
+               "`include Ruact::Controller` to it: its pages then render through ruact."
+      end
+
+      # A partial or a layout is not a page: rendering it as one is not the fix.
+      call = if template.nil? || File.basename(template).start_with?("_") || template.start_with?("layouts/")
+               "`ruact_render(template: …, status: …)` for the page that renders it"
+             else
+               "`ruact_render(template: \"#{template}\", status: …)`"
+             end
+      "ruact: <#{name} /> is a client component, and #{where} is being rendered by Rails, outside ruact. " \
+        "Render it through ruact: #{call} — or, when it is this controller's page and the controller " \
+        "declares `ruact_pages`, add the action there (`render :action` then goes through ruact)."
     end
     private :__ruact_outside_render_message
 
