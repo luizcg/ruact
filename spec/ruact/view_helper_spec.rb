@@ -46,7 +46,7 @@ module Ruact
         bare = Object.new
         bare.extend(described_class)
         expect { bare.__ruact_component__("NavBar", {}) }
-          .to raise_error(Ruact::Error, /__ruact_component__ called outside a ruact_render flow/)
+          .to raise_error(Ruact::Error, %r{<NavBar /> is a client component.*outside ruact.*ruact_render\(template: }m)
       end
     end
 

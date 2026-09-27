@@ -335,6 +335,56 @@ describe("ruact-router — the navigation boundary (Story 17.0f)", () => {
     });
   });
 
+  // Story 17.0i — `render :new, status: :unprocessable_entity` on a ruact page
+  // answers Flight with a 422: the validation errors are the page's content,
+  // not a transport failure.
+  describe("a Flight answer with a 422", () => {
+    const tree = '0:["$","p",null,{"children":"Title can\'t be blank"}]\n';
+
+    it("renders a form's re-render and keeps the form's URL — the POST URL is not replayable", async () => {
+      const form = new dom.FakeForm({ action: "/posts", method: "post" });
+      fetch.mockResolvedValue(respond({ status: 422, body: tree, url: `${ORIGIN}/posts` }));
+      globalThis.location._set("/posts/new");
+
+      submit(dom.listeners, form);
+      await settle();
+
+      expect(onNavigate).toHaveBeenCalledTimes(1);
+      expect(onError).not.toHaveBeenCalled();
+      expect(history.pushState).not.toHaveBeenCalled();
+      expect(location.pathname).toBe("/posts/new");
+    });
+
+    it("renders a navigation's 422 too", async () => {
+      fetch.mockResolvedValue(respond({ status: 422, body: tree, url: `${ORIGIN}/posts/new` }));
+
+      click(dom.listeners, "/posts/new");
+      await settle();
+
+      expect(onNavigate).toHaveBeenCalledTimes(1);
+      expect(onError).not.toHaveBeenCalled();
+    });
+
+    it("resolves revalidate() — a 422 is content, not a failure", async () => {
+      fetch.mockResolvedValue(respond({ status: 422, body: tree }));
+
+      await expect(globalThis.__ruact_revalidate()).resolves.not.toThrow();
+      expect(onNavigate).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps every other non-2xx Flight answer on the error path", async () => {
+      const form = new dom.FakeForm({ action: "/posts", method: "post" });
+      fetch.mockResolvedValue(respond({ status: 500, body: tree }));
+
+      submit(dom.listeners, form);
+      await settle();
+
+      expect(onNavigate).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError.mock.calls[0][0].message).toContain("Request failed: 500");
+    });
+  });
+
   describe("a Flight answer", () => {
     it("still renders in place, as before", async () => {
       fetch.mockResolvedValue(respond({ body: '0:["$","h1",null,{"children":"hi"}]\n', url: `${ORIGIN}/products/2` }));

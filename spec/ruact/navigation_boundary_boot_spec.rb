@@ -96,7 +96,7 @@ GEM_BOUNDARY_BOOT_SCRIPT = <<~RUBY
     body.each { |part| html << part }
     body.close if body.respond_to?(:close)
     { "status" => status, "boundary" => response_headers["ruact-boundary"] || response_headers["Ruact-Boundary"],
-      "html" => html }
+      "content_type" => response_headers["content-type"] || response_headers["Content-Type"], "html" => html }
   end
 
   ROUTER = { "HTTP_RUACT_REQUEST" => "1", "HTTP_ACCEPT" => "text/x-component" }.freeze
@@ -128,6 +128,7 @@ GEM_BOUNDARY_BOOT_SCRIPT = <<~RUBY
     "declared page rendering another template" => [:get, "/previews/1", ROUTER],
     "undeclared template-only action, browser navigation" => [:get, "/previews", { "HTTP_ACCEPT" => "text/html" }],
     "POST to an action not declared a page" => [:post, "/previews", ROUTER],
+    "form re-render with 422 (render :new)" => [:post, "/drafts", ROUTER],
     "DELETE to a gem's controller drawn into the app's routes" =>
       [:post, "/sign_out", ROUTER, { "_method" => "delete" }],
     "POST to a 307 redirect route" => [:post, "/old_form", ROUTER],
@@ -198,6 +199,18 @@ RSpec.describe "the navigation boundary in a booted app (Story 17.0f)", :story_1
       end
     RUBY
     write(root, "app/views/previews/index.html.erb", "<h1>list</h1>\n")
+    # Story 17.0i — the Rails idiom for a failed save, from the router: the
+    # boundary lets the POST through (app-owned ruact controller), and the
+    # re-render must come back as Flight — HTML here was the "escaped
+    # classifier" error in the router.
+    write(root, "app/controllers/drafts_controller.rb", <<~RUBY)
+      class DraftsController < ApplicationController
+        before_action { RUNS["drafts#\#{action_name}"] += 1 }
+        def new; end
+        def create = render(:new, status: 422)
+      end
+    RUBY
+    write(root, "app/views/drafts/new.html.erb", "<p>Title can't be blank</p>\n")
     write(root, "app/controllers/admin_panel/dashboard_controller.rb", <<~RUBY)
       module AdminPanel
         class DashboardController < ActionController::Base
@@ -247,6 +260,7 @@ RSpec.describe "the navigation boundary in a booted app (Story 17.0f)", :story_1
         get "elsewhere", to: redirect("https://blog.example.org/")
         get "remote_controllers", to: "remote_controllers#index"
         resources :previews, only: %i[index show create]
+        resources :drafts, only: %i[new create]
         mount AdminPanel::Engine, at: "/admin"
         mount ->(_env) { RUNS["rack"] += 1; [200, { "content-type" => "text/html" }, ["rack"]] }, at: "/rack"
         delete "sign_out", to: "vendored_sessions#destroy"
@@ -336,6 +350,14 @@ RSpec.describe "the navigation boundary in a booted app (Story 17.0f)", :story_1
   # would turn the Story 13.3 redirect-back into a full page load.
   it_behaves_like "passed through to the app", "POST to ruact controller without template"
   it_behaves_like "passed through to the app", "_method=delete to ruact controller"
+
+  it "answers a router form's 422 re-render with Flight, not HTML (Story 17.0i)", :aggregate_failures do
+    draft = outcome("form re-render with 422 (render :new)")
+
+    expect(draft).to include("status" => 422, "boundary" => nil, "runs" => 1)
+    expect(draft["content_type"]).to include("text/x-component")
+    expect(draft["html"]).to include("Title can't be blank")
+  end
 
   it "runs the ruact actions it lets through exactly once", :aggregate_failures do
     expect(outcome("ruact page (GET)")["runs"]).to eq(1)

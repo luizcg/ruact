@@ -25,11 +25,26 @@ module Ruact
     # placeholder in the HTML output.
     def __ruact_component__(name, props = {})
       ctx = @ruact_render_context
-      raise Ruact::Error, "ruact: __ruact_component__ called outside a ruact_render flow" if ctx.nil?
+      raise Ruact::Error, __ruact_outside_render_message(name) if ctx.nil?
 
       token = ctx.register(name, props)
       "<!-- #{token} -->".html_safe
     end
+
+    # Story 17.0i — a client component in a template Rails is rendering on its
+    # own. Says which component and template, and the two ways to a ruact page:
+    # `ruact_render` for this template, or listing the action in the
+    # controller's `ruact_pages`. The file and line come from the
+    # `ActionView::Template::Error` Rails wraps this in.
+    def __ruact_outside_render_message(name)
+      template = @current_template&.virtual_path
+      "ruact: <#{name} /> is a client component, and #{template ? "\"#{template}\"" : 'this template'} " \
+        "is being rendered by Rails, outside ruact. Render it through ruact: " \
+        "`ruact_render(template: \"#{template || '<template>'}\", status: …)` — or, when it is this " \
+        "controller's page and the controller declares `ruact_pages`, add the action there " \
+        "(`render :action` then goes through ruact)."
+    end
+    private :__ruact_outside_render_message
 
     # Story 14.2 (FR104) — emits ruact's full JavaScript asset block: the
     # dev/prod bootstrap entry `<script>` tags (re-targeting the virtual entry

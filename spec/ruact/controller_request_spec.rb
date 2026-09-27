@@ -33,6 +33,15 @@ require "ruact/controller"
 # resolver finds them. Defined before the describe block so the controller
 # class exists when routes are appended.
 module ControllerRequestSpecSupport
+  # Story 17.0i — the status demos' POST routes (path, controller#action).
+  STATUS_DEMO_ROUTES = [
+    *%w[create_action create_string create_hash create_template create_locals create_json create_plain
+        create_other_folder explicit create_respond_to create_no_status create_delegated redirect_delegated]
+      .map { |action| ["/status-demo/#{action}", "status_demo##{action}"] },
+    ["/status-pages-demo/create", "status_pages_demo#create"],
+    ["/status-live-demo/create", "status_live_demo#create"]
+  ].freeze
+
   class << self
     attr_reader :manifest_path
 
@@ -127,6 +136,8 @@ module ControllerRequestSpecSupport
           get "/ghost-layout-demo/show", to: "controller_request_spec_support/ghost_layout_demo#show"
           # Story 17.0f — a plain Rails page through the SAME host layout.
           get "/plain-layout-demo/show", to: "controller_request_spec_support/plain_layout_demo#show"
+          # Story 17.0i — a ruact page answers with a status.
+          STATUS_DEMO_ROUTES.each { |(path, target)| post path, to: "controller_request_spec_support/#{target}" }
         end
       end
     end
@@ -197,6 +208,59 @@ module ControllerRequestSpecSupport
     include Ruact::Controller
 
     def show; end
+  end
+
+  # Story 17.0i — the Rails idiom for a failed save, on a ruact page. The 422
+  # symbol differs across the Rack versions of the CI matrix
+  # (`:unprocessable_entity` on 2.2, `:unprocessable_content` on 3.1+, where the
+  # old name warns): take the one this Rack knows.
+  UNPROCESSABLE = Rack::Utils::SYMBOL_TO_STATUS_CODE.key(422)
+
+  class StatusDemoController < ActionController::Base
+    include Ruact::Controller
+
+    def new; end
+    def create_action = render(:new, status: UNPROCESSABLE)
+    def create_string = render("new", status: 422)
+    def create_hash = render(action: :new, status: 422)
+    def create_template = render(template: "controller_request_spec_support/status_demo/new", status: 422)
+    def create_locals = render(:with_locals, locals: { label: "from-locals" }, status: 422)
+    def create_json = render(json: { ok: false }, status: 422)
+    def create_plain = render(plain: "nope", status: 422)
+    def create_other_folder = render(template: "controller_request_spec_support/implicit_demo/show", status: 422)
+    def explicit = ruact_render(template: "controller_request_spec_support/status_demo/new", status: UNPROCESSABLE)
+    def create_respond_to = respond_to { |format| format.html { render :new, status: 422 } }
+    def create_no_status = render(:new)
+    # The `responders` gem (Devise's `respond_with`) calls `controller.render`
+    # and `controller.redirect_to` with an explicit receiver: both must stay as
+    # public as Rails makes them.
+    def create_delegated = Delegator.new(self).render_new
+    def redirect_delegated = Delegator.new(self).redirect_home
+  end
+
+  Delegator = Struct.new(:controller) do
+    def render_new = controller.render(:new, status: 422)
+    def redirect_home = controller.redirect_to("/status-demo/new")
+  end
+
+  # Story 17.0i — a streaming controller: the Flight rows go out as they are
+  # written, so the status has to be set before the first one.
+  class StatusLiveDemoController < ActionController::Base
+    include ActionController::Live
+    include Ruact::Controller
+
+    def create = render(:new, status: 422)
+  end
+
+  # Story 17.0i — `new` is not among the declared pages, so its template is not
+  # a ruact page here: Rails renders it, and the component in it fails loudly.
+  class StatusPagesDemoController < ActionController::Base
+    include Ruact::Controller
+
+    ruact_pages only: %i[show]
+
+    def show; end
+    def create = render(:new, status: 422)
   end
 
   # The layout owns the document. Both controllers declare a NAMED layout
@@ -291,6 +355,38 @@ ControllerRequestSpecSupport.write_view(
     </div>
   ERB
 )
+
+# Story 17.0i — conventional templates for the status demos.
+ControllerRequestSpecSupport.write_view(
+  "controller_request_spec_support/status_demo", "new", <<~ERB
+    <div>
+      <DemoButton label={"status-new"} errors={ruact_errors} />
+    </div>
+  ERB
+)
+ControllerRequestSpecSupport.write_view(
+  "controller_request_spec_support/status_demo", "with_locals", <<~ERB
+    <div>
+      <DemoButton label={label} />
+    </div>
+  ERB
+)
+ControllerRequestSpecSupport.write_view(
+  "controller_request_spec_support/status_live_demo", "new", <<~ERB
+    <div>
+      <DemoButton label={"status-new"} />
+    </div>
+  ERB
+)
+%w[show new].each do |action|
+  ControllerRequestSpecSupport.write_view(
+    "controller_request_spec_support/status_pages_demo", action, <<~ERB
+      <div>
+        <DemoButton label={"pages-#{action}"} />
+      </div>
+    ERB
+  )
+end
 
 # Reset Rails.application so this spec can boot its own minimal app even if a
 # prior spec ran a different Rails::Application subclass (the constant is
@@ -745,6 +841,108 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(last_response.status).to eq(200)
         expect(last_response.headers["Content-Type"]).to include("text/html")
         expect(last_response.body).to include("DemoButton")
+      end
+    end
+
+    # Story 17.0i — `render :new, status: :unprocessable_entity`, the first thing
+    # a Rails developer writes for a failed save, answered 500 on a ruact page
+    # ("__ruact_component__ called outside a ruact_render flow").
+    describe "Story 17.0i: a ruact page answers with a status", :story_17_0i do
+      # Accept only, like the rest of this file: with `Ruact-Request: 1` the
+      # navigation boundary (17.0f) would answer these spec-file controllers
+      # (defined outside Rails.root/app) native, before the action runs.
+      let(:flight_headers) { { "HTTP_ACCEPT" => "text/x-component" } }
+      let(:html_headers)   { { "HTTP_ACCEPT" => "text/html" } }
+
+      shared_examples "a ruact page answering 422" do |path, label|
+        it "#{path}: renders through ruact with 422 — as HTML", :aggregate_failures do
+          post path, {}, html_headers
+
+          expect(last_response.status).to eq(422)
+          expect(last_response.headers["Content-Type"]).to include("text/html")
+          expect(last_response.body).to include(label)
+          expect(last_response.body).to include(%(id="root"))
+        end
+
+        it "#{path}: renders through ruact with 422 — as Flight", :aggregate_failures do
+          post path, {}, flight_headers
+
+          expect(last_response.status).to eq(422)
+          expect(last_response.headers["Content-Type"]).to include("text/x-component")
+          expect(last_response.body).to include(label)
+        end
+      end
+
+      it_behaves_like "a ruact page answering 422", "/status-demo/create_action", "status-new"
+      it_behaves_like "a ruact page answering 422", "/status-demo/create_string", "status-new"
+      it_behaves_like "a ruact page answering 422", "/status-demo/create_hash", "status-new"
+      it_behaves_like "a ruact page answering 422", "/status-demo/create_template", "status-new"
+      it_behaves_like "a ruact page answering 422", "/status-demo/create_locals", "from-locals"
+
+      # `format.html` in a `respond_to` matches the HTML request. A Flight
+      # request matches no format at all (`text/x-component` is not a Rails
+      # MIME type) — a gap older than this story, in deferred-work.
+      it "renders through ruact from a respond_to's format.html", :aggregate_failures do
+        post "/status-demo/create_respond_to", {}, html_headers
+
+        expect(last_response.status).to eq(422)
+        expect(last_response.body).to include("status-new")
+      end
+
+      it_behaves_like "a ruact page answering 422", "/status-demo/explicit", "status-new"
+
+      it "streams a Flight 422 with ActionController::Live", :aggregate_failures do
+        post "/status-live-demo/create", {}, flight_headers
+
+        expect(last_response.status).to eq(422)
+        expect(last_response.headers["Content-Type"]).to include("text/x-component")
+        expect(last_response.body).to include("status-new")
+      end
+
+      it_behaves_like "a ruact page answering 422", "/status-demo/create_delegated", "status-new"
+
+      it "keeps redirect_to callable with an explicit receiver, as Rails does", :aggregate_failures do
+        post "/status-demo/redirect_delegated", {}, flight_headers
+
+        expect(last_response.status).to eq(200)
+        expect(last_response.body).to include("redirectUrl")
+      end
+
+      it "keeps the status Rails would give when none is asked for" do
+        post "/status-demo/create_no_status", {}, flight_headers
+
+        expect(last_response.status).to eq(200)
+      end
+
+      it "leaves every other renderer to Rails", :aggregate_failures do
+        post "/status-demo/create_json", {}, flight_headers
+        expect(last_response.status).to eq(422)
+        expect(JSON.parse(last_response.body)).to eq("ok" => false)
+
+        post "/status-demo/create_plain", {}, flight_headers
+        expect(last_response.status).to eq(422)
+        expect(last_response.body).to eq("nope")
+      end
+
+      # A server-function call asks for JSON only: an HTML template is not its
+      # answer, and ruact does not make it one.
+      it "leaves a JSON-only request to Rails" do
+        expect { post "/status-demo/create_action", {}, { "HTTP_ACCEPT" => "application/json" } }
+          .to raise_error(ActionView::MissingTemplate)
+      end
+
+      # AC3 — what Rails renders on its own fails naming the call that works.
+      it "names ruact_render when Rails renders a template of another folder" do
+        expect { post "/status-demo/create_other_folder", {}, flight_headers }
+          .to raise_error(ActionView::Template::Error,
+                          Regexp.new('<DemoButton />.*"controller_request_spec_support/implicit_demo/show".*' \
+                                     'ruact_render\\(template: "controller_request_spec_support/implicit_demo/show"',
+                                     Regexp::MULTILINE))
+      end
+
+      it "names ruact_pages when the template is not a declared page" do
+        expect { post "/status-pages-demo/create", {}, flight_headers }
+          .to raise_error(ActionView::Template::Error, /ruact_pages/)
       end
     end
   end
