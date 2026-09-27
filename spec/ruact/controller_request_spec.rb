@@ -146,6 +146,7 @@ module ControllerRequestSpecSupport
           get "/plain-layout-demo/show", to: "controller_request_spec_support/plain_layout_demo#show"
           # Story 17.0i — a ruact page answers with a status.
           STATUS_DEMO_ROUTES.each { |(path, target)| post path, to: "controller_request_spec_support/#{target}" }
+          get "/status-demo/new", to: "controller_request_spec_support/status_demo#new"
         end
       end
     end
@@ -1118,6 +1119,36 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         post "/status-demo/create_with_location", {}, html_headers
 
         expect(last_response.headers["Location"]).to end_with("/status-demo/1")
+      end
+
+      # Story 17.0h — a form on a TURBO page that posts to a ruact action: Turbo
+      # fetches it, gets a ruact document carrying `turbo-visit-control=reload`
+      # and reloads the page it is on — the validation errors and what was typed
+      # are gone. In development ruact says so, naming the fix.
+      context "when a Turbo form submission gets a ruact page back" do
+        let(:log) { StringIO.new }
+
+        before do
+          allow_any_instance_of(ControllerRequestSpecSupport::StatusDemoController) # rubocop:disable RSpec/AnyInstance
+            .to receive(:logger).and_return(Logger.new(log))
+        end
+
+        it "warns, naming the action, the form's request and data-turbo=\"false\"", :aggregate_failures do
+          post "/status-demo/create_action", {}, html_headers.merge("HTTP_X_TURBO_REQUEST_ID" => "abc")
+
+          expect(last_response.status).to eq(422)
+          expect(log.string).to include("[ruact]")
+            .and include("StatusDemoController#create_action")
+            .and include("POST /status-demo/create_action")
+            .and include(%(data-turbo="false"))
+        end
+
+        it "stays silent for the same request without Turbo, and for a Turbo GET", :aggregate_failures do
+          post "/status-demo/create_action", {}, html_headers
+          get "/status-demo/new", {}, html_headers.merge("HTTP_X_TURBO_REQUEST_ID" => "abc")
+
+          expect(log.string).not_to include("data-turbo")
+        end
       end
 
       it "keeps the status Rails would give when none is asked for" do

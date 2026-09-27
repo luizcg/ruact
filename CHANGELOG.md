@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A development warning when a Turbo form gets a ruact page back.** A form on a Turbo page that posts to a ruact action is fetched by Turbo; the ruact page that answers (a `422` with validation errors, say) tells Turbo to reload, so Turbo reloads the page the form is on and the answer is lost without a trace. In development ruact now logs a `[ruact]` warning naming the action, the request and the fix: `data-turbo="false"` on that form, so the browser submits it and shows the answer.
+
 ### Fixed
 
 - **`render :new, status: :unprocessable_entity` answered 500 on a ruact page.** The Rails idiom for a failed save rendered the template outside ruact, and its first client component raised `__ruact_component__ called outside a ruact_render flow`, with no hint of the fix. A `render` whose template is a ruact page of the same controller — `render :new`, `render "new"`, `render action:`, `render template: "posts/new"` — now goes through ruact, with its `status:`, `locals:`, `location:`, `variant:`, `locale:` and `assigns:` — when that `.html.erb` (or a locale/variant of it) is the template Rails would pick for the request, so a `.json` URL or a `format.json` branch still renders the JSON template. Every other `render` (other renderers, another folder's template, an action outside `ruact_pages`, an option ruact does not take such as wicked_pdf's `pdf:` or a stray `alert:`) is Rails' own, as before — and when that leaves a client component outside ruact, the error names the option. `ruact_render` takes `status:` too. A client component in a template Rails renders on its own now raises an error naming the component, the template and the call that renders it through ruact. The client router renders a Flight `422` in place — the errors are the page, not a failed request — and keeps the form's URL; any other failing status is still an error.
