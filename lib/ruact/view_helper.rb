@@ -43,6 +43,9 @@ module Ruact
       # has no `ruact_render` to call; a mailer (its view's `controller`) or a
       # `Controller.render` that ran no action cannot render through ruact at all.
       owner = respond_to?(:controller) ? controller : nil
+      declined = owner&.instance_variable_get(:@__ruact_declined_render_options)
+      return __ruact_declined_options_message(name, where, declined) if declined.present?
+
       if owner && !(defined?(Ruact::Controller) && owner.class.include?(Ruact::Controller) &&
                     __ruact_page_request?(owner))
         return __ruact_not_a_page_message(name, where) unless __ruact_page_request?(owner)
@@ -69,13 +72,23 @@ module Ruact
       defined?(ActionController::Metal) && owner.is_a?(ActionController::Metal) && owner.action_name.present?
     end
 
+    # Story 17.0i review R3 — the page was ruact's, but `render` carried an
+    # option ruact does not take, so Rails rendered it.
+    def __ruact_declined_options_message(name, where, options)
+      named = options.map { |option| "`#{option}:`" }.join(", ")
+      "ruact: <#{name} /> is a client component, and #{where} is a ruact page, but its `render` got " \
+        "#{named} — not a render option ruact takes — so Rails rendered it outside ruact. Remove it " \
+        "(a flash message goes in `flash.now`), or render the page with `ruact_render`."
+    end
+
     def __ruact_not_a_page_message(name, where)
       "ruact: <#{name} /> is a client component, and #{where} is being rendered outside a request to a " \
         "ruact controller (a mailer, or `Controller.render`). Client components render only in a page a " \
         "ruact controller renders."
     end
 
-    private :__ruact_outside_render_message, :__ruact_page_request?, :__ruact_not_a_page_message
+    private :__ruact_outside_render_message, :__ruact_page_request?, :__ruact_not_a_page_message,
+            :__ruact_declined_options_message
 
     # Story 14.2 (FR104) — emits ruact's full JavaScript asset block: the
     # dev/prod bootstrap entry `<script>` tags (re-targeting the virtual entry

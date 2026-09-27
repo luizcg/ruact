@@ -7,6 +7,7 @@ require_relative "view_helper"
 require_relative "validation_errors_collector"
 require_relative "controller/document_rendering"
 require_relative "controller/pages"
+require_relative "controller/page_rendering"
 
 module Ruact
   # Include in the controllers whose pages render through ruact (island mode,
@@ -39,6 +40,9 @@ module Ruact
     # Which actions are ruact pages — the whole controller, or the ones it
     # declares with `ruact_pages` (Story 17.0g). See Ruact::Controller::Pages.
     include Ruact::Controller::Pages
+    # An explicit `render` of a ruact page goes through ruact (Story 17.0i).
+    # See Ruact::Controller::PageRendering.
+    include Ruact::Controller::PageRendering
 
     # Story 17.0f — "is this action a ruact PAGE?", answered at CLASS level so the
     # navigation boundary (Ruact::NavigationBoundary) can ask it before any action
@@ -143,6 +147,13 @@ module Ruact
     #             Flight payload alike. Omitted, the response keeps the status it
     #             has (200).
     def ruact_render(template: nil, locals: {}, status: nil)
+      __ruact_render(template: template, locals: locals, status: status)
+    end
+
+    # `ruact_render`, plus the lookup details an explicit `render` carries
+    # (`variants:`, `locale:`, `formats:`, `handlers:` — Story 17.0i review R3):
+    # the page renders with the variant or locale Rails would have used.
+    def __ruact_render(template: nil, locals: {}, status: nil, details: {})
       # Story 13.3 (FR98, AC4) — seed the collector from a redirect-back flash
       # before the view evaluates, so `errors={ruact_errors}` surfaces surviving
       # errors (no-op on a plain render — `ruact_errors` then returns `{}`).
@@ -170,7 +181,7 @@ module Ruact
       # (NFR8). See Story 7.9 / Bug 7.8-B.
       with_render_context do |render_context|
         opts = template ? { template: template } : { action: action_name }
-        html = render_to_string(opts.merge(layout: false, locals: locals))
+        html = render_to_string(opts.merge(details).merge(layout: false, locals: locals))
         emit_ruact_response(pipeline, html, render_context, streaming: streaming)
       end
     end
@@ -280,91 +291,12 @@ module Ruact
         request.headers["Ruact-Request"] == "1"
     end
 
-    # Story 17.0i — `render :new, status: :unprocessable_entity`, the Rails idiom
-    # for a failed save, on a ruact page. Rails would render the template itself,
-    # outside a `ruact_render`, and the first client component in it would raise.
-    # So a `render` of a ruact PAGE of this controller — the same predicate
-    # `default_render` uses: `ruact_page_action?` and the template in this
-    # controller's own folder — goes through `ruact_render`, with its `status:`,
-    # `locals:` and `location:`, when that `.html.erb` is the template RAILS
-    # would pick for this request: the format it negotiated (a `.json` path,
-    # `params[:format]`, the `respond_to` branch, the Accept header) decides, so
-    # a scaffold's `format.json { render :show }` still renders `show.json`.
-    # Everything else is Rails' own: other renderers (`json:`, `plain:`,
-    # `partial:`…, including the `render plain:` / `html:` ruact itself issues),
-    # a template of another folder, an action outside `ruact_pages`. `layout:`
-    # and `content_type:` do not apply: a ruact page is rendered into
-    # `config.layout`, as HTML or Flight, like every ruact page.
-    def render(*args, &block)
-      page = block ? nil : __ruact_page_render(args)
-      return super unless page
-
-      self.location = url_for(page.delete(:location)) if page[:location]
-      ruact_render(**page.except(:location))
-    end
-
-    # Both override methods Rails keeps PUBLIC, and this module's body is
-    # private from `private` above: the `responders` gem (Devise's
-    # `respond_with`) calls `controller.render` / `controller.redirect_to` with
-    # an explicit receiver. Public is not routable here — Rails excludes its own
-    # public methods from `action_methods`.
-    public :render, :redirect_to
-
-    # The options of a plain template render — the only `render` ruact takes
-    # over. Anything else (`json:`, `plain:`, `partial:`, a registered renderer
-    # like `turbo_stream:`, or an option a gem adds, like wicked_pdf's `pdf:`)
-    # means the render is not ruact's to answer.
-    TEMPLATE_RENDER_OPTIONS = %i[action template prefixes locals status location layout content_type
-                                 formats variants handlers].freeze
-    private_constant :TEMPLATE_RENDER_OPTIONS
-
-    # The `ruact_render` arguments for an explicit `render` of one of this
-    # controller's ruact pages, or nil. Rails' own `_normalize_args` reads the
-    # arguments (`render :new` → action, `render "posts/new"` → template), on a
-    # copy: it hands a Hash argument back as itself.
-    def __ruact_page_render(args)
-      options = _normalize_args(*args.map { |arg| arg.is_a?(Hash) ? arg.dup : arg })
-      return nil unless (options.keys - TEMPLATE_RENDER_OPTIONS).empty?
-
-      action = __ruact_render_target(options)
-      return nil unless action && self.class.ruact_page_action?(action)
-
-      page = self.class.ruact_template_path(action)
-      return nil unless File.exist?(page) && __ruact_rails_would_render?(action, options, page)
-
-      { template: "#{controller_path}/#{action}", locals: options[:locals] || {}, status: options[:status],
-        location: options[:location] }
-    end
-
-    # Whether Rails, left alone, would render `page` for `action`: the lookup
-    # it does itself, with the formats it negotiated for this request (and a
-    # render's own `formats:` / `variants:` / `handlers:`). A Flight request
-    # negotiates every format, HTML first — the page; a `.json` request or a
-    # `format.json` branch negotiates JSON — the JSON template, or Rails' own
-    # MissingTemplate.
-    def __ruact_rails_would_render?(action, options, page)
-      # As Rails' own render passes them: each detail an Array, a nil ignored.
-      details = options.slice(:formats, :variants, :handlers).compact.transform_values { |value| Array(value) }
-      template = lookup_context.find_template(action, [controller_path], false, [], details)
-      File.identical?(template.identifier, page.to_s)
-    rescue ActionView::MissingTemplate
-      false
-    end
-
-    # The action whose template `options` name, when it is one of this
-    # controller's: `action: "new"`, `template: "<controller_path>/new"`, or
-    # nothing at all (`render status: 422` — the current action's template).
-    def __ruact_render_target(options)
-      if options.key?(:template)
-        directory, name = File.split(options[:template].to_s)
-        directory == controller_path ? name : nil
-      elsif options.key?(:action)
-        name = options[:action].to_s
-        name.include?("/") ? nil : name
-      else
-        action_name
-      end
-    end
+    # Rails keeps `redirect_to` PUBLIC, and this module's body is private from
+    # `private` above: the `responders` gem (Devise's `respond_with`) calls
+    # `controller.redirect_to` with an explicit receiver (Story 17.0i). Public
+    # is not routable here — Rails excludes its own public methods from
+    # `action_methods`.
+    public :redirect_to
 
     # Implicit rendering needs the action's OWN template: an action declared a
     # page without one renders itself (`ruact_render(template: …)`).

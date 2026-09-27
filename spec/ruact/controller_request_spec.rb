@@ -38,7 +38,7 @@ module ControllerRequestSpecSupport
     *%w[create_action create_string create_hash create_template create_locals create_json create_plain
         create_other_folder explicit create_respond_to create_no_status create_delegated redirect_delegated
         create_scaffold_style create_with_location create_formats_html create_formats_json create_formats_nil
-        create_pdf]
+        create_pdf create_variant create_locale create_assigns create_alert]
       .map { |action| ["/status-demo/#{action}", "status_demo##{action}"] },
     ["/status-pages-demo/create", "status_pages_demo#create"],
     ["/status-demo/create_with_layout", "status_demo#create_with_layout"],
@@ -258,6 +258,13 @@ module ControllerRequestSpecSupport
 
     # Review R2 — an option ruact does not know (wicked_pdf's `pdf:`) is not
     # ruact's to answer.
+    # Review R3 — options Rails honours on a template render, honoured here too.
+    def create_variant = render(:new, variant: :phone, status: 422)
+    def create_locale = render(:new, locale: :en, status: 422)
+    def create_assigns = render(:with_assigns, assigns: { assigned: "from-assigns" }, status: 422)
+    # Review R3 — a key Rails ignores in silence (it is not the flash).
+    def create_alert = render(:new, status: 422, alert: "Could not save")
+
     def create_pdf
       render(pdf: "report", template: "controller_request_spec_support/status_demo/new",
              formats: [:html])
@@ -424,6 +431,11 @@ ControllerRequestSpecSupport.write_view(
       <DemoButton label={label} />
     </div>
   ERB
+)
+STATUS_DEMO_VIEWS = ControllerRequestSpecSupport.app_root.join("app/views/controller_request_spec_support/status_demo")
+File.write(STATUS_DEMO_VIEWS.join("new.html+phone.erb"), %(<DemoButton label={"status-new-phone"} />\n))
+ControllerRequestSpecSupport.write_view(
+  "controller_request_spec_support/status_demo", "with_assigns", %(<DemoButton label={@assigned} />\n)
 )
 ControllerRequestSpecSupport.write_view(
   "controller_request_spec_support/status_live_demo", "new", <<~ERB
@@ -1032,9 +1044,35 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         end.to raise_error(ActionView::Template::Error, /only in a page a ruact controller renders/)
       end
 
-      it "leaves a render with an option it does not know to Rails" do
+      it "leaves a render with an option it does not know to Rails, and says which option" do
         expect { post "/status-demo/create_pdf", {}, html_headers }
-          .to raise_error(ActionView::Template::Error, /outside ruact/)
+          .to raise_error(ActionView::Template::Error, /`pdf:`.*not.*render option ruact takes/m)
+      end
+
+      it "names a stray option Rails would have ignored, instead of pointing at ruact_pages", :aggregate_failures do
+        message = begin
+          post "/status-demo/create_alert", {}, html_headers
+          nil
+        rescue ActionView::Template::Error => e
+          e.message
+        end
+
+        expect(message).to include("`alert:`")
+        expect(message).not_to include("ruact_pages")
+      end
+
+      it "honours variant:, locale: and assigns: as Rails does", :aggregate_failures do
+        post "/status-demo/create_variant", {}, html_headers
+        expect(last_response.status).to eq(422)
+        expect(last_response.body).to include("status-new-phone")
+
+        post "/status-demo/create_locale", {}, flight_headers
+        expect(last_response.status).to eq(422)
+        expect(last_response.body).to include("status-new")
+
+        post "/status-demo/create_assigns", {}, flight_headers
+        expect(last_response.status).to eq(422)
+        expect(last_response.body).to include("from-assigns")
       end
 
       it "keeps the Location header a render asks for" do
