@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13] - 2026-09-27
+
 ### Added
 
 - **A development warning when a Turbo form gets a ruact page back.** A form on a Turbo page that posts to a ruact action is fetched by Turbo; Turbo does not show the ruact page that answers (a `422` with validation errors, say): it reloads the form's page, drops the answer or pastes the document into its own, depending on the status. In development and test ruact now logs a `[ruact]` warning naming the action, the request and the fix: `data-turbo="false"` on that form, so the browser submits it and shows the answer.
@@ -354,7 +356,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI matrix** — GitHub Actions: RSpec across Ruby 3.2 × 3.3 × Rails 7.0 × 7.1 × 7.2 × 8.0; RuboCop; YARD docs; memory benchmark; E2E system tests against React 19.0.0 and 19.x (Capybara + Cuprite); non-blocking React@next job with auto-issue on failure.
 - **E2E test app** — `e2e/` Rails app (no DB, in-memory Post model) with full CRUD system tests validating the complete request cycle.
 
-[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.12...HEAD
+[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.13...HEAD
+[0.0.13]: https://github.com/luizcg/ruact/releases/tag/v0.0.13
 [0.0.12]: https://github.com/luizcg/ruact/releases/tag/v0.0.12
 [0.0.11]: https://github.com/luizcg/ruact/releases/tag/v0.0.11
 [0.0.10]: https://github.com/luizcg/ruact/releases/tag/v0.0.10
