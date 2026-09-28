@@ -59,6 +59,7 @@ module Ruact
       # committed: that is a configuration error, raised in development/test and
       # logged-and-degraded in production rather than served to real traffic.
       def render_ruact_document(payload)
+        __ruact_warn_turbo_form_submission if __ruact_local_env?
         # Set for EVERY branch, the shell included: besides carrying the payload
         # to a layout's zero-argument `ruact_js_assets`, it is how
         # `ruact_head_assets` knows this document is ruact's and emits the Turbo
@@ -186,6 +187,27 @@ module Ruact
             Or copy the layout into your app with `rails generate ruact:layout`.
         MSG
         __ruact_local_env? ? logger&.info(message) : logger&.error(message)
+      end
+
+      # Story 17.0h — a form on a Turbo page that posts to a ruact action. Turbo
+      # fetches it and gets back a ruact document, which carries
+      # `turbo-visit-control=reload`. What Turbo then does depends on the status
+      # and on a surrounding Turbo Frame (a 4xx reloads the form's page, a 2xx
+      # is dropped, a 5xx is pasted into the Turbo page), but never shows the
+      # answer — the validation errors, what was typed. The browser, submitting
+      # natively, would. Said in development and test (decision of Luiz); every
+      # Turbo request carries `X-Turbo-Request-Id`.
+      def __ruact_warn_turbo_form_submission
+        return if request.nil? || request.get? || request.head?
+        return if request.headers["X-Turbo-Request-Id"].blank?
+
+        logger&.warn(<<~MSG.strip)
+          [ruact] #{self.class.name}##{action_name} answered a Turbo form submission
+            (#{request.request_method} #{request.path}) with a ruact page (#{response.status}). Turbo does not
+            show a ruact page as a form's answer — it reloads a page, drops the answer, or pastes this document
+            into its own — so validation errors and what was typed are lost. Add data-turbo="false" to that
+            form, so the browser submits it and shows the answer.
+        MSG
       end
 
       def __ruact_local_env?
