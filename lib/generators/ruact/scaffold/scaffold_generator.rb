@@ -107,7 +107,7 @@ module Ruact
 
       SUPPORTED_TYPES = TYPE_MAP.keys.freeze
 
-      # Column types the `search` query's case-insensitive LIKE scope spans —
+      # Column types the search query's case-insensitive LIKE scope spans —
       # matching numeric/date/boolean columns by substring is meaningless.
       SEARCHABLE_COLUMN_TYPES = %w[string text].freeze
 
@@ -191,7 +191,7 @@ module Ruact
       end
 
       # AC5 — the client-driven read path. Emits the resource query
-      # (`<Plural>Query < ApplicationQuery` with a `search(q:)` method) in BOTH
+      # (`<Plural>Query < ApplicationQuery` with a `search_<plural>(q:)` method) in BOTH
       # `.tsx` and `.jsx` modes (the query is server-side Ruby; the language flag
       # only governs the React component). The `ApplicationQuery` base is created
       # idempotently — `ruact:install` does NOT ship it, and a second scaffold in
@@ -205,13 +205,13 @@ module Ruact
         template "queries/application_query.rb.tt", application_query
       end
 
-      # AC5 — mount the resource query so its `search` method becomes the named
-      # GET route the codegen exports as `search` (consumed by `useQuery`).
+      # AC5 — mount the resource query so its `search_<plural>` method becomes the
+      # named GET route the codegen exports as `search<Plural>` (consumed by `useQuery`).
       # Idempotent on re-run: guard on the drawn `ruact_queries <Plural>Query`
       # line first (sibling of {#add_resource_route}'s `resources :posts` guard).
       def add_query_route
         routes_file = Pathname(destination_root).join("config/routes.rb")
-        if routes_file.exist? && routes_file.read.match?(/^\s*ruact_queries\s+#{Regexp.escape(query_class_name)}\b/)
+        if routes_file.exist? && query_already_mounted?(routes_file.read)
           say_status "skip", "ruact_queries #{query_class_name} already routed", :yellow
           return
         end
@@ -406,17 +406,44 @@ module Ruact
 
         # The read-side query class — PLURAL, mirroring the golden `PostsQuery`
         # (file `posts_query.rb`) and Zeitwerk's path↔constant rule. Mounted via
-        # `ruact_queries <Plural>Query`; its `search` method becomes `GET /q/search`.
+        # `ruact_queries <Plural>Query`; its search method becomes `GET /q/searchPosts`.
         def query_class_name
           "#{class_name.pluralize}Query"
         end
 
-        # The JS import alias for the query's `search` accessor. The codegen
-        # exports a generic `search` (from `<Plural>Query#search`); the component
-        # aliases it `search<Plural>` to avoid a bare-`search` collision — exactly
-        # as the golden does (`search as searchPosts`).
+        # True when a `ruact_queries` line already lists this exact class —
+        # alone or among others, ignoring a trailing comment and not mistaking
+        # `Legacy::PostsQuery` or `BlogPostsQuery` for `PostsQuery`.
+        def query_already_mounted?(routes)
+          class_ref = /(?<![:\w])#{Regexp.escape(query_class_name)}\b/
+          routes.each_line.any? do |line|
+            code = line.sub(/#.*/, "")
+            code.match?(/\A\s*ruact_queries\b/) && code.match?(class_ref)
+          end
+        end
+
+        # The query's search method, named after the resource (`search_posts`).
+        # Query names share ONE namespace — one `GET /q/<name>` route and one
+        # export of `@/.ruact/server-functions` per name — so a bare `search`
+        # was free for the first resource and broke the boot on the second
+        # (`ruact_query_search` drawn twice).
+        def query_search_method
+          "search_#{plural_table_name}"
+        end
+
+        # The accessor the codegen exports for {#query_search_method}
+        # (`searchPosts`); the List imports it under this name, unaliased.
         def js_search_alias
-          "search#{class_name.pluralize}"
+          Ruact::ServerFunctions::NameBridge.to_js_identifier(query_search_method)
+        end
+
+        # The List's collection prop, named after the resource (`posts`,
+        # `comments`, `blogPosts`) rather than fixed to the golden's `posts`.
+        # The List binds it to a fixed local (`initialRows`), so a model whose
+        # plural matches one of the List's own names (`Row` → `rows`) or one a
+        # module cannot declare (`Argument` → `arguments`) still compiles.
+        def js_collection_prop
+          plural_table_name.camelize(:lower)
         end
 
         # The columns the search `LIKE` scope spans — string/text only (a

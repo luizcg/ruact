@@ -18,7 +18,7 @@
 // freshly scaffolded app will not resolve these until 10.5 lands; that is
 // expected (the end-to-end live demo is Story 10.7).
 import { useState } from "react";
-import { search as searchPosts, destroyPost, useQuery } from "@/.ruact/server-functions";
+import { searchPosts, destroyPost, useQuery } from "@/.ruact/server-functions";
 import { PostDeleteDialog } from "./PostDeleteDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -194,7 +194,7 @@ function RowActions({ record, onDeleted }: {
 }
 
 export function PostList({
-  posts = [],
+  posts: initialRows = [],
   emptyLabel = "No posts yet — create one.",
 }: { posts?: PostRow[]; emptyLabel?: string }) {
   const [q, setQ] = useState("");
@@ -215,7 +215,7 @@ export function PostList({
   // the box is idle and we fall back to the server-rendered rows.
   const { data: searchData, loading: searchLoading } = useQuery<PostRow[]>(searchPosts, { q: q.trim() });
 
-  const source = searching ? searchData ?? [] : posts;
+  const source = searching ? searchData ?? [] : initialRows;
   const rows = removedIds.length === 0 ? source : source.filter((row) => !removedIds.includes(row.id));
   // Always sort a COPY — never mutate the prop/source array.
   const sortedRows = sort ? [...rows].sort((a, b) => compareRows(a, b, sort)) : rows;

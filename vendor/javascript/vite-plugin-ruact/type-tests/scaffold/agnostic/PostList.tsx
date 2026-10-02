@@ -13,7 +13,7 @@
 // sort/pagination is Phase-3 territory. (The richer shadcn DataTable styling is
 // the opt-in `--shadcn` path — Story 14.5.)
 import { useState } from "react";
-import { search as searchPosts, destroyPost, useQuery } from "@/.ruact/server-functions";
+import { searchPosts, destroyPost, useQuery } from "@/.ruact/server-functions";
 import { PostDeleteDialog } from "./PostDeleteDialog";
 
 type PostRow = { id: number; title: string | null; body: string | null; published: boolean | null; views: number | null; published_on: string | null; published_at: string | null; author_id: number | null };
@@ -139,7 +139,7 @@ function RowActions({ record, onDeleted }: {
 }
 
 export function PostList({
-  posts = [],
+  posts: initialRows = [],
   emptyLabel = "No posts yet — create one.",
 }: { posts?: PostRow[]; emptyLabel?: string }) {
   const [q, setQ] = useState("");
@@ -160,7 +160,7 @@ export function PostList({
   // the box is idle and we fall back to the server-rendered rows.
   const { data: searchData, loading: searchLoading } = useQuery<PostRow[]>(searchPosts, { q: q.trim() });
 
-  const source = searching ? searchData ?? [] : posts;
+  const source = searching ? searchData ?? [] : initialRows;
   const rows = removedIds.length === 0 ? source : source.filter((row) => !removedIds.includes(row.id));
   // Always sort a COPY — never mutate the prop/source array.
   const sortedRows = sort ? [...rows].sort((a, b) => compareRows(a, b, sort)) : rows;

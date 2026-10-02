@@ -497,6 +497,38 @@ RSpec.describe "Story 9.4: Ruact::Query + ruact_queries dispatch", :story_9_4 do
       )
     end
 
+    # Two scaffolded resources used to both define `search`: Rails raised
+    # "Invalid route name, already in use: 'ruact_query_search'", naming a
+    # route the app never wrote, and the app did not boot.
+    it "names both the query and the way out when two classes define the same method" do
+      posts    = Class.new(Ruact::Query) { def search(term:) = term }
+      comments = Class.new(Ruact::Query) { def search(term:) = term }
+      stub_const("QueryRequestSpecSupport::PostsQuery", posts)
+      stub_const("QueryRequestSpecSupport::CommentsQuery", comments)
+
+      route_set = ActionDispatch::Routing::RouteSet.new
+      expect do
+        route_set.draw do
+          ruact_queries posts
+          ruact_queries comments
+        end
+      end.to raise_error(Ruact::ConfigurationError,
+                         %r{CommentsQuery#search cannot be mounted: GET /q/search is already mounted.*rename one}m)
+    end
+
+    it "names the double mount when the same class is listed twice in one draw" do
+      once = Class.new(Ruact::Query) { def search_posts(term:) = term }
+      stub_const("QueryRequestSpecSupport::TwicePostsQuery", once)
+
+      route_set = ActionDispatch::Routing::RouteSet.new
+      expect do
+        route_set.draw do
+          ruact_queries once
+          ruact_queries once
+        end
+      end.to raise_error(Ruact::ConfigurationError, /appearing twice/)
+    end
+
     it "the SAME class re-mounting (dev reload) is still allowed" do
       expect do
         Ruact::ServerFunctions::QueryDispatch.controller_for(QueryRequestSpecSupport::ProbeQuery)
