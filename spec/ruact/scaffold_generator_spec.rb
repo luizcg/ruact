@@ -966,7 +966,7 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect { build(%w[Foo bar:custom_unknown_type]) }.to raise_error(Thor::Error) do |error|
         expect(error.message).to include("bar:custom_unknown_type")
         expect(error.message).to include("string, text, integer, float, decimal, boolean, date, datetime, references")
-        expect(error.message).to include("scaffold.md#attribute-types")
+        expect(error.message).to include("https://ruact.dev/docs/api/scaffold.html#attribute-types")
       end
     end
 
@@ -1195,7 +1195,7 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
         gen = build(default_args)
         silently do
           expect { gen.check_shadcn_setup }.to raise_error(Thor::Error) do |error|
-            expect(error.message).to include("npx shadcn@latest init")
+            expect(error.message).to include("npx shadcn@latest init --base radix")
             expect(error.message)
               .to include("npx shadcn@latest add button input textarea switch label badge " \
                           "table alert-dialog dropdown-menu")
@@ -1329,8 +1329,8 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
         write_package_json({ "dependencies" => { "shadcn" => "^3.0.0" } })
         output = capture_stdout { build(default_args).check_shadcn_setup }
         expect(output).to include("shadcn v3 is not regression-tested")
-        expect(output).to include("tested majors: 1, 2")
-        expect(output).to include("scaffold.md#shadcnui-setup")
+        expect(output).to include("tested majors: 1, 2, 4")
+        expect(output).to include("https://ruact.dev/docs/guides/shadcn-ui.html")
         # the override points to the Ruact.configure block, NOT the freeze-blocked
         # direct mutation of Ruact.config (Codex R1)
         expect(output).to include("Ruact.configure { |c| c.shadcn_compatible_versions")

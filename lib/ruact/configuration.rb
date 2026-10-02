@@ -73,7 +73,7 @@ module Ruact
     #     a stream-safety guarantee — Rack's multipart parser will still buffer
     #     bodies up to its own limits before the guard rejects. For very large
     #     uploads route through Active Storage Direct Upload or a presigned S3
-    #     URL; see `website/docs/api/server-actions.md` "File uploads" section.
+    #     URL; see https://ruact.dev/docs/api/server-actions.html, "File uploads".
     #   @example Raise the limit to 25 MB
     #     Ruact.configure { |c| c.max_upload_bytes = 25 * 1024 * 1024 }
     #   @example Disable the gem-side guard (reverse proxy owns the cap)
@@ -132,11 +132,13 @@ module Ruact
     #     host `package.json`) that is NOT in this list, it emits a warning
     #     (never a hard stop) that the generated components may import from
     #     outdated `@/components/ui/*` paths. Must be a non-empty Array of
-    #     Integers. Default `[1, 2]` (the majors tested at gem-release time).
+    #     Integers. Default `[1, 2, 4]` (the majors tested at gem-release time;
+    #     4 was run end to end on 2026-10-01: init --base radix, the full add
+    #     list, scaffold --shadcn, form/table/dialog in a browser).
     #     A dev who has manually verified a newer major adds it here to
     #     suppress the warning — the documented "override" path.
     #   @example Allow shadcn v3 once you have verified it
-    #     Ruact.configure { |c| c.shadcn_compatible_versions = [1, 2, 3] }
+    #     Ruact.configure { |c| c.shadcn_compatible_versions = [1, 2, 3, 4] }
     #
     # @!attribute [r] layout
     #   @return [Boolean, String] Which document wrapper a ruact page's HTML
@@ -250,7 +252,7 @@ module Ruact
         @query_parent_controller = "ApplicationController"
         @signed_global_id_default_purpose = nil
         @signed_global_id_default_expires_in = nil
-        @shadcn_compatible_versions = [1, 2]
+        @shadcn_compatible_versions = [1, 2, 4]
         @layout = false
         @layout_stylesheets = [:app]
       end

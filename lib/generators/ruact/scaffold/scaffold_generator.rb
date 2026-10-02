@@ -121,7 +121,7 @@ module Ruact
       REFERENCE_OPTIONS_LIMIT = 100
 
       # Documentation anchor referenced by the unknown-type error message (AC4).
-      DOCS_POINTER = "https://github.com/luizcg/ruact/blob/main/website/docs/api/scaffold.md#attribute-types"
+      DOCS_POINTER = "https://ruact.dev/docs/api/scaffold.html#attribute-types"
 
       # Story 10.5 (AC1, AC2, AC4) — the shadcn/ui dependency PRE-FLIGHT: detect
       # the host's shadcn state (complete / missing / partial) and either proceed
