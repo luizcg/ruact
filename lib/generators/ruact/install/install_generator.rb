@@ -946,13 +946,19 @@ module Ruact
 
       # Adds the shadcn devDependencies and the build:css script to an existing
       # package.json. Never overwrites a key the app already has (its own
-      # Tailwind version wins). An unparseable file is left alone, loudly.
+      # Tailwind version wins). The file is re-serialized with 2-space JSON
+      # when something is added. An unparseable file is left alone, loudly.
       def merge_shadcn_package_json(path)
-        pkg = JSON.parse(path.read)
+        # `create_file … force: true` would DELETE the whole file under
+        # `rails destroy`; this merge has nothing to undo.
+        return if behavior == :revoke
+
+        pkg = JSON.parse(path.read.delete_prefix("\uFEFF"))
         raise JSON::ParserError, "top level is #{pkg.class}, not an object" unless pkg.is_a?(Hash)
 
         dev = (pkg["devDependencies"] ||= {})
         scripts = (pkg["scripts"] ||= {})
+        flag_tailwind_below_v4(dev["tailwindcss"] || pkg.dig("dependencies", "tailwindcss"))
         added = SHADCN_DEV_DEPENDENCIES.reject { |name, _| dev.key?(name) || pkg.dig("dependencies", name) }
         dev.merge!(added)
         add_script = !scripts.key?("build:css")
@@ -967,17 +973,37 @@ module Ruact
         say_status "update", "package.json (+ #{(added.keys + (add_script ? ['build:css'] : [])).join(', ')})", :green
       rescue JSON::ParserError => e
         shadcn_gaps << "package.json could not be parsed (#{e.message.lines.first.strip}) — add " \
-                       "#{SHADCN_DEV_DEPENDENCIES.keys.join(', ')} to devDependencies yourself"
+                       "#{SHADCN_DEV_DEPENDENCIES.keys.join(', ')} to devDependencies and a " \
+                       "\"build:css\" script (#{SHADCN_BUILD_CSS_SCRIPT}) yourself"
       end
 
-      # Appends the Tailwind watch process to an existing Procfile.dev. An app
-      # that already builds Tailwind (tailwindcss-rails' `css:` process, say) is
-      # left alone: two watchers writing the same file is worse than none.
+      # globals.css is written for Tailwind 4 (`@import "tailwindcss"`). An app
+      # pinned to an older major keeps its version, and the setup is not in place.
+      def flag_tailwind_below_v4(version)
+        major = version.to_s[/\d+/]
+        return if major.nil? || major.to_i >= 4
+
+        shadcn_gaps << "package.json pins tailwindcss #{version}; app/javascript/styles/globals.css " \
+                       "and shadcn's current components need Tailwind 4"
+      end
+
+      # Appends the Tailwind watch process to an existing Procfile.dev, unless a
+      # process already builds globals.css. A different `css:` process, or
+      # another Tailwind watcher (tailwindcss-rails' compiles its own entry into
+      # the same app/assets/builds/tailwind.css), cannot be appended next to: it
+      # is reported as a gap, never silently accepted. Comment lines are ignored.
       def append_shadcn_css_process(path)
         content = path.read
-        if content.match?(/^\s*css\s*:/) || content.include?("tailwind")
-          say_status "skip", "Procfile.dev already builds CSS — keep it pointed at " \
-                             "app/javascript/styles/globals.css", :yellow
+        code = content.lines.reject { |line| line.lstrip.start_with?("#") }
+
+        if code.any? { |line| line.include?("app/javascript/styles/globals.css") }
+          say_status "identical", "Procfile.dev (already builds globals.css)", :blue
+          return
+        end
+
+        if (clash = code.find { |line| line.match?(/\A\s*css\s*:/) || line.include?("tailwind") })
+          shadcn_gaps << "Procfile.dev already runs `#{clash.strip}`, which does not build " \
+                         "app/javascript/styles/globals.css — replace it with: #{SHADCN_CSS_PROCESS}"
           return
         end
 

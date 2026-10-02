@@ -1302,11 +1302,65 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(JSON.parse(read("package.json"))["devDependencies"].keys.count("tailwindcss")).to eq(1)
       end
 
-      it "leaves a Procfile.dev that already builds Tailwind alone" do
+      def next_steps_output
+        out = StringIO.new
+        original = $stdout
+        $stdout = out
+        generator.send(:show_shadcn_next_steps)
+        out.string
+      ensure
+        $stdout = original
+      end
+
+      # tailwindcss-rails compiles its OWN entry into the same builds file;
+      # globals.css (where shadcn writes its tokens) would never be compiled.
+      it "reports, rather than accepts, a css process that does not build globals.css" do
         write("Procfile.dev", "web: bin/rails server\ncss: bin/rails tailwindcss:watch\n")
         silently { generator.create_launch_files }
 
         expect(read("Procfile.dev")).to eq("web: bin/rails server\ncss: bin/rails tailwindcss:watch\n")
+        expect(next_steps_output).to include("NOT all in place").and include("tailwindcss:watch")
+      end
+
+      it "accepts a Procfile.dev that already builds globals.css" do
+        body = "web: bin/rails server\n#{Ruact::Generators::InstallGenerator::SHADCN_CSS_PROCESS}\n"
+        write("Procfile.dev", body)
+        silently { generator.create_launch_files }
+
+        expect(read("Procfile.dev")).to eq(body)
+        expect(next_steps_output).to include("prerequisites are in place")
+      end
+
+      it "ignores comment lines that mention tailwind" do
+        write("Procfile.dev", "web: bin/rails server\n# TODO: add tailwind\n")
+        silently { generator.create_launch_files }
+
+        expect(read("Procfile.dev")).to include(Ruact::Generators::InstallGenerator::SHADCN_CSS_PROCESS)
+      end
+
+      it "keeps a Tailwind 3 pin but says the setup is not in place" do
+        existing_pkg["devDependencies"]["tailwindcss"] = "^3.4.0"
+        write("package.json", JSON.pretty_generate(existing_pkg))
+        silently { generator.create_package_json }
+
+        expect(JSON.parse(read("package.json")).dig("devDependencies", "tailwindcss")).to eq("^3.4.0")
+        expect(next_steps_output).to include("NOT all in place").and include("Tailwind 4")
+      end
+
+      it "merges a package.json that starts with a byte-order mark" do
+        write("package.json", "\uFEFF#{JSON.pretty_generate(existing_pkg)}")
+        silently { generator.create_package_json }
+
+        expect(JSON.parse(read("package.json")).dig("devDependencies", "tailwindcss")).to eq("^4.0.0")
+      end
+
+      it "leaves package.json in place under `rails destroy`" do
+        write("package.json", JSON.pretty_generate(existing_pkg))
+        revoking = Ruact::Generators::InstallGenerator.new([], { shadcn: true },
+                                                           destination_root: app_root, behavior: :revoke)
+        silently { revoking.create_package_json }
+
+        expect(JSON.parse(read("package.json"))).to eq(existing_pkg)
       end
 
       it "still skips an existing package.json without --shadcn" do

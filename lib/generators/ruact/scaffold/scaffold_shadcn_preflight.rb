@@ -20,7 +20,7 @@ module Ruact
         # Documentation anchor for the shadcn dependency pre-flight: how to set
         # up shadcn, and how to override the version-compat warning.
         SHADCN_DOCS_POINTER =
-          "https://ruact.dev/docs/guides/shadcn-ui.html"
+          "https://ruact.dev/docs/guides/shadcn-ui.html#shadcn-versions"
 
         # The pre-flight body (the {ScaffoldGenerator#check_shadcn_setup} Thor
         # command delegates here). Detect the host's shadcn state, surface the
