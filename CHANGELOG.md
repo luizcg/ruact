@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.14] - 2026-10-02
+
 ### Fixed
 
 - **Scaffolding a second resource stopped the app from booting.** Every `rails generate ruact:scaffold` wrote a query with a method named `search`. Query names share one namespace: each name gets one `GET /q/<name>` route and one export of `@/.ruact/server-functions`. So the second resource drew `ruact_query_search` again, and Rails refused to load the routes with "Invalid route name, already in use: 'ruact_query_search'", a route the app never wrote. The scaffold now names the method after the resource: `PostsQuery#search_posts`, served at `GET /q/searchPosts` and imported as `searchPosts`. Two query classes that define the same method — or one query class mounted twice — now raise `Ruact::ConfigurationError` naming the query, the path and the fix. The new name can meet one thing the bare `search` could not: a custom collection action named `search` on the same controller (`post :search, on: :collection`) also derives `searchPosts`, and boot stops with ruact's name-collision error, which points to `ruact_function_name` to rename one. Apps scaffolded before this release keep their `search` and work as they are. The first scaffold of a *new* resource in such an app no longer collides with it.
@@ -374,7 +376,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI matrix** — GitHub Actions: RSpec across Ruby 3.2 × 3.3 × Rails 7.0 × 7.1 × 7.2 × 8.0; RuboCop; YARD docs; memory benchmark; E2E system tests against React 19.0.0 and 19.x (Capybara + Cuprite); non-blocking React@next job with auto-issue on failure.
 - **E2E test app** — `e2e/` Rails app (no DB, in-memory Post model) with full CRUD system tests validating the complete request cycle.
 
-[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.13...HEAD
+[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.14...HEAD
+[0.0.14]: https://github.com/luizcg/ruact/releases/tag/v0.0.14
 [0.0.13]: https://github.com/luizcg/ruact/releases/tag/v0.0.13
 [0.0.12]: https://github.com/luizcg/ruact/releases/tag/v0.0.12
 [0.0.11]: https://github.com/luizcg/ruact/releases/tag/v0.0.11
