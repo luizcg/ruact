@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The `ruact:scaffold --shadcn` pre-flight printed `npx shadcn@latest init` without `--base radix`.** The current shadcn defaults to Base UI, but the components the scaffold generates import Radix. An app set up from that message got components whose imports do not resolve. The message now prints `--base radix`, as the install generator already did.
 
-- **Two generator messages linked to pages that do not exist.** The unknown-attribute-type error and the shadcn version warning pointed at `website/docs/…` inside this repository, which has no `website/` directory. They now link to ruact.dev.
+- **Two generator messages linked to pages that do not exist.** The unknown-attribute-type error and the shadcn version warning pointed at a documentation path inside this repository, where no such file exists. They now link to ruact.dev.
 
 ### Changed
 
