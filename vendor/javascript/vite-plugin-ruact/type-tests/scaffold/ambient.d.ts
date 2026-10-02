@@ -39,10 +39,10 @@ declare module "@/.ruact/server-functions" {
   // FR88/FR99 wire union — the only param value type a query accessor accepts.
   type Wire = string | number | boolean | null;
 
-  // The codegen exports a generic `search` from `<Plural>Query#search(q:)`,
-  // typed from the declared `(q:)` kwarg (Story 13.4). The List aliases it
-  // `search<Plural>`.
-  export const search: (params: { q: Wire }) => Promise<unknown>;
+  // The codegen exports `searchPosts` from `PostsQuery#search_posts(q:)` —
+  // the scaffold names the query after the resource, because query names
+  // share one namespace across every query class.
+  export const searchPosts: (params: { q: Wire }) => Promise<unknown>;
 
   // Action accessors the generated Form imports (Story 10.3). Actions are NOT
   // typed by FR99 (only queries are — Story 13.4 decision A), so the accessors

@@ -24,9 +24,9 @@ module Ruact
   # The path segment reuses {Ruact::ServerFunctions::NameBridge} verbatim
   # (D4): `def search_users` → `GET /q/searchUsers`, named
   # `ruact_query_searchUsers`. Invalid or JS-reserved method names raise
-  # {Ruact::ConfigurationError} at route-draw time; two query classes mounting
-  # the same method name collide on the route NAME / path and fail Rails' own
-  # duplicate checks — both are loud boot failures, never request-time
+  # {Ruact::ConfigurationError} at route-draw time, and so do two query
+  # classes mounting the same method name (they would collide on the route
+  # name and on the export) — both are loud boot failures, never request-time
   # surprises.
   #
   # The generated dispatch controller PRESERVES the query class's namespace
@@ -56,10 +56,28 @@ module Ruact
 
         query_class.public_instance_methods(false).each do |query_method|
           js_identifier = ServerFunctions::NameBridge.to_js_identifier(query_method)
-          mapper.get("#{prefix}/#{js_identifier}",
-                     to: "#{target}##{query_method}",
-                     as: :"ruact_query_#{js_identifier}")
+          begin
+            mapper.get("#{prefix}/#{js_identifier}",
+                       to: "#{target}##{query_method}",
+                       as: :"ruact_query_#{js_identifier}")
+          rescue ArgumentError => e
+            raise unless e.message.include?("already in use")
+
+            raise_query_name_taken!(query_class, query_method, "#{prefix}/#{js_identifier}")
+          end
         end
+      end
+
+      # Rails' own message ("Invalid route name, already in use") names a route
+      # the app never wrote. Name the query, the method and the way out.
+      def raise_query_name_taken!(query_class, query_method, path)
+        raise Ruact::ConfigurationError,
+              "#{query_class}##{query_method} cannot be mounted: GET #{path} is already mounted " \
+              "in these routes — by another query class that also defines `#{query_method}`, or " \
+              "by `ruact_queries #{query_class}` appearing twice. Query names share one namespace " \
+              "(one route and one export of @/.ruact/server-functions per name): remove the " \
+              "duplicate mount, or rename one of the methods (the scaffold names its search " \
+              "after the resource: search_posts, search_comments)."
       end
     end
   end

@@ -335,9 +335,9 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
 
     let(:list) { read("app/javascript/components/PostList.tsx") }
 
-    it "imports the aliased search accessor + destroy + useQuery from the codegen module", :aggregate_failures do
+    it "imports the resource-named search accessor + destroy + useQuery from the codegen module", :aggregate_failures do
       expect(list).to include(
-        'import { search as searchPosts, destroyPost, useQuery } from "@/.ruact/server-functions"'
+        'import { searchPosts, destroyPost, useQuery } from "@/.ruact/server-functions"'
       )
     end
 
@@ -345,13 +345,16 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(list).to include("useQuery<PostRow[]>(searchPosts, { q: q.trim() })")
       # while q is non-blank → query results; otherwise the server-rendered posts
       # (Story 10.4 applies a removed-ids tombstone so a delete drops a row in place).
-      expect(list).to include("const source = searching ? searchData ?? [] : posts;")
+      expect(list).to include("const source = searching ? searchData ?? [] : initialRows;")
     end
 
-    it "uses a plural search accessor alias for a multi-word model" do
+    it "names the search accessor and the collection prop after a multi-word model", :aggregate_failures do
       run_scaffold(%w[BlogPost title:string])
-      expect(read("app/javascript/components/BlogPostList.tsx"))
-        .to include("import { search as searchBlogPosts, destroyBlogPost, useQuery }")
+      list = read("app/javascript/components/BlogPostList.tsx")
+      expect(list).to include("import { searchBlogPosts, destroyBlogPost, useQuery }")
+      expect(list).to include('props: { blogPosts: "required" }')
+      expect(read("app/queries/blog_posts_query.rb")).to include("def search_blog_posts(q:)")
+      expect(read("app/views/blog_posts/index.html.erb")).to include("<BlogPostList blogPosts={rows} />")
     end
   end
 
@@ -360,10 +363,10 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
 
     let(:query) { read("app/queries/posts_query.rb") }
 
-    it "creates app/queries/posts_query.rb < ApplicationQuery with a search(q:) method", :aggregate_failures do
+    it "creates app/queries/posts_query.rb < ApplicationQuery with a search_posts(q:) method", :aggregate_failures do
       expect(query).to start_with("# frozen_string_literal: true")
       expect(query).to include("class PostsQuery < ApplicationQuery")
-      expect(query).to include("def search(q:)")
+      expect(query).to include("def search_posts(q:)")
       expect(query).to include("private")
       expect(query).to include("def as_row(record)")
     end
@@ -439,6 +442,46 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       routes = read("config/routes.rb")
       expect(routes).to include("ruact_queries PostsQuery")
       expect(routes.scan("ruact_queries PostsQuery").size).to eq(1)
+    end
+
+    # A hand-written `ruact_queries PostsQuery, CommentsQuery` line already
+    # mounts CommentsQuery; a second mount would draw its routes twice.
+    it "does not mount a query already listed on a multi-class ruact_queries line" do
+      File.write(File.join(app_root, "config/routes.rb"),
+                 "Rails.application.routes.draw do\n  ruact_queries PostsQuery, CommentsQuery\nend\n")
+      run_scaffold(%w[Comment body:text])
+
+      expect(read("config/routes.rb").scan("CommentsQuery").size).to eq(1)
+    end
+
+    [
+      "  ruact_queries Legacy::CommentsQuery\n",
+      "  ruact_queries PostsQuery # CommentsQuery next\n",
+      "  ruact_queries BlogCommentsQuery\n"
+    ].each do |line|
+      it "still mounts CommentsQuery next to #{line.strip.inspect}" do
+        File.write(File.join(app_root, "config/routes.rb"), "Rails.application.routes.draw do\n#{line}end\n")
+        run_scaffold(%w[Comment body:text])
+
+        expect(read("config/routes.rb")).to match(/^\s*ruact_queries CommentsQuery$/)
+      end
+    end
+  end
+
+  # The List binds the resource-named prop to a fixed local, so a plural that
+  # matches one of the List's own names, or one an ES module cannot declare,
+  # still compiles (`{ rows = [] }` next to `const rows`, `{ arguments = [] }`).
+  describe "collection prop names that clash with the List's own" do
+    %w[Row Argument SearchDatum].each do |model|
+      it "binds #{model}'s prop to initialRows", :aggregate_failures do
+        run_scaffold(%W[#{model} name:string])
+        prop = model.underscore.pluralize.camelize(:lower)
+        list = read("app/javascript/components/#{model}List.tsx")
+
+        expect(list).to include("  #{prop}: initialRows = [],")
+        expect(list).not_to match(/^\s*#{prop} = \[\],/)
+        expect(list).to include("searchData ?? [] : initialRows;")
+      end
     end
   end
 
@@ -848,7 +891,7 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
       expect(list).to include("const [removedIds, setRemovedIds] = useState<number[]>([]);")
       expect(list).to include("setRemovedIds((current) => (current.includes(id) ? current : [...current, id]));")
       # the tombstone filters WHICHEVER source is shown — search results included
-      expect(list).to include("const source = searching ? searchData ?? [] : posts;")
+      expect(list).to include("const source = searching ? searchData ?? [] : initialRows;")
       expect(list).to include("source.filter((row) => !removedIds.includes(row.id))")
     end
 
@@ -879,7 +922,7 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
 
     it "PRESERVES the 10.2 search + FR99/FR100 + empty state (no regression)", :aggregate_failures do
       expect(list).to include(
-        'import { search as searchPosts, destroyPost, useQuery } from "@/.ruact/server-functions"'
+        'import { searchPosts, destroyPost, useQuery } from "@/.ruact/server-functions"'
       )
       expect(list).to include("export const __ruactContract = {")
       expect(list).to include('posts: "required"')
@@ -1637,7 +1680,7 @@ RSpec.describe Ruact::Generators::ScaffoldGenerator, :story_10_1 do # rubocop:di
         expect(list).to include("<tbody>")
         # the data flow is preserved verbatim: server-functions imports + useQuery
         expect(list).to include(
-          'import { search as searchPosts, destroyPost, useQuery } from "@/.ruact/server-functions"'
+          'import { searchPosts, destroyPost, useQuery } from "@/.ruact/server-functions"'
         )
         expect(list).to include("useQuery<PostRow[]>(searchPosts, { q: q.trim() })")
         expect(list).to include("function compareRows(")

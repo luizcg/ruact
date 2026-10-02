@@ -3,4 +3,4 @@
     Flight payload: no client query, no loading flash. The ivar is serialized to
     plain row hashes here in the view (no as_json on the model). %>
 <%% rows = @<%= plural_name %>.map { |<%= singular_name %>| <%= serialized_row(singular_name) %> } %>
-<<%= class_name %>List posts={rows} />
+<<%= class_name %>List <%= js_collection_prop %>={rows} />

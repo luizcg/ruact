@@ -8,7 +8,7 @@
 // <%= class_name %> list — a DESIGN-SYSTEM-AGNOSTIC table (Story 14.4 / FR103). The
 // default scaffold ships plain, native HTML elements styled by the browser /
 // Rails-default CSS — NO shadcn/ui, NO Tailwind, NO table-engine dependency. The
-// collection arrives as a SERVER-RENDERED prop (`posts`); there is no client query
+// collection arrives as a SERVER-RENDERED prop (`<%= js_collection_prop %>`); there is no client query
 // for the initial render. A query only enters when the *client* drives the read:
 // the search box calls useQuery(<%= js_search_alias %>, { q }) and swaps in filtered rows as
 // you type. Per-row delete drives a controlled <%= class_name %>DeleteDialog (DELETE
@@ -18,17 +18,17 @@
 // sort/pagination is Phase-3 territory. (The richer shadcn DataTable styling is
 // the opt-in `--shadcn` path — Story 14.5.)
 import { useState } from "react";
-import { search as <%= js_search_alias %>, destroy<%= class_name %>, useQuery } from "@/.ruact/server-functions";
+import { <%= js_search_alias %>, destroy<%= class_name %>, useQuery } from "@/.ruact/server-functions";
 import { <%= class_name %>DeleteDialog } from "./<%= class_name %>DeleteDialog";
 <% if typescript? -%>
 
 type <%= class_name %>Row = { <%= ts_row_fields %> };
 
-// FR100 — opt-in call-site contract: `posts` is required. The index view passes
-// `<<%= class_name %>List posts={rows} />` (satisfied); a call site that omits it
+// FR100 — opt-in call-site contract: `<%= js_collection_prop %>` is required. The index view passes
+// `<<%= class_name %>List <%= js_collection_prop %>={rows} />` (satisfied); a call site that omits it
 // fails at preprocess time, not as a silent `undefined` in the browser.
 export const __ruactContract = {
-  props: { posts: "required" },
+  props: { <%= js_collection_prop %>: "required" },
 };
 <% end -%>
 
@@ -146,9 +146,9 @@ function RowActions({ record, onDeleted }<% if typescript? %>: {
 }
 
 export function <%= class_name %>List({
-  posts = [],
+  <%= js_collection_prop %>: initialRows = [],
   emptyLabel = "No <%= plural_name %> yet — create one.",
-}<% if typescript? %>: { posts?: <%= class_name %>Row[]; emptyLabel?: string }<% end %>) {
+}<% if typescript? %>: { <%= js_collection_prop %>?: <%= class_name %>Row[]; emptyLabel?: string }<% end %>) {
   const [q, setQ] = useState("");
   const searching = q.trim().length > 0;
 
@@ -167,7 +167,7 @@ export function <%= class_name %>List({
   // the box is idle and we fall back to the server-rendered rows.
   const { data: searchData, loading: searchLoading } = useQuery<% if typescript? %><<%= class_name %>Row[]><% end %>(<%= js_search_alias %>, { q: q.trim() });
 
-  const source = searching ? searchData ?? [] : posts;
+  const source = searching ? searchData ?? [] : initialRows;
   const rows = removedIds.length === 0 ? source : source.filter((row) => !removedIds.includes(row.id));
   // Always sort a COPY — never mutate the prop/source array.
   const sortedRows = sort ? [...rows].sort((a, b) => compareRows(a, b, sort)) : rows;
