@@ -1196,7 +1196,16 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
       it "adds a css watch process so bin/dev rebuilds the stylesheet" do
         silently { generator.create_launch_files }
 
-        expect(read("Procfile.dev")).to match(/^css: .*tailwind\.css --watch$/)
+        expect(read("Procfile.dev")).to match(/^css: .*tailwind\.css --watch=always$/)
+      end
+
+      # Plain `--watch` exits 0 when stdin closes, and foreman then stops Rails
+      # and Vite with it: bin/dev without a terminal (an agent, CI, Docker)
+      # went down in silence.
+      it "keeps the css watcher alive when stdin is closed (--watch=always)" do
+        silently { generator.create_launch_files }
+
+        expect(read("Procfile.dev")).not_to match(/--watch$/)
       end
 
       it "gitignores the compiled stylesheet (a build artifact of globals.css)" do
@@ -1217,6 +1226,101 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect { generator.send(:show_shadcn_next_steps) }
           .to output(/add button input textarea switch select label badge table alert-dialog dropdown-menu/)
           .to_stdout
+      end
+    end
+
+    # Adding shadcn to an app that already ran the install is the path Getting
+    # Started documents. Both files already exist then, and skipping them left
+    # Tailwind undeclared: `shadcn init` aborted with "No Tailwind CSS
+    # configuration found" right after the generator said all was in place.
+    describe "with --shadcn on an app that already ran the install", :aggregate_failures do
+      let(:generator) { build_generator(app_root, shadcn: true) }
+      let(:existing_pkg) do
+        { "name" => "blog", "private" => true,
+          "scripts" => { "dev" => "vite" },
+          "devDependencies" => { "vite" => "^6.0.7" } }
+      end
+
+      def write(relative, body)
+        File.write(File.join(app_root, relative), body)
+      end
+
+      it "adds the Tailwind devDependencies and build:css, keeping everything else" do
+        write("package.json", JSON.pretty_generate(existing_pkg))
+        silently { generator.create_package_json }
+
+        pkg = JSON.parse(read("package.json"))
+        expect(pkg["devDependencies"]).to include("vite" => "^6.0.7", "tailwindcss" => "^4.0.0",
+                                                  "@tailwindcss/cli" => "^4.0.0", "tw-animate-css" => "^1.0.0")
+        expect(pkg.dig("scripts", "build:css")).to include("app/assets/builds/tailwind.css")
+        expect(pkg.dig("scripts", "dev")).to eq("vite")
+        expect(pkg["name"]).to eq("blog")
+      end
+
+      it "never overwrites a version or script the app already declares" do
+        existing_pkg["devDependencies"]["tailwindcss"] = "4.1.2"
+        existing_pkg["scripts"]["build:css"] = "my-own-build"
+        write("package.json", JSON.pretty_generate(existing_pkg))
+        silently { generator.create_package_json }
+
+        pkg = JSON.parse(read("package.json"))
+        expect(pkg.dig("devDependencies", "tailwindcss")).to eq("4.1.2")
+        expect(pkg.dig("scripts", "build:css")).to eq("my-own-build")
+      end
+
+      it "leaves an unparseable package.json alone and stops claiming the setup is in place" do
+        write("package.json", "{ not json")
+        silently { generator.create_package_json }
+        expect(read("package.json")).to eq("{ not json")
+
+        output = StringIO.new
+        original = $stdout
+        begin
+          $stdout = output
+          generator.send(:show_shadcn_next_steps)
+        ensure
+          $stdout = original
+        end
+        expect(output.string).to include("NOT all in place")
+        expect(output.string).not_to include("prerequisites are in place")
+      end
+
+      it "appends the css process to an existing Procfile.dev" do
+        write("Procfile.dev", "web: bin/rails server -p 3000\nvite: npm run dev")
+        silently { generator.create_launch_files }
+
+        expect(read("Procfile.dev")).to eq(
+          "web: bin/rails server -p 3000\nvite: npm run dev\n#{Ruact::Generators::InstallGenerator::SHADCN_CSS_PROCESS}\n"
+        )
+      end
+
+      it "is idempotent: a second run adds nothing" do
+        write("package.json", JSON.pretty_generate(existing_pkg))
+        write("Procfile.dev", "web: bin/rails server -p 3000\nvite: npm run dev\n")
+        2.times do
+          silently do
+            generator.create_package_json
+            generator.create_launch_files
+          end
+        end
+
+        expect(read("Procfile.dev").scan(/^css:/).size).to eq(1)
+        expect(JSON.parse(read("package.json")).dig("devDependencies").keys.count("tailwindcss")).to eq(1)
+      end
+
+      it "leaves a Procfile.dev that already builds Tailwind alone" do
+        write("Procfile.dev", "web: bin/rails server\ncss: bin/rails tailwindcss:watch\n")
+        silently { generator.create_launch_files }
+
+        expect(read("Procfile.dev")).to eq("web: bin/rails server\ncss: bin/rails tailwindcss:watch\n")
+      end
+
+      it "still skips an existing package.json without --shadcn" do
+        plain = build_generator(app_root)
+        write("package.json", %({ "name": "mine" }\n))
+        silently { plain.create_package_json }
+
+        expect(read("package.json")).to eq(%({ "name": "mine" }\n))
       end
     end
 

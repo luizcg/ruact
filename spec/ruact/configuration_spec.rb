@@ -497,8 +497,8 @@ module Ruact
     end
 
     describe "Story 10.5 — shadcn_compatible_versions attribute", :story_10_5 do
-      it "defaults to [1, 2]" do
-        expect(Ruact.config.shadcn_compatible_versions).to eq([1, 2])
+      it "defaults to [1, 2, 4]" do
+        expect(Ruact.config.shadcn_compatible_versions).to eq([1, 2, 4])
       end
 
       it "accepts a custom list inside Ruact.configure" do

@@ -20,7 +20,7 @@ module Ruact
         # Documentation anchor for the shadcn dependency pre-flight: how to set
         # up shadcn, and how to override the version-compat warning.
         SHADCN_DOCS_POINTER =
-          "https://github.com/luizcg/ruact/blob/main/website/docs/api/scaffold.md#shadcnui-setup"
+          "https://ruact.dev/docs/guides/shadcn-ui.html"
 
         # The pre-flight body (the {ScaffoldGenerator#check_shadcn_setup} Thor
         # command delegates here). Detect the host's shadcn state, surface the
@@ -141,9 +141,10 @@ module Ruact
           <<~MSG.chomp
             ruact:scaffold — shadcn/ui is not set up in this app yet.
             The generated components import from @/components/ui/*, which does not exist.
-            Set up shadcn/ui first, then re-run this generator:
+            Set up shadcn/ui first (--base radix: the components import Radix primitives,
+            and shadcn now defaults to Base UI), then re-run this generator:
 
-              npx shadcn@latest init
+              npx shadcn@latest init --base radix
               #{shadcn_add_command(required_shadcn_components)}
 
             No files were written (no partial state). Advanced: pass --skip-shadcn-check

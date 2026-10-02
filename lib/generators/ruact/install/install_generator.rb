@@ -256,10 +256,18 @@ module Ruact
       # imports it by the absolute `Ruact.vite_plugin_path` and it uses only
       # `node:` builtins. Guarded like vite.config.js: an existing package.json
       # is left untouched (the app may already have one) unless --force.
+      #
+      # Under `--shadcn` an existing package.json is not skipped but COMPLETED:
+      # adding shadcn to an app that already ran the install is the documented
+      # path (Getting Started step 7 onward), and skipping here left Tailwind
+      # undeclared, so `shadcn init` aborted with "No Tailwind CSS configuration
+      # found" right after this generator said the prerequisites were in place.
       def create_package_json
         package_json_file = Pathname(destination_root).join("package.json")
 
         if package_json_file.exist? && !options[:force]
+          return merge_shadcn_package_json(package_json_file) if shadcn?
+
           say_status "skip", "package.json already exists — ensure it has react, react-dom, " \
                              "vite and @vitejs/plugin-react (re-run with --force to overwrite)", :yellow
           return
@@ -279,7 +287,12 @@ module Ruact
       # OWNED by ruact: see `install_foreman_launcher`. `bin/dev` is made
       # executable.
       def create_launch_files
-        create_guarded_file "Procfile.dev", "Procfile.dev.tt"
+        procfile = Pathname(destination_root).join("Procfile.dev")
+        if procfile.exist? && !options[:force] && shadcn?
+          append_shadcn_css_process(procfile)
+        else
+          create_guarded_file "Procfile.dev", "Procfile.dev.tt"
+        end
         install_foreman_launcher
         # Ensure bin/dev is executable whether we just wrote it or it pre-existed
         # (a skipped, already-foreman launcher should still be runnable).
@@ -612,7 +625,13 @@ module Ruact
       # templates' imports, so the two generators cannot drift.
       def show_shadcn_next_steps
         say ""
-        say "shadcn prerequisites are in place (Tailwind entry, tsconfig alias, css process)."
+        if shadcn_gaps.empty?
+          say "shadcn prerequisites are in place (Tailwind entry, tsconfig alias, css process)."
+        else
+          say_status "attention", "shadcn prerequisites are NOT all in place:", :red
+          shadcn_gaps.each { |gap| say "  - #{gap}" }
+          say "Fix these first, or `shadcn init` stops with \"No Tailwind CSS configuration found\"."
+        end
         say "Two commands remain — they are interactive and hit the network, so run them yourself:"
         say ""
         say "  npx shadcn@latest init --base radix"
@@ -890,6 +909,12 @@ module Ruact
         options[:shadcn]
       end
 
+      # Prerequisites `--shadcn` could not put in place. Non-empty means
+      # show_shadcn_next_steps must not say "in place".
+      def shadcn_gaps
+        @shadcn_gaps ||= []
+      end
+
       # The superset the scaffold generator narrows per resource. Loaded lazily
       # (and only under `--shadcn`) so a plain install never pays for the
       # scaffold generator's load, and so a failure to reach it degrades to the
@@ -899,6 +924,68 @@ module Ruact
         ScaffoldGenerator::ShadcnPreflight::ALL_SHADCN_COMPONENTS.join(" ")
       rescue StandardError
         "button input textarea switch select label badge table alert-dialog dropdown-menu"
+      end
+
+      # What `--shadcn` adds to package.json and Procfile.dev. One source for the
+      # templates (fresh install) and the merge below (an app that already has
+      # both files), so the two paths cannot drift.
+      SHADCN_DEV_DEPENDENCIES = {
+        "@tailwindcss/cli" => "^4.0.0",
+        "tailwindcss" => "^4.0.0",
+        "tw-animate-css" => "^1.0.0"
+      }.freeze
+      SHADCN_BUILD_CSS_SCRIPT =
+        "@tailwindcss/cli -i app/javascript/styles/globals.css -o app/assets/builds/tailwind.css --minify"
+      # `--watch=always`, not `--watch`: Tailwind stops watching when stdin
+      # closes, and it does exit 0, so foreman then stops Rails and Vite with it.
+      # stdin is closed whenever bin/dev runs without a terminal (a coding agent,
+      # CI, Docker, an IDE task runner), which made the whole app go down in silence.
+      SHADCN_CSS_PROCESS =
+        "css: npx @tailwindcss/cli -i app/javascript/styles/globals.css " \
+        "-o app/assets/builds/tailwind.css --watch=always"
+
+      # Adds the shadcn devDependencies and the build:css script to an existing
+      # package.json. Never overwrites a key the app already has (its own
+      # Tailwind version wins). An unparseable file is left alone, loudly.
+      def merge_shadcn_package_json(path)
+        pkg = JSON.parse(path.read)
+        unless pkg.is_a?(Hash)
+          raise JSON::ParserError, "top level is #{pkg.class}, not an object"
+        end
+
+        dev = (pkg["devDependencies"] ||= {})
+        scripts = (pkg["scripts"] ||= {})
+        added = SHADCN_DEV_DEPENDENCIES.reject { |name, _| dev.key?(name) || pkg.dig("dependencies", name) }
+        dev.merge!(added)
+        add_script = !scripts.key?("build:css")
+        scripts["build:css"] = SHADCN_BUILD_CSS_SCRIPT if add_script
+
+        if added.empty? && !add_script
+          say_status "identical", "package.json (Tailwind already declared)", :blue
+          return
+        end
+
+        create_file "package.json", "#{JSON.pretty_generate(pkg)}\n", force: true, verbose: false
+        say_status "update", "package.json (+ #{(added.keys + (add_script ? ['build:css'] : [])).join(', ')})", :green
+      rescue JSON::ParserError => e
+        shadcn_gaps << "package.json could not be parsed (#{e.message.lines.first.strip}) — add " \
+                        "#{SHADCN_DEV_DEPENDENCIES.keys.join(', ')} to devDependencies yourself"
+      end
+
+      # Appends the Tailwind watch process to an existing Procfile.dev. An app
+      # that already builds Tailwind (tailwindcss-rails' `css:` process, say) is
+      # left alone: two watchers writing the same file is worse than none.
+      def append_shadcn_css_process(path)
+        content = path.read
+        if content.match?(/^\s*css\s*:/) || content.include?("tailwind")
+          say_status "skip", "Procfile.dev already builds CSS — keep it pointed at " \
+                             "app/javascript/styles/globals.css", :yellow
+          return
+        end
+
+        separator = content.empty? || content.end_with?("\n") ? "" : "\n"
+        append_to_file "Procfile.dev", "#{separator}#{SHADCN_CSS_PROCESS}\n", verbose: false
+        say_status "update", "Procfile.dev (+ css process)", :green
       end
 
       def app_package_name

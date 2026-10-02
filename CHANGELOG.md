@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`rails generate ruact:install --shadcn` on an app that already had ruact installed left Tailwind out, then said the setup was in place.** That is the order Getting Started gives: install ruact first, add shadcn later. On the second run `package.json` and `Procfile.dev` already existed, so the generator skipped both. Tailwind was never declared and the `css` process was never added. `npx shadcn@latest init` then stopped with "No Tailwind CSS configuration found", right after the generator had printed that the prerequisites were in place. Under `--shadcn` the generator now adds what is missing to both files: the Tailwind `devDependencies` and the `build:css` script in `package.json`, the `css` process in `Procfile.dev`. It does not change a version, a script or a line you already have, and leaves a `Procfile.dev` alone if it already builds Tailwind. If `package.json` cannot be parsed, the generator now says the setup is not in place and names what to add.
+
+- **Under `--shadcn`, `bin/dev` stopped as soon as it started when no terminal was attached.** The `css` process ran `@tailwindcss/cli --watch`, which stops watching and exits 0 when its input closes. Foreman then stops Rails and Vite as well. A coding agent, CI, Docker or an IDE task runner starts `bin/dev` without a terminal, so the app was gone before its first request, with no error in the output. The process now runs with `--watch=always`. To fix an app generated before this release, change `--watch` to `--watch=always` on the `css:` line of `Procfile.dev`.
+
+- **The `ruact:scaffold --shadcn` pre-flight printed `npx shadcn@latest init` without `--base radix`.** The current shadcn defaults to Base UI, but the components the scaffold generates import Radix. An app set up from that message got components whose imports do not resolve. The message now prints `--base radix`, as the install generator already did.
+
+- **Two generator messages linked to pages that do not exist.** The unknown-attribute-type error and the shadcn version warning pointed at `website/docs/…` inside this repository, which has no `website/` directory. They now link to ruact.dev.
+
+### Changed
+
+- **shadcn 4 is in the default `shadcn_compatible_versions`** (now `[1, 2, 4]`). It is the current major, so every app that followed the setup steps saw `ruact:scaffold --shadcn` warn that its shadcn was not tested. shadcn 4 was run end to end with this release: `init --base radix`, the full `add` list, `ruact:scaffold --shadcn`, and the form, table and delete dialog checked in a browser.
+
 ## [0.0.13] - 2026-09-27
 
 ### Added
