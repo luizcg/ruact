@@ -152,6 +152,24 @@ module Ruact
         say ""
       end
 
+      # What `--shadcn` adds to package.json and Procfile.dev. One source for the
+      # templates (fresh install) and the merge below (an app that already has
+      # both files), so the two paths cannot drift.
+      SHADCN_DEV_DEPENDENCIES = {
+        "@tailwindcss/cli" => "^4.0.0",
+        "tailwindcss" => "^4.0.0",
+        "tw-animate-css" => "^1.0.0"
+      }.freeze
+      SHADCN_BUILD_CSS_SCRIPT =
+        "@tailwindcss/cli -i app/javascript/styles/globals.css -o app/assets/builds/tailwind.css --minify"
+      # `--watch=always`, not `--watch`: Tailwind stops watching when stdin
+      # closes, and it does exit 0, so foreman then stops Rails and Vite with it.
+      # stdin is closed whenever bin/dev runs without a terminal (a coding agent,
+      # CI, Docker, an IDE task runner), which made the whole app go down in silence.
+      SHADCN_CSS_PROCESS =
+        "css: npx @tailwindcss/cli -i app/javascript/styles/globals.css " \
+        "-o app/assets/builds/tailwind.css --watch=always"
+
       # `--shadcn` only. Two files, both of them things shadcn's CLI checks for
       # and refuses to proceed without ("No Tailwind CSS configuration found" /
       # "Could not find valid path aliases"), verified against shadcn 4.x:
@@ -926,32 +944,12 @@ module Ruact
         "button input textarea switch select label badge table alert-dialog dropdown-menu"
       end
 
-      # What `--shadcn` adds to package.json and Procfile.dev. One source for the
-      # templates (fresh install) and the merge below (an app that already has
-      # both files), so the two paths cannot drift.
-      SHADCN_DEV_DEPENDENCIES = {
-        "@tailwindcss/cli" => "^4.0.0",
-        "tailwindcss" => "^4.0.0",
-        "tw-animate-css" => "^1.0.0"
-      }.freeze
-      SHADCN_BUILD_CSS_SCRIPT =
-        "@tailwindcss/cli -i app/javascript/styles/globals.css -o app/assets/builds/tailwind.css --minify"
-      # `--watch=always`, not `--watch`: Tailwind stops watching when stdin
-      # closes, and it does exit 0, so foreman then stops Rails and Vite with it.
-      # stdin is closed whenever bin/dev runs without a terminal (a coding agent,
-      # CI, Docker, an IDE task runner), which made the whole app go down in silence.
-      SHADCN_CSS_PROCESS =
-        "css: npx @tailwindcss/cli -i app/javascript/styles/globals.css " \
-        "-o app/assets/builds/tailwind.css --watch=always"
-
       # Adds the shadcn devDependencies and the build:css script to an existing
       # package.json. Never overwrites a key the app already has (its own
       # Tailwind version wins). An unparseable file is left alone, loudly.
       def merge_shadcn_package_json(path)
         pkg = JSON.parse(path.read)
-        unless pkg.is_a?(Hash)
-          raise JSON::ParserError, "top level is #{pkg.class}, not an object"
-        end
+        raise JSON::ParserError, "top level is #{pkg.class}, not an object" unless pkg.is_a?(Hash)
 
         dev = (pkg["devDependencies"] ||= {})
         scripts = (pkg["scripts"] ||= {})
@@ -969,7 +967,7 @@ module Ruact
         say_status "update", "package.json (+ #{(added.keys + (add_script ? ['build:css'] : [])).join(', ')})", :green
       rescue JSON::ParserError => e
         shadcn_gaps << "package.json could not be parsed (#{e.message.lines.first.strip}) — add " \
-                        "#{SHADCN_DEV_DEPENDENCIES.keys.join(', ')} to devDependencies yourself"
+                       "#{SHADCN_DEV_DEPENDENCIES.keys.join(', ')} to devDependencies yourself"
       end
 
       # Appends the Tailwind watch process to an existing Procfile.dev. An app

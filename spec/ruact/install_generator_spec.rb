@@ -1273,16 +1273,10 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         silently { generator.create_package_json }
         expect(read("package.json")).to eq("{ not json")
 
-        output = StringIO.new
-        original = $stdout
-        begin
-          $stdout = output
-          generator.send(:show_shadcn_next_steps)
-        ensure
-          $stdout = original
-        end
-        expect(output.string).to include("NOT all in place")
-        expect(output.string).not_to include("prerequisites are in place")
+        expect { generator.send(:show_shadcn_next_steps) }
+          .to output(a_string_including("NOT all in place")).to_stdout
+        expect { generator.send(:show_shadcn_next_steps) }
+          .not_to output(/prerequisites are in place/).to_stdout
       end
 
       it "appends the css process to an existing Procfile.dev" do
@@ -1305,7 +1299,7 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         end
 
         expect(read("Procfile.dev").scan(/^css:/).size).to eq(1)
-        expect(JSON.parse(read("package.json")).dig("devDependencies").keys.count("tailwindcss")).to eq(1)
+        expect(JSON.parse(read("package.json"))["devDependencies"].keys.count("tailwindcss")).to eq(1)
       end
 
       it "leaves a Procfile.dev that already builds Tailwind alone" do
