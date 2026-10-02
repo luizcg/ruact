@@ -648,7 +648,7 @@ module Ruact
         else
           say_status "attention", "shadcn prerequisites are NOT all in place:", :red
           shadcn_gaps.each { |gap| say "  - #{gap}" }
-          say "Fix these first, or `shadcn init` stops with \"No Tailwind CSS configuration found\"."
+          say "Fix these first, then run the two commands below."
         end
         say "Two commands remain — they are interactive and hit the network, so run them yourself:"
         say ""
