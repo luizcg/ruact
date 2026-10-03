@@ -49,6 +49,7 @@ module Ruact
       when "{"
         expr = extract_braced_expr(attrs, pos + 1)
         raise PreprocessorError, "#{name}={} is empty: put a Ruby expression in the braces" if expr.strip.empty?
+
         [expr, pos + expr.length + 2]
       when '"', "'"
         close = attrs.index(attrs[pos], pos + 1)
