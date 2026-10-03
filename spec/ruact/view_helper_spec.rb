@@ -346,3 +346,35 @@ module Ruact
     end
   end
 end
+
+# The inline payload carries application data. A record whose text contained
+# `</SCRIPT>` closed the bootstrap `<script>` (only a lowercase `</script>` was
+# escaped) and the rest ran as HTML: stored XSS from any prop.
+RSpec.describe "Ruact::ViewHelper inline Flight payload" do
+  let(:helper) { Object.new.extend(Ruact::ViewHelper) }
+
+  def pushed_literal(payload)
+    script = helper.send(:ruact_flight_data_script, payload)
+    script[/^\s*d\.push\((.*)\);$/, 1]
+  end
+
+  [
+    "</SCRIPT><img src=x onerror=alert(1)>",
+    "</script ><img src=x onerror=alert(1)>",
+    "</ScRiPt\t><b>",
+    "<!--<script>",
+    "a & b > c",
+    "line sep para",
+    "escape \e bell \a nul \u0000",
+    "emoji 😀 and ção",
+    %(quotes " and \\ backslash)
+  ].each do |text|
+    it "embeds #{text.inspect} so it cannot leave the script and arrives intact", :aggregate_failures do
+      payload = %(0:{"title":#{JSON.generate(text)}}\n)
+      literal = pushed_literal(payload)
+
+      expect(literal).not_to match(/[<>&  ]/)
+      expect(JSON.parse(literal)).to eq(payload)
+    end
+  end
+end

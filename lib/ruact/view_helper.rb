@@ -214,15 +214,28 @@ module Ruact
 
     # The `__FLIGHT_DATA` inline bootstrap `<script>` — pushes the per-render
     # Flight payload onto the global queue the bootstrap entry drains on boot.
-    # `</script>` in the payload is escaped to prevent an HTML/XSS breakout
-    # (mandatory whenever Flight data is inlined into a `<script>` tag).
+    #
+    # The payload carries application data (props, record content), so it is
+    # embedded as a JSON string literal with `<`, `>`, `&`, U+2028 and U+2029
+    # escaped as `\uXXXX`. No byte of the payload can then close the `<script>`
+    # — `</SCRIPT>`, `</script >` and `<!--` included — and every character
+    # reaches JavaScript intact (a Ruby `String#inspect` literal did neither:
+    # it escaped only a lowercase `</script>`, and its `\e`-style escapes mean
+    # something else in JS).
+    SCRIPT_UNSAFE = /[<>&\u2028\u2029]/
+    private_constant :SCRIPT_UNSAFE
+
+    # A JSON string literal that is also safe inside a `<script>` element.
+    def script_safe_json(string)
+      JSON.generate(string).gsub(SCRIPT_UNSAFE) { |char| format("\\u%04x", char.ord) }
+    end
+
     def ruact_flight_data_script(flight_payload)
-      escaped_payload = flight_payload.gsub("</script>", '<\/script>')
       <<~HTML.strip
         <script>
           (function() {
             var d = (self.__FLIGHT_DATA = self.__FLIGHT_DATA || []);
-            d.push(#{escaped_payload.inspect});
+            d.push(#{script_safe_json(flight_payload)});
           })();
         </script>
       HTML

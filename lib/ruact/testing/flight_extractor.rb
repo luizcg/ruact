@@ -133,7 +133,12 @@ module Ruact
                   "This response did not render a ruact component (no Flight data was inlined)."
           end
 
-          decode_ruby_string_literal(match[:literal])
+          literal = match[:literal]
+          # The literal is JSON (ruact >= 0.0.15). The Ruby-literal decoder stays
+          # for documents captured from earlier versions.
+          JSON.parse(literal)
+        rescue JSON::ParserError
+          decode_ruby_string_literal(literal)
         end
 
         def json_body?(body)
