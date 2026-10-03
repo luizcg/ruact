@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "erb"
 require "json"
 require "socket"
 
@@ -273,8 +274,29 @@ module Ruact
         # virtual entry id (the manifest key Vite emits for the virtual input).
         entry = vite_manifest_entry(Ruact.bootstrap_virtual_id)
         src   = entry ? "/assets/#{entry['file']}" : "/assets/application.js"
-        %(<script type="module" src="#{src}"></script>)
+        tag   = %(<script type="module" src="#{src}"></script>)
+        # Story 17-0k — in development with neither the Vite dev server nor a
+        # build, that script 404s and the page stays empty with no error.
+        Rails.env.development? && entry.nil? ? "#{ruact_vite_down_warning}\n#{tag}" : tag
       end
+    end
+
+    # Story 17-0k — `bin/rails server` on its own, once Vite has run before:
+    # the component manifest is on disk, so the render succeeds, but the page's
+    # JavaScript is not served and `#root` stays empty — a blank 200 whose only
+    # clue was a 404 in the network tab. Development only. Plain HTML with
+    # inline style: the warning cannot depend on the bundle that did not load.
+    def ruact_vite_down_warning
+      server = Ruact.config.vite_dev_server.chomp("/")
+      message = "The Vite dev server is not running (#{server}), so this page has no JavaScript " \
+                "and its React components cannot render. Start the app with bin/dev, which runs " \
+                "Rails and Vite together."
+      Rails.logger&.warn("[ruact] #{message}")
+      <<~HTML.strip
+        <div role="alert" data-ruact-vite-down style="position:fixed;inset:0 0 auto 0;z-index:2147483647;padding:12px 16px;background:#7f1d1d;color:#fff;font:14px/1.4 system-ui,sans-serif">
+          <strong>[ruact]</strong> #{ERB::Util.html_escape(message)}
+        </div>
+      HTML
     end
 
     # The Vite dev-server URL for the virtual bootstrap. Vite serves virtual

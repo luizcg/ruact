@@ -301,8 +301,48 @@ module Ruact
           expect(html).to include("d.push(")
         end
 
+        it "shows no Vite warning (Story 17-0k)" do
+          expect(asset_helper.ruact_js_assets(payload)).not_to include("data-ruact-vite-down")
+        end
+
         it "returns an html_safe buffer" do
           expect(asset_helper.ruact_js_assets(payload)).to be_html_safe
+        end
+      end
+
+      # Story 17-0k — `bin/rails server` alone after Vite has run once: the
+      # page answered 200 with an empty #root and nothing said why.
+      context "when in dev with neither the Vite dev server nor a build", :story_17_0k do
+        let(:logger) { instance_double(Logger, warn: nil) }
+
+        before do
+          allow(Rails).to receive_messages(env: ActiveSupport::StringInquirer.new("development"), logger: logger)
+          allow(asset_helper).to receive_messages(vite_dev_running?: false, vite_manifest_entry: nil)
+        end
+
+        it "shows a warning on the page that does not need the bundle", :aggregate_failures do
+          html = asset_helper.ruact_js_assets(payload)
+          expect(html).to include("data-ruact-vite-down")
+          expect(html).to include("The Vite dev server is not running (http://localhost:5173)")
+          expect(html).to include("bin/dev")
+          expect(html).to match(/<div role="alert"[^>]*style="position:fixed/)
+        end
+
+        it "logs the same diagnosis" do
+          asset_helper.ruact_js_assets(payload)
+          expect(logger).to have_received(:warn).with(/\[ruact\] The Vite dev server is not running/)
+        end
+      end
+
+      context "when in dev without the Vite dev server but with a build", :story_17_0k do
+        before do
+          allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new("development"))
+          allow(asset_helper).to receive_messages(vite_dev_running?: false,
+                                                  vite_manifest_entry: { "file" => "bootstrap-abc.js" })
+        end
+
+        it "serves the build and warns about nothing" do
+          expect(asset_helper.ruact_js_assets(payload)).not_to include("data-ruact-vite-down")
         end
       end
 
@@ -315,6 +355,11 @@ module Ruact
           allow(asset_helper).to receive(:vite_manifest_entry).and_return(nil)
           asset_helper.ruact_js_assets(payload)
           expect(asset_helper).to have_received(:vite_manifest_entry).with(Ruact.bootstrap_virtual_id)
+        end
+
+        it "never shows the development warning, even with no build (Story 17-0k)" do
+          allow(asset_helper).to receive(:vite_manifest_entry).and_return(nil)
+          expect(asset_helper.ruact_js_assets(payload)).not_to include("data-ruact-vite-down")
         end
 
         it "emits the hashed bootstrap URL from the manifest entry", :aggregate_failures do
