@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.15] - 2026-10-03
+
 ### Security
 
 - **Text in a prop could run as script on the page (stored XSS).** On a plain browser load, the page's Flight payload is inlined in a `<script>` element. It was embedded as a Ruby string literal with only a lowercase `</script>` escaped. A value containing `</SCRIPT>`, `</script >` or another casing closed the element, and the rest ran as HTML. A post titled `</SCRIPT><img src=x onerror=…>` executed its handler for everyone who opened the list. Any string a ruact page passes as a prop, such as user-written record content, could do it. The payload is now embedded as a JSON string literal with `<`, `>`, `&`, U+2028 and U+2029 escaped, so no character of it can end the element. Control characters such as `\e`, which the Ruby literal also delivered wrongly to JavaScript, now arrive intact. **Affects every version up to and including 0.0.14; upgrade.** `Ruact::Testing`'s matchers read both forms.
@@ -414,7 +416,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **E2E test app** — `e2e/` Rails app (no DB, in-memory Post model) with full CRUD system tests validating the complete request cycle.
 
-[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.14...HEAD
+[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.15...HEAD
+[0.0.15]: https://github.com/luizcg/ruact/releases/tag/v0.0.15
 [0.0.14]: https://github.com/luizcg/ruact/releases/tag/v0.0.14
 [0.0.13]: https://github.com/luizcg/ruact/releases/tag/v0.0.13
 [0.0.12]: https://github.com/luizcg/ruact/releases/tag/v0.0.12
