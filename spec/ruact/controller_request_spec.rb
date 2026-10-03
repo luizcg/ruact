@@ -49,7 +49,14 @@ module ControllerRequestSpecSupport
     ["/unwired-layout-demo/create_unprocessable", "unwired_layout_demo#create_unprocessable"],
     ["/status-live-demo/create", "status_live_demo#create"],
     ["/status-rescue-demo/create", "status_rescue_demo#create"]
-  ].freeze
+  ]
+
+  # Story 17-0j — respond_to on a router request (GET routes).
+  RESPOND_TO_GET_ROUTES = [
+    *%w[show_respond_to show_json_only show_inner_unknown]
+      .map { |action| ["/status-demo/#{action}", "status_demo##{action}"] },
+    ["/auth-demo/show", "auth_demo#show"]
+  ].freeze.freeze
 
   class << self
     attr_reader :manifest_path
@@ -148,9 +155,7 @@ module ControllerRequestSpecSupport
           # Story 17.0i — a ruact page answers with a status.
           STATUS_DEMO_ROUTES.each { |(path, target)| post path, to: "controller_request_spec_support/#{target}" }
           get "/status-demo/new", to: "controller_request_spec_support/status_demo#new"
-          # Story 17-0j — respond_to on a router request.
-          get "/status-demo/show_respond_to", to: "controller_request_spec_support/status_demo#show_respond_to"
-          get "/status-demo/show_json_only", to: "controller_request_spec_support/status_demo#show_json_only"
+          RESPOND_TO_GET_ROUTES.each { |(path, target)| get path, to: "controller_request_spec_support/#{target}" }
         end
       end
     end
@@ -265,6 +270,9 @@ module ControllerRequestSpecSupport
 
     def show_json_only = respond_to { |format| format.json { render json: { page: "json" } } }
 
+    # An UnknownFormat raised INSIDE a chosen branch is the app's, not ruact's.
+    def show_inner_unknown = respond_to { |format| format.html { raise ActionController::UnknownFormat, "inner" } }
+
     def create_redirect_respond_to
       respond_to do |format|
         format.html { redirect_to "/status-demo/new" }
@@ -306,6 +314,26 @@ module ControllerRequestSpecSupport
   Delegator = Struct.new(:controller) do
     def render_new = controller.render(:new, status: 422)
     def redirect_home = controller.redirect_to("/status-demo/new")
+  end
+
+  # Story 17-0j review — an auth callback prepended AFTER the concern was
+  # included runs before a before_action ruact prepends; it still gets the
+  # negotiated format (ruact negotiates in process_action).
+  class AuthDemoController < ActionController::Base
+    include Ruact::Controller
+
+    prepend_before_action :require_login
+
+    def show; end
+
+    private
+
+    def require_login
+      respond_to do |format|
+        format.html { redirect_to "/status-demo/new" }
+        format.json { head :unauthorized }
+      end
+    end
   end
 
   # Story 17.0i — a streaming controller: the Flight rows go out as they are
@@ -1060,6 +1088,17 @@ module Ruact # rubocop:disable Style/OneClassPerFile
           get "/status-demo/show_respond_to", {}, { "HTTP_ACCEPT" => "application/json" }
 
           expect(JSON.parse(last_response.body)).to eq("page" => "json")
+        end
+
+        it "gives the format to a host callback prepended after the concern" do
+          get "/auth-demo/show", {}, flight_headers
+
+          expect(last_response.body).to include('"redirectUrl":"/status-demo/new"')
+        end
+
+        it "keeps the app's own UnknownFormat raised inside a format.html branch" do
+          expect { get "/status-demo/show_inner_unknown", {}, flight_headers }
+            .to raise_error(ActionController::UnknownFormat, "inner")
         end
 
         it "answers 406 when there is no format.html, and says why", :aggregate_failures do

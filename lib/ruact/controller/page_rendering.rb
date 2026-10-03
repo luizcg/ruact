@@ -98,7 +98,7 @@ module Ruact
       # Whether Rails, left alone, would render `page` for `action`: the lookup
       # it does itself, with the formats it negotiated for this request (and a
       # render's own `formats:` / `variants:` / `handlers:` / `locale:`). A Flight request
-      # negotiates every format, HTML first — the page; a `.json` request or a
+      # negotiates HTML (Ruact::Controller::FormatNegotiation) — the page; a `.json` request or a
       # `format.json` branch negotiates JSON — the JSON template, or Rails' own
       # MissingTemplate.
       def __ruact_rails_would_render?(action, details, page)
