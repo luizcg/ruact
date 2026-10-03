@@ -319,7 +319,8 @@ function _buildTree(value, rows, moduleRegistry) {
     // gets the type, not the marker. (A literal string starting with "$" was
     // escaped to "$$…" on the server and is handled above.)
     if (value.startsWith("$D")) return new Date(value.slice(2));
-    if (value.startsWith("$n")) return BigInt(value.slice(2));
+    // Guarded: a malformed marker must not throw and take the page down.
+    if (value.startsWith("$n") && /^-?\d+$/.test(value.slice(2))) return BigInt(value.slice(2));
     if (value.startsWith("$L")) {
       const refId = parseInt(value.slice(2), 16);
       const row   = rows.get(refId);

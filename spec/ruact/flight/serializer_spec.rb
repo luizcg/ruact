@@ -562,4 +562,24 @@ RSpec.describe "Ruact::Flight::Serializer string encoding" do
     expect { Ruact::Flight::Renderer.render({ "u7" => (+"abc").force_encoding("UTF-7") }, manifest) }
       .not_to raise_error
   end
+
+  # Story 17-0c review — values the client now rebuilds must not be produced
+  # by accident, and dates must survive the trip.
+  def render_strict(value, strict: false)
+    Ruact::Flight::Renderer.render({ "v" => value }, Ruact::ClientManifest.from_hash({}), strict_serialization: strict)
+  end
+
+  it "sends a calendar Date as YYYY-MM-DD, in strict mode too" do
+    expect(render_strict(Date.new(2026, 9, 8), strict: true)).to eq(%(0:{"v":"2026-09-08"}\n))
+  end
+
+  it "escapes a symbol whose name starts with $, like a string" do
+    expect(render_strict(:$nope)).to eq(%(0:{"v":"$$nope"}\n))
+  end
+
+  it "writes years outside 0..9999 in the expanded form JavaScript reads", :aggregate_failures do
+    expect(render_strict(Time.utc(10_000, 1, 1))).to include("$D+010000-01-01T00:00:00.000Z")
+    expect(render_strict(Time.utc(-1, 1, 1))).to include("$D-000001-01-01T00:00:00.000Z")
+    expect(render_strict(Time.utc(2026, 1, 1))).to include("$D2026-01-01T00:00:00.000Z")
+  end
 end

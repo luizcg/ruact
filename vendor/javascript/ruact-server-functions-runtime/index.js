@@ -270,6 +270,16 @@ let inflightQueries = new WeakMap();
 // is still invoked and the error surfaces (Story 9.5 behavior), instead of an
 // invalid call wrongly joining an in-flight no-param request. `null`/no params
 // both serialize to "".
+// Story 17-0c — a query param as it goes on the wire, or `undefined` when it
+// cannot be one. Pages now hand components a `BigInt` (an id beyond JS's safe
+// range) and a `Date` (a Ruby Time); both must be able to go back as params.
+function wireParam(value) {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "bigint") return value.toString();
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
+  return undefined;
+}
+
 function canonicalParamsKey(params) {
   if (params == null) return "";
   if (typeof params !== "object" || Array.isArray(params)) return null;
@@ -279,8 +289,8 @@ function canonicalParamsKey(params) {
     if (value === undefined) continue;
     if (value === null) {
       tokens.push(encodeURIComponent(key)); // bare key — mirrors buildQueryUrl
-    } else if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-      tokens.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+    } else if (wireParam(value) !== undefined) {
+      tokens.push(`${encodeURIComponent(key)}=${encodeURIComponent(wireParam(value))}`);
     } else {
       return null; // array/object value — buildQueryUrl throws; non-shareable
     }
@@ -536,16 +546,12 @@ function buildQueryUrl(path, params) {
     if (value === undefined) continue;
     if (value === null) {
       bareKeys.push(encodeURIComponent(key));
-    } else if (
-      typeof value === "string" ||
-      typeof value === "number" ||
-      typeof value === "boolean"
-    ) {
-      search.append(key, String(value));
+    } else if (wireParam(value) !== undefined) {
+      search.append(key, wireParam(value));
     } else {
       throw new TypeError(
         `ruact useQuery for ${path}: param "${key}" must be a string, number, ` +
-          "boolean, or null — arrays and objects are rejected",
+          "bigint, Date, boolean, or null — arrays and objects are rejected",
       );
     }
   }
@@ -684,7 +690,10 @@ function buildFetchInit(args, method = "POST") {
     body = args;
   } else {
     headers["Content-Type"] = "application/json";
-    body = JSON.stringify(args ?? {});
+    // A BigInt (an id beyond JS's safe range, Story 17-0c) has no JSON form:
+    // it goes as its decimal string, which Rails reads as it reads any id.
+    // A Date already serializes to its ISO string.
+    body = JSON.stringify(args ?? {}, (_key, value) => (typeof value === "bigint" ? value.toString() : value));
   }
 
   return {

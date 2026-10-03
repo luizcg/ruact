@@ -491,6 +491,13 @@ describe("mutation core — configureRuactRuntime", () => {
 });
 
 describe("Story 8.1 — __internals (test-only surface)", () => {
+  // Story 17-0c — a BigInt id from a page has no JSON form; it goes as its
+  // decimal string instead of throwing.
+  it("sends a BigInt argument as its decimal string", () => {
+    const init = __internals.buildFetchInit({ id: 9007199254740993n, at: new Date("2026-09-08T00:00:00.000Z") });
+    expect(JSON.parse(init.body)).toEqual({ id: "9007199254740993", at: "2026-09-08T00:00:00.000Z" });
+  });
+
   it("exposes buildFetchInit, resolveCsrfToken, parseResponse for granular asserts", () => {
     expect(typeof __internals.buildFetchInit).toBe("function");
     expect(typeof __internals.resolveCsrfToken).toBe("function");
