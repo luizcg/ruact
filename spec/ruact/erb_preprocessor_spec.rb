@@ -6,6 +6,42 @@ module Ruact
   RSpec.describe ErbPreprocessor do
     subject(:transform) { ->(source) { described_class.transform(source) } }
 
+    # A JSX hand writes `title="Hello"`; the preprocessor read only `{…}` and
+    # dropped every other attribute without a word.
+    describe "attribute forms, as JSX writes them" do
+      def props_of(source)
+        described_class.transform(source, registry: nil)[/__ruact_component__\("\w+", (.*)\) %>/, 1]
+      end
+
+      it "passes a quoted attribute as a string, double or single quotes" do
+        expect(props_of(%(<PostCard title="Hello" subtitle='World' />)))
+          .to eq(%({ "title" => "Hello", "subtitle" => "World" }))
+      end
+
+      it "passes a bare attribute as true" do
+        expect(props_of(%(<Toggle disabled on={false} />))).to eq(%({ "disabled" => true, "on" => false }))
+      end
+
+      it "keeps hyphenated names and Ruby expressions" do
+        expect(props_of(%(<Row data-id="7" count={@items.size} />)))
+          .to eq(%({ "data-id" => "7", "count" => @items.size }))
+      end
+
+      it "does not let a quoted value run Ruby" do
+        expect(props_of(%(<PostCard title="\#{system('x')}" />))).to eq(%({ "title" => "\\\#{system('x')}" }))
+      end
+
+      it "refuses ERB inside a quoted attribute, naming the fix" do
+        expect { described_class.transform(%(<PostCard title="<%= @t %>" />), registry: nil) }
+          .to raise_error(Ruact::PreprocessorError, /title= holds ERB.*title=\{\.\.\.\}/m)
+      end
+
+      it "refuses an attribute with = and no value" do
+        expect { described_class.transform(%(<PostCard title= />), registry: nil) }
+          .to raise_error(Ruact::PreprocessorError, /title= needs a value/)
+      end
+    end
+
     describe "self-closing tags" do
       it "transforms a self-closing tag with no props" do
         expect(transform.call("<Button />")).to eq(%(<%= __ruact_component__("Button", {}) %>))
