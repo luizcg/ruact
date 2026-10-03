@@ -126,6 +126,8 @@ If `match_flight_fixture` fails after touching `Ruact::Flight::Serializer`, that
 | `text_framing.txt` | Strings around the 1024-byte threshold (1023/1024/1025), multibyte UTF-8, embedded newlines, a leading `$` and markup, as `T` rows; the JS client decodes it to `text_framing_expected.json`. Written by `text_framing_fixtures_spec.rb` (`RUACT_WRITE_FIXTURES=1`) |
 | `text_framing_suspense.txt` | A long multibyte string inside deferred Suspense content: its `T` row is emitted before the deferred row that references it |
 | `text_framing_expected.json` | The values `text_framing.txt` must decode to (read by `flight-client.test.mjs`) |
+| `scalar_round_trip.txt` | `Time` (UTC and zoned), `DateTime`, integers beyond ±(2^53 − 1), the safe bounds, a literal `"$D…"` string and nested ones; the JS client rebuilds `Date`/`BigInt` as listed in `scalar_round_trip_expected.json`. Written by `scalar_fixtures_spec.rb` (`RUACT_WRITE_FIXTURES=1`) |
+| `scalar_round_trip_expected.json` | What `scalar_round_trip.txt` must decode to; `{ "date": ISO }` and `{ "bigint": "…" }` tag the types JSON cannot hold |
 | `redirect_row.txt` | A redirect instruction serializes to a JSON object with `redirectUrl` and `redirectType` keys in row 0 |
 
 ---

@@ -481,3 +481,37 @@ describe("ruact-router — long text in a streamed navigation (Story 17-0d)", ()
   });
 });
 
+// Story 17-0c — a navigation decodes dates and big integers like the first load.
+describe("ruact-router — dates and big integers in a navigation (Story 17-0c)", () => {
+  const FIXTURES = path.join(import.meta.dirname, "../../../spec/fixtures/flight");
+  let dom;
+  let onNavigate;
+
+  beforeEach(() => {
+    dom = installDom();
+    onNavigate = vi.fn();
+    globalThis.fetch = vi.fn();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    setupRouter({ onNavigate, moduleRegistry: {}, onError: vi.fn() });
+  });
+
+  afterEach(() => {
+    teardownRouter();
+    vi.restoreAllMocks();
+  });
+
+  it("hands the component a Date and a BigInt", async () => {
+    const body = fs.readFileSync(path.join(FIXTURES, "scalar_round_trip.txt"), "utf8");
+    fetch.mockResolvedValue(respond({ body, url: `${ORIGIN}/events` }));
+
+    click(dom.listeners, "/events");
+    await settle();
+
+    const tree = onNavigate.mock.calls[0][0];
+    expect(tree.time).toBeInstanceOf(Date);
+    expect(tree.time.toISOString()).toBe("2026-09-08T12:30:45.123Z");
+    expect(tree.big).toBe(9007199254740993n);
+    expect(tree.nested.ids).toEqual([1152921504606846976n, 7]);
+  });
+});
+

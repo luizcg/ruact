@@ -203,6 +203,18 @@ describe("Story 9.5 — _makeQuery / buildQueryUrl wire format (FR88)", () => {
     expect(() => buildQueryUrl("/q/search", { q: { deep: 1 } })).toThrow(/arrays and objects are rejected/);
   });
 
+  // Story 17-0c — pages now hand components BigInt ids and Date values; they
+  // must be able to go back as query params.
+  it("sends a BigInt as its decimal string and a Date as its ISO string", () => {
+    expect(buildQueryUrl("/q/search", { id: 9007199254740993n })).toBe("/q/search?id=9007199254740993");
+    expect(buildQueryUrl("/q/search", { at: new Date("2026-09-08T12:30:45.123Z") }))
+      .toBe("/q/search?at=2026-09-08T12%3A30%3A45.123Z");
+  });
+
+  it("rejects an Invalid Date rather than sending 'Invalid Date'", () => {
+    expect(() => buildQueryUrl("/q/search", { at: new Date("nope") })).toThrow(/arrays and objects are rejected/);
+  });
+
   it("rejects a top-level array of params", () => {
     expect(() => buildQueryUrl("/q/search", [1, 2])).toThrow(/plain object/);
   });

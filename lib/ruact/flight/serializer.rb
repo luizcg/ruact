@@ -33,6 +33,10 @@ module Ruact
           serialize_symbol(value)
         when Time, DateTime
           serialize_date(value)
+        when Date
+          # A calendar date has no instant to rebuild: it travels as
+          # "YYYY-MM-DD", in strict mode too (Story 17-0c review).
+          serialize_string(value.iso8601)
         when ClientReference
           serialize_client_reference(value)
         when SuspenseElement
@@ -90,12 +94,13 @@ module Ruact
         # Only :undefined is special for now
         return "$undefined" if value == :undefined
 
-        # Unknown symbols: just use the name as a string
-        Utf8.text(value.to_s)
+        # Any other symbol is its name — escaped like a string, so `:"$nope"`
+        # cannot pose as a "$n…" marker.
+        serialize_string(value.to_s)
       end
 
       def serialize_date(value)
-        "$D#{value.iso8601(3)}"
+        "$D#{JsDate.iso8601(value)}"
       end
 
       # --- Collections ---

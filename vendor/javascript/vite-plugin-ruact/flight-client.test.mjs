@@ -403,3 +403,50 @@ describe("text rows (Story 17-0d)", () => {
     expect(rows.get(0)).toEqual({ kind: "model", value: { a: 1 } });
   });
 });
+
+// Story 17-0c — the serializer emits Ruby Time/DateTime as "$D<ISO>" and
+// integers beyond ±(2^53 − 1) as "$n<decimal>". Components got the marker
+// strings. The fixture is the Ruby serializer's own output
+// (spec/ruact/flight/scalar_fixtures_spec.rb writes and guards it).
+describe("dates and big integers (Story 17-0c)", () => {
+  const FIXTURES = path.join(import.meta.dirname, "../../../spec/fixtures/flight");
+  const payload = fs.readFileSync(path.join(FIXTURES, "scalar_round_trip.txt"), "utf8");
+  const expected = JSON.parse(fs.readFileSync(path.join(FIXTURES, "scalar_round_trip_expected.json"), "utf8"));
+
+  // Expected JSON tags what JSON cannot hold: { date: ISO } and { bigint: "…" }.
+  const revive = (value) => {
+    if (Array.isArray(value)) return value.map(revive);
+    if (value && typeof value === "object") {
+      if ("date" in value) return new Date(value.date);
+      if ("bigint" in value) return BigInt(value.bigint);
+      return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, revive(v)]));
+    }
+    return value;
+  };
+
+  it("rebuilds every value with its JS type, nested ones included", () => {
+    const tree = createFromFlightPayload(payload, MODULE_REGISTRY);
+    expect(tree).toEqual(revive(expected));
+  });
+
+  it("gives a Date the same instant, offset applied, to the millisecond", () => {
+    const tree = createFromFlightPayload(payload, MODULE_REGISTRY);
+    expect(tree.time).toBeInstanceOf(Date);
+    expect(tree.time.toISOString()).toBe("2026-09-08T12:30:45.123Z");
+    expect(tree.zoned.toISOString()).toBe("2026-09-08T12:30:00.000Z");
+  });
+
+  it("keeps safe integers as numbers and only the unsafe ones as BigInt", () => {
+    const tree = createFromFlightPayload(payload, MODULE_REGISTRY);
+    expect(typeof tree.max_safe).toBe("number");
+    expect(typeof tree.min_safe).toBe("number");
+    expect(typeof tree.big).toBe("bigint");
+    expect(tree.big).toBe(9007199254740993n);
+    expect(tree.negative_big).toBe(-18446744073709551616n);
+  });
+
+  it("leaves a literal string that starts with $D a string", () => {
+    const tree = createFromFlightPayload(payload, MODULE_REGISTRY);
+    expect(tree.literal).toBe("$D2026-01-01 is a string");
+  });
+});

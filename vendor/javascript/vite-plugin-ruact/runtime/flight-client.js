@@ -13,6 +13,11 @@
  * ({@link createRowParser}), so a payload decodes the same whichever way it
  * arrives and wherever the network splits it.
  *
+ * Values JSON cannot hold travel as "$"-prefixed strings and are rebuilt:
+ * "$D<ISO 8601>" → Date, "$n<decimal>" → BigInt, "$NaN"/"$Infinity"/… →
+ * the number, "$undefined" → undefined. A literal string that starts with
+ * "$" arrives escaped as "$$…".
+ *
  * Returns a React element tree by recursively converting
  * ["$", type, key, props] tuples into React.createElement calls.
  *
@@ -309,6 +314,13 @@ function _buildTree(value, rows, moduleRegistry) {
       }
       return row.value;
     }
+    // Story 17-0c — the serializer emits Ruby Time/DateTime as "$D<ISO 8601>"
+    // and integers outside JS's safe range as "$n<decimal>". The component
+    // gets the type, not the marker. (A literal string starting with "$" was
+    // escaped to "$$…" on the server and is handled above.)
+    if (value.startsWith("$D")) return new Date(value.slice(2));
+    // Guarded: a malformed marker must not throw and take the page down.
+    if (value.startsWith("$n") && /^-?\d+$/.test(value.slice(2))) return BigInt(value.slice(2));
     if (value.startsWith("$L")) {
       const refId = parseInt(value.slice(2), 16);
       const row   = rows.get(refId);
