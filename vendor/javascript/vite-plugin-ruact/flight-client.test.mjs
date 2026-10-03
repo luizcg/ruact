@@ -450,3 +450,27 @@ describe("dates and big integers (Story 17-0c)", () => {
     expect(tree.literal).toBe("$D2026-01-01 is a string");
   });
 });
+
+// A server-rendered tree has unkeyed siblings (an <h1> beside a component, the
+// rows of an ERB loop). React logged "Each child in a list should have a
+// unique key" for the Getting Started page itself. Elements in an array are
+// keyed by position — the key React uses implicitly — unless the wire has one.
+describe("sibling keys", () => {
+  it("keys unkeyed siblings at the root and in children by their position", () => {
+    const payload = [
+      '1:I["/TaskList.jsx","TaskList"]',
+      '0:[["$","h1",null,{"children":"Hello"}],["$","$L1",null,{"tasks":[]}],["$","ul",null,{"children":[["$","li",null,{"children":"a"}],["$","li","explicit",{"children":"b"}]]}]]',
+      "",
+    ].join("\n");
+    const tree = createFromFlightPayload(payload, MODULE_REGISTRY);
+
+    expect(tree.map((el) => el.key)).toEqual(["0", "1", "2"]);
+    expect(tree[2].props.children.map((el) => el.key)).toEqual(["0", "explicit"]);
+  });
+
+  it("leaves a single element and data arrays alone", () => {
+    const tree = createFromFlightPayload(payloadWithProps({ tasks: [{ id: 1 }, { id: 2 }] }), MODULE_REGISTRY);
+    expect(tree.key).toBeNull();
+    expect(tree.props.tasks).toEqual([{ id: 1 }, { id: 2 }]);
+  });
+});

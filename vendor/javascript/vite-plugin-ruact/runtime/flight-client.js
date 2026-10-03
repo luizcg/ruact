@@ -295,7 +295,13 @@ export function createFromFlightPayload(payload, moduleRegistry) {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-function _buildTree(value, rows, moduleRegistry) {
+// `position` is the value's index when it sits in an array. A server-rendered
+// tree is static: its siblings (an <h1> and a component, the rows of a list
+// the template looped over) carry no key on the wire, and React warns "Each
+// child in a list should have a unique key" for every such array. The index
+// is the key React would use anyway, so keying by it changes nothing but the
+// warning — and an explicit key from the wire always wins.
+function _buildTree(value, rows, moduleRegistry, position) {
   if (value === null || value === undefined) return value;
 
   // --- Strings with special $ prefixes ---
@@ -355,6 +361,7 @@ function _buildTree(value, rows, moduleRegistry) {
       const type   = resolveType(rawType, rows, moduleRegistry);
       const props  = buildProps(rawProps, rows, moduleRegistry);
       if (key != null) props.key = key;
+      else if (position !== undefined) props.key = String(position);
       return createElement(type, props);
     }
 
@@ -371,7 +378,7 @@ function _buildTree(value, rows, moduleRegistry) {
     // path at `:202`), and React renders an array of children fine. If a
     // client-side collapse is ever needed, it belongs in `buildProps` under
     // `key === "children"`, where the position IS known.
-    return value.map((v) => _buildTree(v, rows, moduleRegistry));
+    return value.map((v, i) => _buildTree(v, rows, moduleRegistry, i));
   }
 
   // --- Plain objects ---
