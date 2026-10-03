@@ -47,7 +47,7 @@ module Ruact
         hidden = Ruact.config.server_function_hidden_ivars
         assigns.reject do |name, value|
           name == CALLBACK_IVARS_KEY || name.start_with?("_") || hidden.include?(name) ||
-            (before.key?(name) && before[name].equal?(value) && !IMMEDIATE.any? { |type| value.is_a?(type) })
+            (before.key?(name) && before[name].equal?(value) && IMMEDIATE.none? { |type| value.is_a?(type) })
         end
       end
     end

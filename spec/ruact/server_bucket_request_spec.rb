@@ -90,7 +90,7 @@ module ServerBucketSpecSupport
 
     # Devise's current_user memoizes on first call — here, during the action.
     def create_with_memoized_user
-      current_user_memo
+      current_user
       @_pundit_policies = { leak: true }
       @post = BucketPost.new(id: 2, title: "Mine", secret: "s")
     end
@@ -106,7 +106,8 @@ module ServerBucketSpecSupport
 
     private
 
-    def current_user_memo
+    # Devise's shape: the method memoizes into @current_user.
+    def current_user
       @current_user ||= UnserializableRecord.new
     end
   end
