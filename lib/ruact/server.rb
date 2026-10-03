@@ -14,6 +14,7 @@ require_relative "../ruact"
 require_relative "server_functions/error_rendering"
 require_relative "server_functions/bucket_two_payload"
 require_relative "server_functions/name_bridge"
+require_relative "server_functions/action_assigns"
 require_relative "redirect_path"
 require_relative "validation_errors_collector"
 
@@ -68,6 +69,9 @@ module Ruact
   # contributes the discrimination predicate 9.2 will reuse.
   module Server
     extend ActiveSupport::Concern
+
+    # A function call returns the action's own ivars, not its callbacks'.
+    include Ruact::ServerFunctions::ActionAssigns
 
     include Ruact::ServerFunctions::ErrorRendering
     include Ruact::ValidationErrorsCollector
@@ -202,16 +206,16 @@ module Ruact
     # Story 9.2 AC2/AC4 (D1) — Bucket-2 success-path negotiation. When the
     # action finished without an explicit render on a function-call request
     # ({#__ruact_function_call?} — `Accept: application/json`, non-GET), serialize
-    # the action's exposed instance variables (Rails `view_assigns`, verbatim —
-    # the same set a view would see) as a JSON object keyed by ivar name, or
+    # the instance variables the ACTION assigned (Rails `view_assigns` minus
+    # what callbacks set and the action left alone — see
+    # {Ruact::ServerFunctions::ActionAssigns}) as a JSON object keyed by ivar name, or
     # `204 No Content` when none were set. Any other request shape falls through
     # to `super` so Bucket-1 rendering — the host's `Ruact::Controller` Flight
     # re-render, then Rails — is byte-for-byte unchanged (AC1).
     #
-    # The exposed-ivar set is Rails' own `view_assigns` with no custom filtering:
-    # Rails already excludes its protected `@_`-prefixed internals (including the
-    # CSRF `@_marked_for_same_origin_verification` flag), so what remains is
-    # exactly what the action assigned. Each value is serialized through the
+    # Rails' `view_assigns` already excludes its protected `@_`-prefixed
+    # internals (including the CSRF `@_marked_for_same_origin_verification`
+    # flag); ActionAssigns then drops what callbacks set. Each value is serialized through the
     # `ruact_props` / `Ruact::Serializable` / `strict_serialization` rules
     # ({Ruact::ServerFunctions::BucketTwoPayload}); a single ivar stays keyed
     # (no magic unwrap).
@@ -222,7 +226,7 @@ module Ruact
       # dev `@errors`) are dropped from the serialized assigns; Rails' own
       # `view_assigns` only filters a fixed set of `@_` ivars, not every `@__`
       # one (see {Ruact::ValidationErrorsCollector::RESERVED_ASSIGN_KEYS}).
-      assigns = view_assigns.except(*ValidationErrorsCollector::RESERVED_ASSIGN_KEYS)
+      assigns = __ruact_action_assigns(view_assigns.except(*ValidationErrorsCollector::RESERVED_ASSIGN_KEYS))
 
       # Story 15.0 (F6) — reaching this branch means ruact itself is producing
       # the function-call response (fall-through: injection, plain JSON, or

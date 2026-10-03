@@ -65,6 +65,30 @@ module ServerBucketSpecSupport
     end
   end
 
+  # An app's auth layer: a before_action memoizes the user in an ivar (Devise's
+  # `current_user` does, as `@current_user`). A function call's JSON used to be
+  # every ivar the view would see — the user included.
+  class BucketCallbackIvarsController < ActionController::Base
+    include Ruact::Server
+
+    before_action { @current_user = UnserializableRecord.new }
+    before_action(only: %i[update_reassigned update_in_place]) do
+      @post = BucketPost.new(id: 7, title: "Old", secret: "s")
+    end
+
+    def create
+      @post = BucketPost.new(id: 1, title: "Hi", secret: "s")
+    end
+
+    def update_reassigned
+      @post = BucketPost.new(id: 7, title: "New", secret: "s")
+    end
+
+    def update_in_place
+      @post.instance_variable_set(:@title, "New") # mutated in place, not reassigned
+    end
+  end
+
   # Bucket-2 host: includes ONLY Ruact::Server (Bucket-2 requests are handled
   # by Server#default_render without delegating to Ruact::Controller).
   class BucketServerController < ActionController::Base
@@ -298,6 +322,11 @@ if defined?(ControllerRequestSpecSupport) &&
     post "/bucket/vary_wildcard",   to: "server_bucket_spec_support/bucket_server#vary_wildcard"
     post "/bucket/before_redirect", to: "server_bucket_spec_support/bucket_before_redirect#never_runs"
     post "/bucket/unserializable",  to: "server_bucket_spec_support/bucket_server#unserializable"
+    post "/bucket/callback_ivars/create", to: "server_bucket_spec_support/bucket_callback_ivars#create"
+    post "/bucket/callback_ivars/update_reassigned",
+         to: "server_bucket_spec_support/bucket_callback_ivars#update_reassigned"
+    post "/bucket/callback_ivars/update_in_place",
+         to: "server_bucket_spec_support/bucket_callback_ivars#update_in_place"
     post "/bucket/validated_create_invalid", to: "server_bucket_spec_support/bucket_server#validated_create_invalid"
     post "/bucket/validated_create_valid",   to: "server_bucket_spec_support/bucket_server#validated_create_valid"
     post "/bucket/stray_errors_ivar", to: "server_bucket_spec_support/bucket_server#stray_errors_ivar"
@@ -472,6 +501,33 @@ RSpec.describe "Story 9.2: Ruact::Server dual-bucket response negotiation", :sto
       expect(body.fetch("_ruact_server_action_error")).to be(true)
       expect(body.fetch("error_class")).to eq("Ruact::SerializationError")
       expect(body.fetch("message")).to match(/Cannot serialize/)
+    end
+  end
+
+  # Decision (Luiz, 2026-10-03): a function call returns what the ACTION
+  # assigned, not what callbacks put on the controller.
+  describe "only the action's own ivars are returned" do
+    it "leaves out an ivar a before_action set", :aggregate_failures do
+      post "/bucket/callback_ivars/create", "{}", json_headers
+      expect(last_response.status).to eq(200)
+      expect(JSON.parse(last_response.body).keys).to eq(["post"])
+    end
+
+    it "does not fail in strict mode on a callback's unserializable ivar" do
+      reset_config
+      Ruact.configure { |c| c.strict_serialization = true }
+      post "/bucket/callback_ivars/create", "{}", json_headers
+      expect(last_response.status).to eq(200)
+    end
+
+    it "returns a callback's ivar the action reassigned" do
+      post "/bucket/callback_ivars/update_reassigned", "{}", json_headers
+      expect(JSON.parse(last_response.body)).to eq("post" => { "id" => 7, "title" => "New" })
+    end
+
+    it "does not return a callback's ivar the action only mutated" do
+      post "/bucket/callback_ivars/update_in_place", "{}", json_headers
+      expect(last_response.status).to eq(204)
     end
   end
 
