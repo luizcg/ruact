@@ -113,6 +113,16 @@ module Ruact
         expect(response).to have_ruact_component("LikeButton").with_props(a_hash_including("postId" => 7))
       end
 
+      # Story 17-0d — a prop of 1024+ bytes is a `T` row; the matcher compares
+      # the text the component receives, not the `$T` reference.
+      it "matches a long prop by its text, not its transport reference", :aggregate_failures do
+        body = "é" * 700
+        wire = render_wire("<LikeButton body={@body} />", body: body)
+        expect(wire).to include(":T")
+        expect(wire).to have_ruact_component("LikeButton").with_props(a_hash_including("body" => body))
+        expect(html_shell(wire)).to have_ruact_component("LikeButton").with_props(a_hash_including("body" => body))
+      end
+
       it "extracts Flight from an HTML shell embedding __FLIGHT_DATA" do
         wire = render_wire("<LikeButton postId={5} />")
         html = html_shell(wire)

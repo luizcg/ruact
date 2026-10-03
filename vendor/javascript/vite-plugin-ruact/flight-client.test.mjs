@@ -36,6 +36,7 @@ import path from "node:path";
 import {
   buildTree,
   createFromFlightPayload,
+  createRowParser,
   clearPendingChunks,
 } from "./runtime/flight-client.js";
 
@@ -317,5 +318,88 @@ describe("Story 17.0a — the contract, driven by a gem-produced fixture", () =>
     // DECODED value means a walker that preserved arity but stopped rebuilding
     // scalar members would fail here rather than pass.
     expect(tree.props.posts).toEqual([{ id: 1, title: "$5 plan" }]);
+  });
+});
+
+// Story 17-0d — every string of 1024+ bytes travels as a `T` row framed by its
+// BYTE length, with no trailing newline. The decoder split on "\n" and so lost
+// the root row: one long post body blanked the whole page. The fixtures are
+// what the Ruby serializer emits (spec/ruact/flight/text_framing_fixtures_spec.rb
+// writes and guards them).
+describe("text rows (Story 17-0d)", () => {
+  const FIXTURES = path.join(import.meta.dirname, "../../../spec/fixtures/flight");
+  const read = (name) => fs.readFileSync(path.join(FIXTURES, name));
+  const expected = JSON.parse(read("text_framing_expected.json").toString("utf8"));
+
+  const rowsOf = (chunks) => {
+    const rows = new Map();
+    const parser = createRowParser(({ id, row }) => rows.set(id, row));
+    for (const chunk of chunks) parser.push(chunk);
+    parser.end();
+    return rows;
+  };
+
+  it("decodes every value the serializer framed, byte for byte", () => {
+    const tree = createFromFlightPayload(read("text_framing.txt").toString("utf8"), MODULE_REGISTRY);
+    expect(tree).toEqual(expected);
+  });
+
+  it("puts long text inside Suspense content where the deferred row points", () => {
+    const tree = createFromFlightPayload(read("text_framing_suspense.txt").toString("utf8"), MODULE_REGISTRY);
+    const deferred = tree.props.children.type; // the already-arrived deferred row, wrapped
+    expect(deferred().props.children).toBe(expected.multibyte);
+  });
+
+  it("does not depend on where the network splits the bytes", () => {
+    const bytes = new Uint8Array(read("text_framing.txt"));
+    const whole = rowsOf([bytes]);
+
+    // Every single split point: inside ids, `T` lengths, text bodies and
+    // multibyte code points, and between rows.
+    for (let cut = 1; cut < bytes.length; cut += 1) {
+      const split = rowsOf([bytes.subarray(0, cut), bytes.subarray(cut)]);
+      expect(split).toEqual(whole);
+    }
+
+    // And one byte at a time.
+    expect(rowsOf([...bytes].map((b) => Uint8Array.of(b)))).toEqual(whole);
+  });
+
+  it("refuses a truncated text row instead of rendering part of the page", () => {
+    const bytes = new Uint8Array(read("text_framing.txt"));
+    const firstText = Buffer.from(bytes).indexOf(":T") + 10;
+    expect(() => rowsOf([bytes.subarray(0, firstText)])).toThrow(/Truncated Flight payload/);
+  });
+
+  it("refuses a malformed text length", () => {
+    const enc = new TextEncoder();
+    expect(() => rowsOf([enc.encode("1:Tzz,abc0:\"$T1\"\n")])).toThrow(/Malformed text row length/);
+  });
+
+  it("names a text reference whose row never arrived", () => {
+    expect(() => createFromFlightPayload('0:{"body":"$T7"}\n', MODULE_REGISTRY))
+      .toThrow(/Text row 7 is referenced but was never received/);
+  });
+
+  it("skips a stray line without a colon instead of losing the row after it", () => {
+    const rows = rowsOf([new TextEncoder().encode('garbage\n0:{"a":1}\n')]);
+    expect(rows.get(0)).toEqual({ kind: "model", value: { a: 1 } });
+  });
+
+  it("reads a large row arriving in small chunks in linear time", () => {
+    const big = JSON.stringify({ items: Array.from({ length: 60000 }, (_, i) => ({ id: i, name: `item ${i}` })) });
+    const bytes = new TextEncoder().encode(`0:${big}\n`);
+    const chunks = [];
+    for (let i = 0; i < bytes.length; i += 4096) chunks.push(bytes.subarray(i, i + 4096));
+    const started = performance.now();
+    const rows = rowsOf(chunks);
+    expect(rows.get(0).value.items).toHaveLength(60000);
+    // ~2.3 MB in 4 KB chunks; quadratic re-copying took seconds.
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  it("still reads a last row that lost its trailing newline", () => {
+    const rows = rowsOf([new TextEncoder().encode('0:{"a":1}')]);
+    expect(rows.get(0)).toEqual({ kind: "model", value: { a: 1 } });
   });
 });

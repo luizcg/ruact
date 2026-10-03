@@ -12,7 +12,10 @@ The React Flight wire protocol encodes a component tree as a series of newline-t
 <hex-id>:<payload>\n         # model row — a JSON value at position <hex-id>
 <hex-id>:I<json-array>\n     # import row — registers a client module: [moduleId, exportName, chunks]
 <hex-id>:E<json-error>\n     # error row — encodes a serialized error object
+<hex-id>:T<hex-len>,<text>    # text row — a string of 1024+ bytes, framed by its BYTE length, NO newline
 ```
+
+A text row is referenced from a model row as `"$T<hex-id>"`. It is the one row a newline-splitting reader cannot handle: the text may contain newlines and is not followed by one.
 
 - **Row `0`** is always the root — the main React element tree returned to the client.
 - **Import rows (`I` rows)** always appear *before* the model rows that reference them.
@@ -120,6 +123,9 @@ If `match_flight_fixture` fails after touching `Ruact::Flight::Serializer`, that
 | `react_element_no_props.txt` | A `ReactElement` with no props produces `["$","<tag>",null,{}]` in row 0 |
 | `as_json_object.txt` | An object responding to `as_json` is serialized via that method; if it resolves to a `ClientReference`, import + root rows are emitted |
 | `serializable_object.txt` | An object including `Ruact::Serializable` and declaring `ruact_props` serializes only the declared props |
+| `text_framing.txt` | Strings around the 1024-byte threshold (1023/1024/1025), multibyte UTF-8, embedded newlines, a leading `$` and markup, as `T` rows; the JS client decodes it to `text_framing_expected.json`. Written by `text_framing_fixtures_spec.rb` (`RUACT_WRITE_FIXTURES=1`) |
+| `text_framing_suspense.txt` | A long multibyte string inside deferred Suspense content: its `T` row is emitted before the deferred row that references it |
+| `text_framing_expected.json` | The values `text_framing.txt` must decode to (read by `flight-client.test.mjs`) |
 | `redirect_row.txt` | A redirect instruction serializes to a JSON object with `redirectUrl` and `redirectType` keys in row 0 |
 
 ---

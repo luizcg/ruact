@@ -56,12 +56,17 @@ module Ruact
             sleep(deferred[:delay])
           end
 
-          # Serialize deferred content — may produce new import rows
-          import_count_before = @request.completed_import_chunks.length
+          # Serialize deferred content — may produce new import rows, and new
+          # regular rows (a string of 1024+ bytes becomes a `T` row the deferred
+          # model row references as `$T<id>`).
+          import_count_before  = @request.completed_import_chunks.length
+          regular_count_before = @request.completed_regular_chunks.length
           deferred_value = serializer.serialize_model(deferred[:element])
 
-          # Yield any import rows discovered during deferred serialization
+          # Yield the rows discovered during deferred serialization BEFORE the
+          # row that references them.
           @request.completed_import_chunks[import_count_before..].each(&block)
+          @request.completed_regular_chunks[regular_count_before..].each(&block)
 
           yield RowEmitter.model(deferred[:id], JSON.generate(deferred_value))
         end

@@ -10,7 +10,7 @@
  */
 
 import {
-  parseLine,
+  createRowParser,
   buildTreeFromRows,
   buildTree,
   resolvePendingChunk,
@@ -564,11 +564,10 @@ async function _processFlightResponse(response, {
   let   initialTreeSet = false;
   let   redirected     = false;
 
-  const processLine = (line) => {
-    const parsed = parseLine(line);
-    if (!parsed) return;
-
+  const processRow = (parsed) => {
     rows.set(parsed.id, parsed.row);
+    // A text row is data a model row points at; nothing renders on its own.
+    if (parsed.row.kind === "text") return;
 
     if (!initialTreeSet && rows.has(0)) {
       const rootRow = rows.get(0);
@@ -606,25 +605,17 @@ async function _processFlightResponse(response, {
     }
   };
 
-  const reader  = response.body.getReader();
-  const decoder = new TextDecoder();
-  let   buffer  = "";
+  // The same byte parser the initial load uses: text rows are framed by byte
+  // length, so the stream is never decoded line by line.
+  const parser = createRowParser(processRow);
+  const reader = response.body.getReader();
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-
-    let newlineIdx;
-    while ((newlineIdx = buffer.indexOf("\n")) !== -1) {
-      processLine(buffer.slice(0, newlineIdx));
-      buffer = buffer.slice(newlineIdx + 1);
-    }
+    parser.push(value);
   }
-
-  // Handle any remaining content without a trailing newline
-  if (buffer.trim()) processLine(buffer);
+  parser.end();
 
   // Fallback: if row 0 never triggered (shouldn't happen with valid server)
   if (!initialTreeSet && !redirected && rows.has(0)) {

@@ -112,6 +112,26 @@ module Ruact
         end
       end
 
+      # A string of 1024+ bytes inside deferred content becomes a `T` row the
+      # deferred model row references. It used to be queued and never emitted,
+      # so the client received a `$T` reference to a row that did not exist.
+      describe "text rows inside deferred content (Story 17-0d)" do
+        it "emits the text row, before the deferred row that references it", :aggregate_failures do
+          long = "é" * 600 # 1200 bytes
+          inner = ReactElement.new(type: "p", props: { "children" => long })
+          suspense = SuspenseElement.new(fallback: ReactElement.new(type: "span"), children: inner, delay: 0.0)
+          rows = Ruact::Testing::FlightWireParser.parse(described_class.render(suspense, empty_manifest))
+
+          text = rows.find { |row| row[:class] == :text }
+          expect(text).not_to be_nil
+          expect(text[:payload].force_encoding("UTF-8")).to eq(long)
+
+          referencing = rows.index { |row| row[:class] == :model && row[:raw].include?("$T#{text[:id].to_s(16)}") }
+          expect(referencing).not_to be_nil
+          expect(rows.index(text)).to be < referencing
+        end
+      end
+
       describe "import row ordering" do
         it "emits import rows before the root model row" do
           element = ReactElement.new(

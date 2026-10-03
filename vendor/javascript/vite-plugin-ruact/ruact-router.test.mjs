@@ -11,6 +11,8 @@
 // classifier is never a silent no-op; and a Flight response still renders.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import { setupRouter, teardownRouter } from "./runtime/ruact-router.js";
 
 const ORIGIN = "http://localhost:3000";
@@ -431,3 +433,51 @@ describe("ruact-router — the navigation boundary (Story 17.0f)", () => {
     });
   });
 });
+
+// Story 17-0d — a navigation reads the same byte parser as the initial load.
+// The stream is cut inside a `T` length, inside a multibyte code point and
+// inside a text body; the page must still render with the exact text.
+describe("ruact-router — long text in a streamed navigation (Story 17-0d)", () => {
+  const FIXTURES = path.join(import.meta.dirname, "../../../spec/fixtures/flight");
+  let dom;
+  let onNavigate;
+  let onError;
+
+  beforeEach(() => {
+    dom = installDom();
+    onNavigate = vi.fn();
+    onError = vi.fn();
+    globalThis.fetch = vi.fn();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    setupRouter({ onNavigate, moduleRegistry: {}, onError });
+  });
+
+  afterEach(() => {
+    teardownRouter();
+    vi.restoreAllMocks();
+  });
+
+  it("renders every framed string, whatever the chunk boundaries", async () => {
+    const bytes = new Uint8Array(fs.readFileSync(path.join(FIXTURES, "text_framing.txt")));
+    const expected = JSON.parse(fs.readFileSync(path.join(FIXTURES, "text_framing_expected.json"), "utf8"));
+    const firstLength = Buffer.from(bytes).indexOf(":T") + 3;      // inside the first hex length
+    const multibyte = Buffer.from(bytes).indexOf(Buffer.from("ç")) + 1; // between the two bytes of "ç"
+    const cuts = [0, firstLength, multibyte, multibyte + 700, bytes.length];
+    const body = new ReadableStream({
+      start(controller) {
+        for (let i = 0; i < cuts.length - 1; i += 1) controller.enqueue(bytes.slice(cuts[i], cuts[i + 1]));
+        controller.close();
+      },
+    });
+    const headers = new Headers({ "content-type": "text/x-component" });
+    fetch.mockResolvedValue({ ok: true, status: 200, statusText: "200", url: `${ORIGIN}/posts`, headers, body });
+
+    click(dom.listeners, "/posts");
+    await settle();
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+    expect(onNavigate.mock.calls[0][0]).toEqual(expected);
+  });
+});
+
