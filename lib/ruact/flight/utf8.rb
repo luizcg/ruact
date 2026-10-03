@@ -19,10 +19,15 @@ module Ruact
         return value if value.encoding == Encoding::UTF_8 && value.valid_encoding?
 
         text =
-          if [Encoding::BINARY, Encoding::UTF_8].include?(value.encoding)
+          begin
+            if [Encoding::BINARY, Encoding::UTF_8].include?(value.encoding)
+              value.dup.force_encoding(Encoding::UTF_8)
+            else
+              value.encode(Encoding::UTF_8, invalid: :replace, undef: :replace, replace: REPLACEMENT)
+            end
+          rescue Encoding::ConverterNotFoundError
+            # An encoding Ruby cannot convert from (UTF-7, say): its bytes.
             value.dup.force_encoding(Encoding::UTF_8)
-          else
-            value.encode(Encoding::UTF_8, invalid: :replace, undef: :replace, replace: REPLACEMENT)
           end
         text.valid_encoding? ? text : text.scrub(REPLACEMENT)
       end

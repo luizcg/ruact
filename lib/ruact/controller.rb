@@ -3,6 +3,7 @@
 require "json"
 require "socket"
 require "uri"
+require_relative "redirect_path"
 require_relative "view_helper"
 require_relative "validation_errors_collector"
 require_relative "controller/document_rendering"
@@ -43,15 +44,6 @@ module Ruact
     # An explicit `render` of a ruact page goes through ruact (Story 17.0i).
     # See Ruact::Controller::PageRendering.
     include Ruact::Controller::PageRendering
-
-    # Would a browser read this redirect path as a URL to another host? `//x`
-    # is protocol-relative, and browsers treat `\` as `/` in that position.
-    #
-    # @param path [String] a redirect target already reduced to a path
-    # @return [Boolean]
-    def self.protocol_relative?(path)
-      path.match?(%r{\A[/\\]{2}})
-    end
 
     # Story 17.0f — "is this action a ruact PAGE?", answered at CLASS level so the
     # navigation boundary (Ruact::NavigationBoundary) can ask it before any action
@@ -276,7 +268,7 @@ module Ruact
         redirect_url += "?#{uri.query}"    if uri.query
         redirect_url += "##{uri.fragment}" if uri.fragment
         # Same-origin `https://app//evil.com` must not shrink to `//evil.com`.
-        redirect_url = url if Ruact::Controller.protocol_relative?(redirect_url)
+        redirect_url = url if Ruact::RedirectPath.protocol_relative?(redirect_url)
       rescue ::URI::InvalidURIError
         return super
       end

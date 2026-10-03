@@ -553,4 +553,13 @@ RSpec.describe "Ruact::Flight::Serializer string encoding" do
   it "reads binary-tagged UTF-8 (File.binread, an HTTP body) as the text it is" do
     expect(decoded(("é" * 600).b)).to eq("é" * 600)
   end
+
+  it "normalizes hash keys, symbols and unconvertible encodings too", :aggregate_failures do
+    manifest = Ruact::ClientManifest.from_hash({})
+    key = (+"k\xFF").force_encoding("UTF-8")
+    expect { Ruact::Flight::Renderer.render({ key => 1 }, manifest) }.not_to raise_error
+    expect(Ruact::Flight::Renderer.render({ "s" => :café }, manifest)).to include("café")
+    expect { Ruact::Flight::Renderer.render({ "u7" => (+"abc").force_encoding("UTF-7") }, manifest) }
+      .not_to raise_error
+  end
 end
