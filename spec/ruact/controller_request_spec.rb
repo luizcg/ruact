@@ -49,14 +49,14 @@ module ControllerRequestSpecSupport
     ["/unwired-layout-demo/create_unprocessable", "unwired_layout_demo#create_unprocessable"],
     ["/status-live-demo/create", "status_live_demo#create"],
     ["/status-rescue-demo/create", "status_rescue_demo#create"]
-  ]
+  ].freeze
 
   # Story 17-0j — respond_to on a router request (GET routes).
   RESPOND_TO_GET_ROUTES = [
     *%w[show_respond_to show_json_only show_inner_unknown]
       .map { |action| ["/status-demo/#{action}", "status_demo##{action}"] },
     ["/auth-demo/show", "auth_demo#show"]
-  ].freeze.freeze
+  ].freeze
 
   class << self
     attr_reader :manifest_path
