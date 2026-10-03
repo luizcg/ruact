@@ -261,7 +261,7 @@ export function buildTreeFromRows(rows, moduleRegistry) {
   if (!root) throw new Error("[flight-client] No root row (id=0) found in payload");
   if (root.kind === "error") throw new Error(`[ruact] Server error: ${root.message}`);
   if (root.kind !== "model") throw new Error("[flight-client] Root row is not a model row");
-  return rootTree(buildTree(root.value, rows, moduleRegistry));
+  return buildTree(root.value, rows, moduleRegistry);
 }
 
 /**
@@ -273,7 +273,7 @@ export function buildTreeFromRows(rows, moduleRegistry) {
  * @param {Object} moduleRegistry
  */
 export function buildTree(value, rows, moduleRegistry) {
-  return _buildTree(value, rows, moduleRegistry);
+  return rootTree(_buildTree(value, rows, moduleRegistry));
 }
 
 /**
@@ -341,7 +341,7 @@ function _buildTree(value, rows, moduleRegistry) {
       }
       // Model row — deferred content already arrived (non-streaming path).
       // Wrap in a function component so it can be used as a type in createElement.
-      const content = _buildTree(row.value, rows, moduleRegistry);
+      const content = rootTree(_buildTree(row.value, rows, moduleRegistry));
       return () => content;
     }
     return value;
@@ -394,14 +394,17 @@ function _buildTree(value, rows, moduleRegistry) {
 // child or an explicit one-element array keeps its shape (Story 17-0a).
 function createWithChildren(type, props) {
   const { children } = props;
-  if (!Array.isArray(children) || children.length < 2) return createElement(type, props);
+  if (!Array.isArray(children) || children.length < 2 || !children.some(isValidElement)) {
+    return createElement(type, props); // a data array passed as `children` stays a plain array
+  }
   const rest = { ...props };
   delete rest.children;
   return createElement(type, rest, ...children);
 }
 
-// The page's root, when it is several siblings: a Fragment of them, for the
-// same reason as above (React logged the warning against <App>).
+// The page's root — or a Suspense boundary's deferred content — when it is
+// several siblings: a Fragment of them, for the same reason as above (React
+// logged the warning against <App>).
 function rootTree(tree) {
   if (Array.isArray(tree) && tree.length >= 2 && tree.some(isValidElement)) {
     return createElement(Fragment, null, ...tree);

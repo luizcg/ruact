@@ -478,6 +478,18 @@ describe("sibling children", () => {
     expect(ul.props.children).toHaveLength(2);
   });
 
+  it("wraps a Suspense boundary's deferred siblings the same way", () => {
+    const deferred = buildTree([["$", "h2", null, { children: "A" }], ["$", "p", null, { children: "B" }]], EMPTY_ROWS, MODULE_REGISTRY);
+    expect(deferred.type).toBe(Fragment);
+    expect(deferred.props.children).toHaveLength(2);
+  });
+
+  it("does not spread a data array passed as children (it stays mutable)", () => {
+    const tree = createFromFlightPayload(payloadWithProps({ children: ["a", "b", "c"] }), MODULE_REGISTRY);
+    expect(tree.props.children).toEqual(["a", "b", "c"]);
+    expect(Object.isFrozen(tree.props.children)).toBe(false);
+  });
+
   it("leaves a single root, data arrays and one-element children as they were", () => {
     const tree = createFromFlightPayload(payloadWithProps({ tasks: [{ id: 1 }, { id: 2 }] }), MODULE_REGISTRY);
     expect(tree.key).toBeNull();
