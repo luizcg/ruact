@@ -381,6 +381,23 @@ describe("text rows (Story 17-0d)", () => {
       .toThrow(/Text row 7 is referenced but was never received/);
   });
 
+  it("skips a stray line without a colon instead of losing the row after it", () => {
+    const rows = rowsOf([new TextEncoder().encode('garbage\n0:{"a":1}\n')]);
+    expect(rows.get(0)).toEqual({ kind: "model", value: { a: 1 } });
+  });
+
+  it("reads a large row arriving in small chunks in linear time", () => {
+    const big = JSON.stringify({ items: Array.from({ length: 60000 }, (_, i) => ({ id: i, name: `item ${i}` })) });
+    const bytes = new TextEncoder().encode(`0:${big}\n`);
+    const chunks = [];
+    for (let i = 0; i < bytes.length; i += 4096) chunks.push(bytes.subarray(i, i + 4096));
+    const started = performance.now();
+    const rows = rowsOf(chunks);
+    expect(rows.get(0).value.items).toHaveLength(60000);
+    // ~2.3 MB in 4 KB chunks; quadratic re-copying took seconds.
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
   it("still reads a last row that lost its trailing newline", () => {
     const rows = rowsOf([new TextEncoder().encode('0:{"a":1}')]);
     expect(rows.get(0)).toEqual({ kind: "model", value: { a: 1 } });

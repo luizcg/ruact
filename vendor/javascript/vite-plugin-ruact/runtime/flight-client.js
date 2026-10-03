@@ -134,66 +134,96 @@ const utf8 = new TextDecoder("utf-8");
  * @returns {{ push(bytes: Uint8Array): void, end(): void }}
  */
 export function createRowParser(onRow) {
-  let buf = new Uint8Array(0);
+  // A growable byte buffer: `buf[pos, len)` is what is not parsed yet. It
+  // grows by doubling and is compacted only when full, so a large row arriving
+  // in many small chunks costs linear time, not a copy per chunk.
+  let buf = new Uint8Array(4096);
+  let len = 0;
   let pos = 0;
+  // How far the newline search for the row at `pos` already got, so a long
+  // model row is not re-scanned from its start on every chunk.
+  let scanned = 0;
 
   const append = (bytes) => {
-    const rest = buf.length - pos;
-    const next = new Uint8Array(rest + bytes.length);
-    next.set(buf.subarray(pos), 0);
-    next.set(bytes, rest);
-    buf = next;
-    pos = 0;
+    if (len + bytes.length > buf.length) {
+      const rest = len - pos;
+      if (rest + bytes.length <= buf.length) {
+        buf.copyWithin(0, pos, len);
+      } else {
+        let capacity = buf.length * 2;
+        while (capacity < rest + bytes.length) capacity *= 2;
+        const next = new Uint8Array(capacity);
+        next.set(buf.subarray(pos, len));
+        buf = next;
+      }
+      scanned = Math.max(0, scanned - pos);
+      len = rest;
+      pos = 0;
+    }
+    buf.set(bytes, len);
+    len += bytes.length;
   };
 
-  const emitLine = (start, end) => {
-    const parsed = parseLine(utf8.decode(buf.subarray(start, end)));
-    if (parsed) onRow(parsed);
+  const advance = (to) => {
+    pos = to;
+    scanned = 0;
   };
 
   // Parses one row starting at `pos`. Returns false when it needs more bytes.
   const step = () => {
-    const colon = buf.indexOf(COLON, pos);
-    if (colon === -1) return false;
+    const view  = buf.subarray(0, len);
+    const colon = view.indexOf(COLON, pos);
 
-    const header = utf8.decode(buf.subarray(pos, colon));
-    if (colon + 1 >= buf.length) return false;
+    // A line with no colon before its end is not a row (a stray line from a
+    // proxy, say): skip it rather than let it swallow the row after it.
+    const headerEnd = colon === -1 ? len : colon;
+    const stray = view.subarray(pos, headerEnd).indexOf(NEWLINE);
+    if (stray !== -1) {
+      advance(pos + stray + 1);
+      return true;
+    }
+    if (colon === -1 || colon + 1 >= len) return false;
 
-    if (HEX.test(header.trim()) && buf[colon + 1] === TAG_T) {
-      const comma = buf.indexOf(COMMA, colon + 2);
+    const header = utf8.decode(view.subarray(pos, colon)).trim();
+
+    if (HEX.test(header) && view[colon + 1] === TAG_T) {
+      const comma = view.indexOf(COMMA, colon + 2);
       if (comma === -1) return false;
-      const lengthHex = utf8.decode(buf.subarray(colon + 2, comma));
+      const lengthHex = utf8.decode(view.subarray(colon + 2, comma));
       if (!HEX.test(lengthHex)) {
-        throw new Error(`[flight-client] Malformed text row length "${lengthHex}" for row ${header.trim()}`);
+        throw new Error(`[flight-client] Malformed text row length "${lengthHex}" for row ${header}`);
       }
       const length = parseInt(lengthHex, 16);
       const start  = comma + 1;
-      if (start + length > buf.length) return false;
-      const id = parseInt(header.trim(), 16);
-      onRow({ id, row: { kind: "text", value: utf8.decode(buf.subarray(start, start + length)) } });
-      pos = start + length;
+      if (start + length > len) return false;
+      onRow({ id: parseInt(header, 16), row: { kind: "text", value: utf8.decode(view.subarray(start, start + length)) } });
+      advance(start + length);
       return true;
     }
 
-    const newline = buf.indexOf(NEWLINE, colon + 1);
-    if (newline === -1) return false;
-    emitLine(pos, newline);
-    pos = newline + 1;
+    const newline = view.indexOf(NEWLINE, Math.max(colon + 1, scanned));
+    if (newline === -1) {
+      scanned = len;
+      return false;
+    }
+    const parsed = parseLine(utf8.decode(view.subarray(pos, newline)));
+    if (parsed) onRow(parsed);
+    advance(newline + 1);
     return true;
   };
 
   return {
     push(bytes) {
       append(bytes);
-      // Blank separators between rows carry nothing.
-      while (pos < buf.length) {
-        while (pos < buf.length && (buf[pos] === NEWLINE || buf[pos] === 0x0d)) pos++;
-        if (pos >= buf.length || !step()) break;
+      while (pos < len) {
+        // Blank separators between rows carry nothing.
+        while (pos < len && (buf[pos] === NEWLINE || buf[pos] === 0x0d)) advance(pos + 1);
+        if (pos >= len || !step()) break;
       }
     },
 
     end() {
-      const rest = utf8.decode(buf.subarray(pos));
+      const rest = utf8.decode(buf.subarray(pos, len));
       if (!rest.trim()) return;
       // A last model/import/error row without its trailing newline is complete
       // as far as JSON can tell; a cut-off text row or header is not.
@@ -202,13 +232,10 @@ export function createRowParser(onRow) {
       if (colon !== -1 && HEX.test(header) && rest[colon + 1] === "T") {
         throw new Error(`[flight-client] Truncated Flight payload: text row ${header} is incomplete`);
       }
-      if (colon === -1) {
-        throw new Error(`[flight-client] Truncated Flight payload: "${rest.slice(0, 40)}"`);
-      }
-      const parsed = parseLine(rest);
+      const parsed = colon === -1 ? null : parseLine(rest);
       if (!parsed) throw new Error(`[flight-client] Truncated Flight payload: "${rest.slice(0, 40)}"`);
       onRow(parsed);
-      pos = buf.length;
+      advance(len);
     },
   };
 }
