@@ -36,6 +36,16 @@ module Ruact
           .to raise_error(Ruact::PreprocessorError, /title= holds ERB.*title=\{\.\.\.\}/m)
       end
 
+      it "refuses empty braces, naming the attribute" do
+        expect { described_class.transform(%(<PostCard title={} />), registry: nil) }
+          .to raise_error(Ruact::PreprocessorError, /title=\{\} is empty/)
+      end
+
+      it "explains a > inside a quoted value" do
+        expect { described_class.transform(%(<PostCard title="a > b" />), registry: nil) }
+          .to raise_error(Ruact::PreprocessorError, /cannot contain `>`/)
+      end
+
       it "refuses an attribute with = and no value" do
         expect { described_class.transform(%(<PostCard title= />), registry: nil) }
           .to raise_error(Ruact::PreprocessorError, /title= needs a value/)

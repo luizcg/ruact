@@ -48,6 +48,7 @@ module Ruact
       case attrs[pos]
       when "{"
         expr = extract_braced_expr(attrs, pos + 1)
+        raise PreprocessorError, "#{name}={} is empty: put a Ruby expression in the braces" if expr.strip.empty?
         [expr, pos + expr.length + 2]
       when '"', "'"
         close = attrs.index(attrs[pos], pos + 1)
@@ -56,7 +57,10 @@ module Ruact
           raise PreprocessorError, "#{name}= holds ERB, which a component attribute cannot run. " \
                                    "Pass the Ruby in braces instead: #{name}={...}"
         end
-        raise PreprocessorError, "unclosed quote in #{name}=" unless close
+        unless close
+          raise PreprocessorError, "unclosed quote in #{name}= (a component tag cannot contain `>`, " \
+                                   "even inside a quoted value: pass the text from Ruby instead)"
+        end
 
         [text.inspect, close + 1]
       else
