@@ -19,7 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **A server function returns the instance variables its action assigned, not every one a view would see.** A function call's JSON was the controller's whole `view_assigns`, including what callbacks set. An authentication `before_action` that memoizes the user (Devise's `current_user` sets `@current_user`) put the signed-in user in every response. Under `strict_serialization`, on by default in production, a user model without `ruact_props` made every function call answer 500. Instance variables a callback set are now left out unless the action assigns them again: `@post = Post.find(...)` in the action is returned, and a `before_action :set_post` whose `@post` the action only updates in place (`@post.update(...)`) is not. Re-assign it (`@post = @post.reload`) or `render json:` to return it. A page render's view still sees every instance variable.
+- **A server function no longer returns the signed-in user, or answers 500 because of it.** A function call's JSON was the controller's whole `view_assigns`. An authentication library that memoizes the user in an instance variable (Devise's `current_user` sets `@current_user` on its first call) put that user in every response. Under `strict_serialization`, on by default in production, a user model without `ruact_props` then made every function call answer 500. Two rules now decide what the JSON holds:
+  - **What callbacks set stays out, unless the action assigns it again.** `@post = Post.find(...)` in the action is returned. A `before_action :set_post` whose `@post` the action only updates in place (`@post.update(...)`) is not: reassign it (`@post = @post.reload`) or `render json:`. Plain values the action sets (`@ok = false`, `@count = 0`) are always returned.
+  - **Authentication and authorization memos are never returned,** even when the action fills them by calling `current_user` or `authorize`. The names are in the new `config.server_function_hidden_ivars`, default `["current_user", "current_ability", "pundit"]` for Devise, CanCanCan and Pundit. Every name starting with `_` is hidden too.
+
+  A page render's view still sees every instance variable.
 
 ## [0.0.15] - 2026-10-03
 

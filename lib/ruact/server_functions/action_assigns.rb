@@ -5,16 +5,28 @@ module Ruact
     # What a server function's JSON is made of (decision, 2026-10-03): the
     # ivars the ACTION assigned, not everything a view would see.
     #
-    # Callbacks run before `send_action`, so what they put on the controller —
-    # an auth layer's memoized `@current_user` (Devise's `current_user` does
-    # that), a `set_post` — is recorded there and left out of the JSON unless
-    # the action assigns it again. Without this, every function call carried
-    # the signed-in user, and under `strict_serialization` (production's
-    # default) a non-Serializable user made every call a 500. The view of a
-    # page render still sees every ivar; only the function-call JSON narrows.
+    # Two filters. Callbacks run before `send_action`, so what they put on the
+    # controller (a `set_post`, a `set_current_user`) is recorded there and
+    # left out of the JSON unless the action assigns it again. And some ivars
+    # are filled DURING the action without the action naming them — Devise's
+    # `current_user` memoizes `@current_user` on first call, Pundit's
+    # `authorize` sets `@pundit` — so names in
+    # `Ruact.config.server_function_hidden_ivars`, and every name starting
+    # with `_`, are never returned. Without these, a function call carried the
+    # signed-in user, and under `strict_serialization` (production's default)
+    # a user model without `ruact_props` made every call a 500. A page
+    # render's view still sees every ivar; only the function-call JSON
+    # narrows.
     module ActionAssigns
       # The snapshot's own name, kept out of what it filters.
       CALLBACK_IVARS_KEY = "__ruact_callback_ivars"
+
+      # Values an action re-setting cannot be told apart from a callback
+      # leaving them (`@ok = false`, `@count = 0` are the same object either
+      # way). They can neither leak a record nor fail strict serialization,
+      # so they are always the action's — the response shape never depends
+      # on the data.
+      IMMEDIATE = [NilClass, TrueClass, FalseClass, Integer, Float, Symbol].freeze
 
       private
 
@@ -31,11 +43,12 @@ module Ruact
       # same object). An ivar the action reassigned — even to an equal
       # object — is the action's.
       def __ruact_action_assigns(assigns)
-        before = @__ruact_callback_ivars
-        assigns = assigns.except(CALLBACK_IVARS_KEY)
-        return assigns unless before
-
-        assigns.reject { |name, value| before.key?(name) && before[name].equal?(value) }
+        before = @__ruact_callback_ivars || {}
+        hidden = Ruact.config.server_function_hidden_ivars
+        assigns.reject do |name, value|
+          name == CALLBACK_IVARS_KEY || name.start_with?("_") || hidden.include?(name) ||
+            (before.key?(name) && before[name].equal?(value) && !IMMEDIATE.any? { |type| value.is_a?(type) })
+        end
       end
     end
   end

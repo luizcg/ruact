@@ -71,7 +71,11 @@ module ServerBucketSpecSupport
   class BucketCallbackIvarsController < ActionController::Base
     include Ruact::Server
 
-    before_action { @current_user = UnserializableRecord.new }
+    before_action(except: %i[create_with_memoized_user create_flags]) { @current_user = UnserializableRecord.new }
+    before_action(only: :create_flags) do
+      @ok = false
+      @count = 0
+    end
     before_action(only: %i[update_reassigned update_in_place]) do
       @post = BucketPost.new(id: 7, title: "Old", secret: "s")
     end
@@ -84,8 +88,26 @@ module ServerBucketSpecSupport
       @post = BucketPost.new(id: 7, title: "New", secret: "s")
     end
 
+    # Devise's current_user memoizes on first call — here, during the action.
+    def create_with_memoized_user
+      current_user_memo
+      @_pundit_policies = { leak: true }
+      @post = BucketPost.new(id: 2, title: "Mine", secret: "s")
+    end
+
+    def create_flags
+      @ok = false
+      @count = 0
+    end
+
     def update_in_place
       @post.instance_variable_set(:@title, "New") # mutated in place, not reassigned
+    end
+
+    private
+
+    def current_user_memo
+      @current_user ||= UnserializableRecord.new
     end
   end
 
@@ -327,6 +349,10 @@ if defined?(ControllerRequestSpecSupport) &&
          to: "server_bucket_spec_support/bucket_callback_ivars#update_reassigned"
     post "/bucket/callback_ivars/update_in_place",
          to: "server_bucket_spec_support/bucket_callback_ivars#update_in_place"
+    post "/bucket/callback_ivars/create_with_memoized_user",
+         to: "server_bucket_spec_support/bucket_callback_ivars#create_with_memoized_user"
+    post "/bucket/callback_ivars/create_flags",
+         to: "server_bucket_spec_support/bucket_callback_ivars#create_flags"
     post "/bucket/validated_create_invalid", to: "server_bucket_spec_support/bucket_server#validated_create_invalid"
     post "/bucket/validated_create_valid",   to: "server_bucket_spec_support/bucket_server#validated_create_valid"
     post "/bucket/stray_errors_ivar", to: "server_bucket_spec_support/bucket_server#stray_errors_ivar"
@@ -523,6 +549,19 @@ RSpec.describe "Story 9.2: Ruact::Server dual-bucket response negotiation", :sto
     it "returns a callback's ivar the action reassigned" do
       post "/bucket/callback_ivars/update_reassigned", "{}", json_headers
       expect(JSON.parse(last_response.body)).to eq("post" => { "id" => 7, "title" => "New" })
+    end
+
+    it "hides an auth library's memo filled during the action, and _-prefixed ivars", :aggregate_failures do
+      reset_config
+      Ruact.configure { |c| c.strict_serialization = true }
+      post "/bucket/callback_ivars/create_with_memoized_user", "{}", json_headers
+      expect(last_response.status).to eq(200)
+      expect(JSON.parse(last_response.body).keys).to eq(["post"])
+    end
+
+    it "returns immediates the action set, even when a callback set the same value" do
+      post "/bucket/callback_ivars/create_flags", "{}", json_headers
+      expect(JSON.parse(last_response.body)).to eq("ok" => false, "count" => 0)
     end
 
     it "does not return a callback's ivar the action only mutated" do
