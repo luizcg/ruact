@@ -33,8 +33,13 @@ export function setupRouter({ onNavigate, moduleRegistry, onError = null }) {
   _moduleRegistry = moduleRegistry;
   _onError        = onError;
 
-  document.addEventListener("click",  handleClick,  { capture: true });
-  document.addEventListener("submit", handleSubmit, { capture: true });
+  // Bubble phase, on the document: the app's own handlers (React's, which
+  // listen on the root container, and any other) run first, so an
+  // `onSubmit`/`onClick` that calls preventDefault() keeps the event. In the
+  // capture phase the router decided before them: a React form that handles
+  // its own submit (the scaffold's) also got a router fetch of its URL.
+  document.addEventListener("click",  handleClick);
+  document.addEventListener("submit", handleSubmit);
   window.addEventListener("popstate", handlePopstate);
 
   // Story 8.2 — publish the revalidate handle the runtime helper reads.
@@ -56,8 +61,8 @@ export function setupRouter({ onNavigate, moduleRegistry, onError = null }) {
 }
 
 export function teardownRouter() {
-  document.removeEventListener("click",  handleClick,  { capture: true });
-  document.removeEventListener("submit", handleSubmit, { capture: true });
+  document.removeEventListener("click",  handleClick);
+  document.removeEventListener("submit", handleSubmit);
   window.removeEventListener("popstate", handlePopstate);
   _onNavigate     = null;
   _moduleRegistry = null;
