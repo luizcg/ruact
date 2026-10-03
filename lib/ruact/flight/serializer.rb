@@ -53,6 +53,7 @@ module Ruact
       # --- Primitives ---
 
       def serialize_string(value)
+        value = Utf8.text(value)
         # Large strings get their own T row
         if value.bytesize >= LARGE_TEXT_THRESHOLD
           id = @request.allocate_id

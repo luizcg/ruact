@@ -327,6 +327,11 @@ module Ruact
       path = uri.path.nil? || uri.path.empty? ? "/" : uri.path
       path += "?#{uri.query}" if uri.query
       path += "##{uri.fragment}" if uri.fragment
+      # `https://app//evil.com` is same-origin, and Rails lets it through; as a
+      # path, `//evil.com` is a protocol-relative URL to ANOTHER host. Keep
+      # the absolute URL for any path a browser would read that way.
+      return url if Ruact::Controller.protocol_relative?(path)
+
       path
     rescue ::URI::InvalidURIError
       url

@@ -521,3 +521,36 @@ module Ruact
     end
   end
 end
+
+# Every string leaves valid UTF-8. A record holding Latin-1 or stray bytes
+# made its page answer 500 (JSON refuses invalid UTF-8), and a long one became
+# a `T` row whose byte count no longer matched what the browser decoded.
+RSpec.describe "Ruact::Flight::Serializer string encoding" do
+  def render(value)
+    Ruact::Flight::Renderer.render({ "text" => value }, Ruact::ClientManifest.from_hash({}))
+  end
+
+  def decoded(value)
+    rows = Ruact::Testing::FlightWireParser.parse(render(value))
+    text = rows.find { |row| row[:class] == :model && row[:id].zero? }[:payload]["text"]
+    ref = text.to_s[/\A\$T(\h+)\z/, 1]
+    ref ? rows.find { |row| row[:id] == ref.to_i(16) }[:payload].force_encoding("UTF-8") : text
+  end
+
+  it "replaces invalid bytes with U+FFFD, short or long", :aggregate_failures do
+    short = (+"caf\xE9").force_encoding("UTF-8")
+    long  = "#{'a' * 1100}\xFF".force_encoding("UTF-8")
+
+    expect(render(short)).to be_valid_encoding
+    expect(decoded(short)).to eq("caf�")
+    expect(decoded(long)).to eq("#{'a' * 1100}�")
+  end
+
+  it "transcodes text in another encoding" do
+    expect(decoded("ção".encode("ISO-8859-1"))).to eq("ção")
+  end
+
+  it "reads binary-tagged UTF-8 (File.binread, an HTTP body) as the text it is" do
+    expect(decoded(("é" * 600).b)).to eq("é" * 600)
+  end
+end

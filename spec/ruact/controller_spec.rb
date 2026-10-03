@@ -192,6 +192,25 @@ module Ruact
         end
       end
 
+      # `http://localhost//evil.com` is same-origin; reduced to a path it was
+      # `//evil.com`, another host to the browser.
+      context "when a same-origin URL's path starts with //" do
+        let(:same_origin_ctrl) do
+          request = Struct.new(:headers, :host, :port, :scheme)
+                          .new({ "Accept" => "text/x-component" }, "localhost", 80, "http")
+          redirect_test_class.new(request)
+        end
+
+        before { allow(same_origin_ctrl).to receive(:url_for).and_return("http://localhost//evil.com") }
+
+        it "keeps the absolute URL in the redirect row" do
+          rendered_plain = nil
+          allow(same_origin_ctrl).to receive(:render) { |opts| rendered_plain = opts[:plain] }
+          same_origin_ctrl.send(:redirect_to, "http://localhost//evil.com")
+          expect(JSON.parse(rendered_plain.delete_prefix("0:"))["redirectUrl"]).to eq("http://localhost//evil.com")
+        end
+      end
+
       context "when RSC request with external URL (AC #3)" do
         before { allow(ruact_ctrl).to receive(:url_for).and_return("https://external.com/page") }
 

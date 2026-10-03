@@ -226,8 +226,11 @@ module Ruact
     private_constant :SCRIPT_UNSAFE
 
     # A JSON string literal that is also safe inside a `<script>` element.
-    def script_safe_json(string)
-      JSON.generate(string).gsub(SCRIPT_UNSAFE) { |char| format("\\u%04x", char.ord) }
+    # The payload is UTF-8 by construction (the serializer normalizes every
+    # string); a binary-tagged buffer is retagged, not transcoded.
+    def __ruact_script_safe_json(string)
+      utf8 = string.encoding == Encoding::UTF_8 ? string : string.dup.force_encoding(Encoding::UTF_8)
+      JSON.generate(utf8).gsub(SCRIPT_UNSAFE) { |char| format("\\u%04x", char.ord) }
     end
 
     def ruact_flight_data_script(flight_payload)
@@ -235,7 +238,7 @@ module Ruact
         <script>
           (function() {
             var d = (self.__FLIGHT_DATA = self.__FLIGHT_DATA || []);
-            d.push(#{script_safe_json(flight_payload)});
+            d.push(#{__ruact_script_safe_json(flight_payload)});
           })();
         </script>
       HTML
