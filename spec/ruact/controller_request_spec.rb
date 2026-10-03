@@ -38,7 +38,8 @@ module ControllerRequestSpecSupport
     *%w[create_action create_string create_hash create_template create_locals create_json create_plain
         create_other_folder explicit create_respond_to create_no_status create_delegated redirect_delegated
         create_scaffold_style create_with_location create_formats_html create_formats_json create_formats_nil
-        create_pdf create_variant create_locale create_assigns create_alert create_prefixes]
+        create_pdf create_variant create_locale create_assigns create_alert create_prefixes
+        create_redirect_respond_to]
       .map { |action| ["/status-demo/#{action}", "status_demo##{action}"] },
     ["/status-pages-demo/create", "status_pages_demo#create"],
     ["/status-demo/create_with_layout", "status_demo#create_with_layout"],
@@ -147,6 +148,9 @@ module ControllerRequestSpecSupport
           # Story 17.0i — a ruact page answers with a status.
           STATUS_DEMO_ROUTES.each { |(path, target)| post path, to: "controller_request_spec_support/#{target}" }
           get "/status-demo/new", to: "controller_request_spec_support/status_demo#new"
+          # Story 17-0j — respond_to on a router request.
+          get "/status-demo/show_respond_to", to: "controller_request_spec_support/status_demo#show_respond_to"
+          get "/status-demo/show_json_only", to: "controller_request_spec_support/status_demo#show_json_only"
         end
       end
     end
@@ -248,6 +252,23 @@ module ControllerRequestSpecSupport
       respond_to do |format|
         format.html { render :new, status: 422 }
         format.json { render :show, status: :created, location: "/status-demo/1" }
+      end
+    end
+
+    # Story 17-0j — the shapes Rails' scaffold writes.
+    def show_respond_to
+      respond_to do |format|
+        format.html
+        format.json { render json: { page: "json" } }
+      end
+    end
+
+    def show_json_only = respond_to { |format| format.json { render json: { page: "json" } } }
+
+    def create_redirect_respond_to
+      respond_to do |format|
+        format.html { redirect_to "/status-demo/new" }
+        format.json { head :created }
       end
     end
 
@@ -444,6 +465,9 @@ ControllerRequestSpecSupport.write_view(
       <DemoButton label={"status-new"} errors={ruact_errors} />
     </div>
   ERB
+)
+ControllerRequestSpecSupport.write_view(
+  "controller_request_spec_support/status_demo", "show_respond_to", %(<DemoButton label={"respond-to-page"} />\n)
 )
 ControllerRequestSpecSupport.write_view(
   "controller_request_spec_support/status_demo", "with_locals", <<~ERB
@@ -997,6 +1021,52 @@ module Ruact # rubocop:disable Style/OneClassPerFile
       end
 
       it_behaves_like "a ruact page answering 422", "/status-demo/explicit", "status-new"
+
+      # Story 17-0j — `text/x-component` is not a Rails MIME type, so a router
+      # request matched no `format` and `respond_to` raised UnknownFormat (406)
+      # on every navigation and form submit of a scaffold-style controller.
+      describe "respond_to on a router request (Story 17-0j)" do
+        it "runs format.html for a navigation and answers Flight", :aggregate_failures do
+          get "/status-demo/show_respond_to", {}, flight_headers
+
+          expect(last_response.status).to eq(200)
+          expect(last_response.headers["Content-Type"]).to include("text/x-component")
+          expect(last_response.body).to include("respond-to-page")
+        end
+
+        it "runs format.html for a form submit, with the status it renders", :aggregate_failures do
+          post "/status-demo/create_scaffold_style", {}, flight_headers
+
+          expect(last_response.status).to eq(422)
+          expect(last_response.headers["Content-Type"]).to include("text/x-component")
+          expect(last_response.body).to include("status-new")
+        end
+
+        it "follows format.html's redirect with a Flight redirect row", :aggregate_failures do
+          post "/status-demo/create_redirect_respond_to", {}, flight_headers
+
+          expect(last_response.headers["Content-Type"]).to include("text/x-component")
+          expect(last_response.body).to include('"redirectUrl":"/status-demo/new"')
+        end
+
+        it "still answers JSON to a .json URL", :aggregate_failures do
+          get "/status-demo/show_respond_to.json", {}, flight_headers
+
+          expect(last_response.status).to eq(200)
+          expect(JSON.parse(last_response.body)).to eq("page" => "json")
+        end
+
+        it "still answers JSON to Accept: application/json" do
+          get "/status-demo/show_respond_to", {}, { "HTTP_ACCEPT" => "application/json" }
+
+          expect(JSON.parse(last_response.body)).to eq("page" => "json")
+        end
+
+        it "answers 406 when there is no format.html, and says why", :aggregate_failures do
+          expect { get "/status-demo/show_json_only", {}, flight_headers }
+            .to raise_error(ActionController::UnknownFormat, /format\.html/)
+        end
+      end
 
       it "streams a Flight 422 with ActionController::Live", :aggregate_failures do
         post "/status-live-demo/create", {}, flight_headers
