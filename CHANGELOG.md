@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`respond_to` answered 406 to every navigation and form submit of the client router.** The router asks for a page with `Accept: text/x-component`, which is not a Rails MIME type, so the request negotiated no format and `respond_to { |format| format.html { … } }` raised `ActionController::UnknownFormat`. That is the controller Rails' own scaffold writes: with `include Ruact::Controller`, its `create`, `update` and `destroy` failed whenever the router submitted the form. A router request now negotiates `format.html`, the same page a browser asks for: the `format.html` branch runs, and its render, status or redirect reaches the browser as a ruact answer. A URL that names a format (`/posts/1.json`) and an `Accept: application/json` request still get `format.json`. The format is negotiated before every callback, so an authentication `before_action` that answers with `respond_to` gets it too. A `respond_to` with no `format.html` still answers 406, now with a message naming the missing branch and the `data-ruact="false"` way out. A partial that exists only in another format (`.text.erb`) is no longer found by a ruact page during a router request.
 
+- **`bin/rails server` without Vite showed an empty page and no error.** Once Vite has run once, the component manifest is on disk, so a page renders without the dev server, but its JavaScript is not served: the page answered 200 with nothing in it, and the only clue was a 404 in the browser's network tab. In development, when the Vite dev server is not running and there is no build to serve, the page now shows a banner that says so and to start the app with `bin/dev`, and the Rails log gets the same `[ruact]` line. The banner is plain HTML, so it does not need the JavaScript that failed to load. Nothing changes with Vite running, with a build present, or outside development.
+
 - **Text that is not valid UTF-8 broke the page.** A string holding Latin-1 bytes, or bytes that are not text at all, made the page answer 500 for every viewer, because JSON refuses invalid UTF-8. A long one, 1024 bytes or more, was sent with a byte count that did not match what the browser decoded. Strings now leave as valid UTF-8: text in another encoding is transcoded, binary-tagged UTF-8 (`File.binread`, an HTTP body) is read as the text it is, and bytes that are not text become U+FFFD, as a browser shows them.
 
 ## [0.0.14] - 2026-10-02
@@ -122,6 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The README no longer claims props are an allowlist.** It said *"Props are an allowlist — other columns never cross"*, describing the opt-in rather than the default. The default is `as_json`: every attribute of a model prop crosses to the client, and the gem says so in the log (`ALL attributes exposed to client`). A reader who took the bullet at face value would have believed the safe behaviour was already on. The bullet now leads with what actually happens, then names `ruact_props` as the thing that makes it an allowlist and `strict_serialization` as what turns the permissive path into an error in production.
 
 - **The server-functions bullet no longer calls the whole generated module "typed".** Only queries carry an exact signature (one property per declared keyword, since 0.0.5). An action's accessor is typed to be callable and to satisfy `<form action>`, but its arguments and resolved value are `Record<string, unknown>` and `unknown` — useful, and not the autocomplete the word "typed" promises. Both are now described as what they are.
+
 - **The mechanism is stated where the reader meets it.** "Capitalized tag means React. Lowercase stays HTML." now sits directly under the ERB/TSX pair, and the paragraph that follows explains the wire in plain terms — the view renders server-side as it always did, the result travels as a React tree in the format React uses for Server Components, the data is inlined so React renders without a fetch, and Node builds the bundle and does nothing else.
 
 ### Fixed
@@ -382,24 +385,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ERB preprocessor** — PascalCase RSC component tags (`<Button />`, `<LikeButton postId={@post.id} />`) are transformed to Flight placeholders in ERB templates before Ruby evaluation.
 
 - **`<Suspense>` support** — `<Suspense fallback="Loading...">` in ERB templates maps to React Suspense boundaries in the Flight payload.
+
 - **React Flight wire format serializer** — Full Ruby-to-Flight protocol implementation covering: nil, booleans, integers, floats (NaN/Infinity/-0), strings (with `$` escaping), arrays, hashes, `Time`/`DateTime`, large strings (T rows), `ReactElement`, `SuspenseElement`, and `ClientReference`.
 
 - **`Ruact::Controller` concern** — Include in `ApplicationController` to enable RSC rendering. Provides `ruact_render`, RSC request detection (`text/x-component` / `Ruact-Request: 1` header), HTML shell generation with inline `__FLIGHT_DATA`, and Flight-aware `redirect_to`.
+
 - **Streaming mode** — When `ActionController::Live` is included, Flight rows are streamed to the client as they are produced (Suspense-aware).
 
 - **Client component resolution** — `Ruact::ClientManifest` reads `public/react-client-manifest.json` (generated by the Vite plugin) and resolves component names to `ClientReference` objects via a dual-path resolver.
+
 - **`Ruact::Serializable` mixin** — `ruact_props` DSL for declaring safe prop attributes on Ruby model objects.
 
 - **Install generator** — `rails generate ruact:install` scaffolds the initializer, Vite config patch, and JavaScript entry point.
+
 - **`ruact:doctor` Rake task** — Checks manifest presence, Vite server accessibility, controller setup, and streaming mode configuration.
 
 - **`vite-plugin-ruact`** — Vite plugin (npm package, co-versioned) that scans `"use client"` components and emits `public/react-client-manifest.json`.
+
 - **Client-side navigation** — JavaScript `ruact-router.js` intercepts same-origin link clicks and form submissions, fetches Flight payloads, and updates the React tree without full-page reloads.
 
 - **Error overlay** — Development-mode React error boundary with dismissible overlay for Flight parse and rendering errors.
+
 - **RSpec test suite** — 223 examples covering all modules: Flight serializer, ERB preprocessor, HTML converter, render pipeline, controller, client manifest, serializable, install generator, and `ruact:doctor`.
 
 - **Memory benchmark** — `rake benchmark:memory` enforces a 120% allocation regression gate against `spec/benchmarks/baseline.json`.
+
 - **CI matrix** — GitHub Actions: RSpec across Ruby 3.2 × 3.3 × Rails 7.0 × 7.1 × 7.2 × 8.0; RuboCop; YARD docs; memory benchmark; E2E system tests against React 19.0.0 and 19.x (Capybara + Cuprite); non-blocking React@next job with auto-issue on failure.
 
 - **E2E test app** — `e2e/` Rails app (no DB, in-memory Post model) with full CRUD system tests validating the complete request cycle.
