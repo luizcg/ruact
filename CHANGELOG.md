@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A quoted attribute on a component was dropped without a word.** `<PostCard title="Hello" />` reached the component with no `title`: only `title={…}` was read, and the quoted form is the first thing a JSX hand writes. Component tags now take the three JSX forms. `name={ruby}` is a Ruby expression, as before. `name="text"` is the string; a quoted value never runs Ruby. A bare `name` is `true`. Anything else raises a template error that names the attribute, including ERB inside a quoted value (`title="<%= @t %>"`), which a component attribute cannot run: write `title={@t}`.
+
+- **The Getting Started page logged a React error.** Server-rendered siblings, such as an `<h1>` next to a component or the rows of an ERB loop, reached React as an array of elements with no keys, and React logged "Each child in a list should have a unique key" on the guide's own example. Elements in an array are now keyed by their position, which is the key React would use anyway, unless the template gives one.
+
+- **A form React handles itself also got a router request.** The client router decided on clicks and form submits before the app's own handlers ran, so a form whose `onSubmit` calls `preventDefault()` was also fetched by the router: the scaffold's form sent a stray `GET` of its own page on every save. The router now decides after them, and an event the app prevented is left alone. The same holds for a link whose `onClick` prevents the default.
+
+- **The install message said a component works in any ERB view.** In island mode, the default, it works in the views of a controller that has `include Ruact::Controller`; the message now says so.
+
 ## [0.0.15] - 2026-10-03
 
 ### Security
