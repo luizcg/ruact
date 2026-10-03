@@ -9,6 +9,7 @@ require_relative "validation_errors_collector"
 require_relative "controller/document_rendering"
 require_relative "controller/pages"
 require_relative "controller/page_rendering"
+require_relative "controller/format_negotiation"
 
 module Ruact
   # Include in the controllers whose pages render through ruact (island mode,
@@ -44,6 +45,9 @@ module Ruact
     # An explicit `render` of a ruact page goes through ruact (Story 17.0i).
     # See Ruact::Controller::PageRendering.
     include Ruact::Controller::PageRendering
+    # A router request negotiates `format.html`, so `respond_to` answers it
+    # (Story 17-0j). See Ruact::Controller::FormatNegotiation.
+    include Ruact::Controller::FormatNegotiation
 
     # Story 17.0f — "is this action a ruact PAGE?", answered at CLASS level so the
     # navigation boundary (Ruact::NavigationBoundary) can ask it before any action

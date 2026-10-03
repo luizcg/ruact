@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Dates and large integers reached React as marker strings.** A Ruby `Time`, `DateTime` or `ActiveSupport::TimeWithZone` prop arrived as `"$D2026-09-08T12:30:45.123Z"`, and an integer beyond JavaScript's safe range (±(2^53 − 1)) as `"$n9007199254740993"`. A component had to know ruact's transport to use them. They now arrive as a `Date`, with the same instant and millisecond precision, and as a `BigInt`; integers inside the safe range stay numbers. This holds on the first load and after a navigation. A `BigInt` is not a `number`: `JSON.stringify` refuses it and some libraries expect numbers, so format it where you use it (`String(id)`). A `Date` is not text, so `{createdAt}` as a child now raises "Objects are not valid as a React child"; format it (`createdAt.toLocaleDateString()`). Both can go back: a server function sends a `BigInt` argument as its decimal string, and `useQuery` takes a `BigInt` or `Date` param (the generated query accessors' TypeScript parameter types do not list them yet). Years outside 0–9999 are written in the form JavaScript reads (`+010000`). A calendar `Date` (`Date.today`) arrives as `"YYYY-MM-DD"`; it used to raise `Ruact::SerializationError` in production, where `strict_serialization` is on. A symbol whose name starts with `$` is escaped like a string.
 
+- **`respond_to` answered 406 to every navigation and form submit of the client router.** The router asks for a page with `Accept: text/x-component`, which is not a Rails MIME type, so the request negotiated no format and `respond_to { |format| format.html { … } }` raised `ActionController::UnknownFormat`. That is the controller Rails' own scaffold writes: with `include Ruact::Controller`, its `create`, `update` and `destroy` failed whenever the router submitted the form. A router request now negotiates `format.html`, the same page a browser asks for: the `format.html` branch runs, and its render, status or redirect reaches the browser as a ruact answer. A URL that names a format (`/posts/1.json`) and an `Accept: application/json` request still get `format.json`. The format is negotiated before every callback, so an authentication `before_action` that answers with `respond_to` gets it too. A `respond_to` with no `format.html` still answers 406, now with a message naming the missing branch and the `data-ruact="false"` way out. A partial that exists only in another format (`.text.erb`) is no longer found by a ruact page during a router request.
+
 - **Text that is not valid UTF-8 broke the page.** A string holding Latin-1 bytes, or bytes that are not text at all, made the page answer 500 for every viewer, because JSON refuses invalid UTF-8. A long one, 1024 bytes or more, was sent with a byte count that did not match what the browser decoded. Strings now leave as valid UTF-8: text in another encoding is transcoded, binary-tagged UTF-8 (`File.binread`, an HTTP body) is read as the text it is, and bytes that are not text become U+FFFD, as a browser shows them.
 
 ## [0.0.14] - 2026-10-02
@@ -118,6 +120,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 - **The README no longer claims props are an allowlist.** It said *"Props are an allowlist — other columns never cross"*, describing the opt-in rather than the default. The default is `as_json`: every attribute of a model prop crosses to the client, and the gem says so in the log (`ALL attributes exposed to client`). A reader who took the bullet at face value would have believed the safe behaviour was already on. The bullet now leads with what actually happens, then names `ruact_props` as the thing that makes it an allowlist and `strict_serialization` as what turns the permissive path into an error in production.
+
 - **The server-functions bullet no longer calls the whole generated module "typed".** Only queries carry an exact signature (one property per declared keyword, since 0.0.5). An action's accessor is typed to be callable and to satisfy `<form action>`, but its arguments and resolved value are `Record<string, unknown>` and `unknown` — useful, and not the autocomplete the word "typed" promises. Both are now described as what they are.
 - **The mechanism is stated where the reader meets it.** "Capitalized tag means React. Lowercase stays HTML." now sits directly under the ERB/TSX pair, and the paragraph that follows explains the wire in plain terms — the view renders server-side as it always did, the result travels as a React tree in the format React uses for Server Components, the data is inlined so React renders without a fetch, and Node builds the bundle and does nothing else.
 
@@ -158,6 +161,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It is referenced by absolute URL and **nothing binary is committed here** — so neither `gem install ruact` nor a clone of this repository carries a multi-megabyte file, permanently, for a picture. Two things keep it from aging into a lie: the URL belongs to the site's URL contract, and `spec/readme_demo_message_spec.rb` pins the message the recording shows against a fixture the gem itself produced. If the wording changes, that spec goes red and names the recording as the thing to redo.
 
 - **`LICENSE.txt`** — the gemspec has declared `spec.license = "MIT"` since the first commit while the repository contained no licence file, so both GitHub and the packaged gem shipped a promise with nothing behind it.
+
 - **`spec.description` and `metadata["documentation_uri"]` in the gemspec** — RubyGems rendered the one-line `summary` as the whole description and fell through to rubydoc.info for documentation.
 
 ### Fixed
@@ -314,6 +318,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Tooling
 
 - **Code coverage instrumentation** (Story 6.7). Added `simplecov` and `simplecov-lcov` as development dependencies; gem CI uploads coverage from the canonical matrix cell (Ruby 3.3 × Rails 7.2) to Codecov on every push and PR with the `gem` flag. **Baseline at merge: 88.30% line (581/658), 72.25% branch (239 specs).** (Corrects the earlier 87.89% figure recorded at story-merge time, which was a typo of the SimpleCov output for 567/644 = 88.04%; the current numbers reflect the post-review state after Story 6.7 review F1 refactored `html_converter.rb#convert_element` into helpers, which added a few lines and one new spec.) Coverage is informativo (not a CI gate); see Codecov PR comments for diff coverage on individual changes. Diff coverage target per project DoD: ≥ 90% line / ≥ 80% branch on new code.
+
 - **Spec `rails_stub.rb` fix.** The previous `$LOADED_FEATURES.any? { |f| f.end_with?("/rails.rb") }` heuristic for skipping the `LOADED_FEATURES` insertion was unreliable — unrelated gems ship files at `*/rails.rb` (e.g. SimpleCov's `simplecov/profiles/rails.rb`). Replaced with an unconditional insertion guarded only by the existing `return if defined?(Rails)` early-exit, which is the correct invariant.
 
 ### Renamed
@@ -341,6 +346,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Rake task descriptions and internal `require` statements migrated from `rails_rsc` to `ruact`. Public API is unchanged; this is a documentation and tooling rename only.
 - **Render context now passed explicitly** (Story 7.1). `Ruact::ComponentRegistry` (which used `Thread.current`) has been removed; the per-render component list is now an instance of `Ruact::RenderContext` passed explicitly through `Controller#ruact_render → RenderPipeline → HtmlConverter`. The `Ruact/NoSharedState` cop now passes with no exceptions in `lib/ruact/`. **No public API change.** Note: `Ruact::Flight::*`, `Ruact::Internal::*`, and `Ruact::RenderContext` are not part of the public API and may change between minors. Hosts upgrading need no application code changes. See decision note for rationale and contributor guidance.
+
 - **`RenderPipeline` entry points consolidated** (Story 7.2). `RenderPipeline#call`, `#stream`, and `#from_html` have been removed and replaced with a single `#render(input, mode:)` entry point. `input` selects the source — `{ erb: String, binding: Binding }` for ERB templates or `{ html: String, render_context: Ruact::RenderContext }` for pre-rendered HTML; `mode:` selects the output shape — `:string` returns a `String` (deferred chunks inlined eagerly), `:stream` returns an `Enumerator` of Flight rows (deferred chunks delay). Conflicting input keys, missing siblings, and unknown modes raise `ArgumentError` with the offending input named. **No public API change** — `Ruact::Controller#ruact_render` is unchanged. Note: `Ruact::Flight::*`, `Ruact::Internal::*`, and `Ruact::RenderPipeline` are not part of the public API and may change between minors. See decision note for rationale and contributor guidance.
 
   _Migration for any external code that may have reached into `Ruact::RenderPipeline`:_ `pipeline.call(erb, binding)` → `pipeline.render({ erb: erb, binding: binding }, mode: :string)`; `pipeline.stream(erb, binding)` → `pipeline.render({ erb: erb, binding: binding }, mode: :stream)`; `pipeline.from_html(html, render_context: ctx)` → `pipeline.render({ html: html, render_context: ctx }, mode: :string)`; `pipeline.from_html(html, render_context: ctx, streaming: true)` → `pipeline.render({ html: html, render_context: ctx }, mode: :stream)`.
@@ -374,20 +380,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **ERB preprocessor** — PascalCase RSC component tags (`<Button />`, `<LikeButton postId={@post.id} />`) are transformed to Flight placeholders in ERB templates before Ruby evaluation.
+
 - **`<Suspense>` support** — `<Suspense fallback="Loading...">` in ERB templates maps to React Suspense boundaries in the Flight payload.
 - **React Flight wire format serializer** — Full Ruby-to-Flight protocol implementation covering: nil, booleans, integers, floats (NaN/Infinity/-0), strings (with `$` escaping), arrays, hashes, `Time`/`DateTime`, large strings (T rows), `ReactElement`, `SuspenseElement`, and `ClientReference`.
+
 - **`Ruact::Controller` concern** — Include in `ApplicationController` to enable RSC rendering. Provides `ruact_render`, RSC request detection (`text/x-component` / `Ruact-Request: 1` header), HTML shell generation with inline `__FLIGHT_DATA`, and Flight-aware `redirect_to`.
 - **Streaming mode** — When `ActionController::Live` is included, Flight rows are streamed to the client as they are produced (Suspense-aware).
+
 - **Client component resolution** — `Ruact::ClientManifest` reads `public/react-client-manifest.json` (generated by the Vite plugin) and resolves component names to `ClientReference` objects via a dual-path resolver.
 - **`Ruact::Serializable` mixin** — `ruact_props` DSL for declaring safe prop attributes on Ruby model objects.
+
 - **Install generator** — `rails generate ruact:install` scaffolds the initializer, Vite config patch, and JavaScript entry point.
 - **`ruact:doctor` Rake task** — Checks manifest presence, Vite server accessibility, controller setup, and streaming mode configuration.
+
 - **`vite-plugin-ruact`** — Vite plugin (npm package, co-versioned) that scans `"use client"` components and emits `public/react-client-manifest.json`.
 - **Client-side navigation** — JavaScript `ruact-router.js` intercepts same-origin link clicks and form submissions, fetches Flight payloads, and updates the React tree without full-page reloads.
+
 - **Error overlay** — Development-mode React error boundary with dismissible overlay for Flight parse and rendering errors.
 - **RSpec test suite** — 223 examples covering all modules: Flight serializer, ERB preprocessor, HTML converter, render pipeline, controller, client manifest, serializable, install generator, and `ruact:doctor`.
+
 - **Memory benchmark** — `rake benchmark:memory` enforces a 120% allocation regression gate against `spec/benchmarks/baseline.json`.
 - **CI matrix** — GitHub Actions: RSpec across Ruby 3.2 × 3.3 × Rails 7.0 × 7.1 × 7.2 × 8.0; RuboCop; YARD docs; memory benchmark; E2E system tests against React 19.0.0 and 19.x (Capybara + Cuprite); non-blocking React@next job with auto-issue on failure.
+
 - **E2E test app** — `e2e/` Rails app (no DB, in-memory Post model) with full CRUD system tests validating the complete request cycle.
 
 [Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.14...HEAD
