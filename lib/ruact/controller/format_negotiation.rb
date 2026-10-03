@@ -55,13 +55,22 @@ module Ruact
 
       def __ruact_negotiate_router_request_as_html
         return unless ruact_request?
-        return if params[:format].present?
+        return if __ruact_url_format.present?
 
         request.set_header(FORMATS_KEY, [Mime[:html]])
       end
 
+      # The format the URL names (`/posts/1.json`, `?format=json`). Read from
+      # the path and query only: this runs before Rails' rescue and logging,
+      # where parsing a malformed request BODY must not raise.
+      def __ruact_url_format
+        request.path_parameters[:format] || request.query_parameters[:format]
+      rescue ActionController::BadRequest, ActionDispatch::Http::Parameters::ParseError
+        nil
+      end
+
       def __ruact_router_found_no_format?(collector, mimes)
-        return false unless ruact_request? && params[:format].blank?
+        return false unless ruact_request? && __ruact_url_format.blank?
 
         if collector
           collector.format.nil?
