@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Any text of 1 KB or more blanked the page.** The server sends every string of 1024 bytes or more as a separate row framed by its byte length, with no newline after it. The browser read the payload line by line, so it lost the row that holds the page and showed nothing: `[flight-client] No root row (id=0) found in payload`. A scaffolded post whose body was one long paragraph made the whole list disappear. The first load and the router now read the payload with one parser that works on bytes, so text arrives exactly as it left, including multibyte characters and newlines, wherever the network splits it. A truncated or malformed payload, or a reference to text that never arrived, is now an error that says so instead of a blank page. Long text inside Suspense content was also never sent at all; it is now, before the row that uses it. `Ruact::Testing`'s matchers compare a long prop by its text.
+
 - **Text that is not valid UTF-8 broke the page.** A string holding Latin-1 bytes, or bytes that are not text at all, made the page answer 500 for every viewer, because JSON refuses invalid UTF-8. A long one, 1024 bytes or more, was sent with a byte count that did not match what the browser decoded. Strings now leave as valid UTF-8: text in another encoding is transcoded, binary-tagged UTF-8 (`File.binread`, an HTTP body) is read as the text it is, and bytes that are not text become U+FFFD, as a browser shows them.
 
 ## [0.0.14] - 2026-10-02

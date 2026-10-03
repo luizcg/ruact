@@ -26,10 +26,14 @@ module Ruact
       ELEMENT_HEAD = "$"
       # A client-component element's type is "$L" followed by the import's hex id.
       CLIENT_REF = /\A\$L(?<hex>\h+)\z/
+      # A string of 1024+ bytes travels as a `T` row, and the props hold a
+      # `"$T<hex>"` reference to it (Story 17-0d).
+      TEXT_REF = /\A\$T(?<hex>\h+)\z/
 
       # @param wire [String] the raw Flight wire byte string.
       def initialize(wire)
         @rows = FlightWireParser.parse(wire)
+        @texts = index_texts(@rows)
         @imports = index_imports(@rows)
         @instances = collect_instances(@rows)
       end
@@ -74,6 +78,24 @@ module Ruact
         end
       end
 
+      def index_texts(rows)
+        rows.each_with_object({}) do |row, acc|
+          acc[row[:id]] = row[:payload].dup.force_encoding(Encoding::UTF_8) if row[:class] == :text
+        end
+      end
+
+      # Props as the component receives them: text references resolved.
+      def resolve_texts(node)
+        case node
+        when String
+          ref = node.match(TEXT_REF)
+          ref && @texts.key?(ref[:hex].to_i(16)) ? @texts[ref[:hex].to_i(16)] : node
+        when Array then node.map { |child| resolve_texts(child) }
+        when Hash then node.transform_values { |child| resolve_texts(child) }
+        else node
+        end
+      end
+
       def import_ids_for(name)
         @imports.select do |_id, meta|
           meta[:export_name] == name || meta[:basename] == name
@@ -95,7 +117,7 @@ module Ruact
       def walk(node, instances)
         if element?(node)
           ref = node[1].match(CLIENT_REF)
-          instances << { ref_id: ref[:hex].to_i(16), props: node[3] } if ref
+          instances << { ref_id: ref[:hex].to_i(16), props: resolve_texts(node[3]) } if ref
           # An element's props/children may themselves contain nested elements.
           walk(node[3], instances)
         elsif node.is_a?(Array)
