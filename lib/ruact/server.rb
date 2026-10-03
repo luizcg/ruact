@@ -14,6 +14,7 @@ require_relative "../ruact"
 require_relative "server_functions/error_rendering"
 require_relative "server_functions/bucket_two_payload"
 require_relative "server_functions/name_bridge"
+require_relative "redirect_path"
 require_relative "validation_errors_collector"
 
 module Ruact
@@ -327,6 +328,11 @@ module Ruact
       path = uri.path.nil? || uri.path.empty? ? "/" : uri.path
       path += "?#{uri.query}" if uri.query
       path += "##{uri.fragment}" if uri.fragment
+      # `https://app//evil.com` is same-origin, and Rails lets it through; as a
+      # path, `//evil.com` is a protocol-relative URL to ANOTHER host. Keep
+      # the absolute URL for any path a browser would read that way.
+      return url if Ruact::RedirectPath.protocol_relative?(path)
+
       path
     rescue ::URI::InvalidURIError
       url

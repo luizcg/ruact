@@ -53,6 +53,7 @@ module Ruact
       # --- Primitives ---
 
       def serialize_string(value)
+        value = Utf8.text(value)
         # Large strings get their own T row
         if value.bytesize >= LARGE_TEXT_THRESHOLD
           id = @request.allocate_id
@@ -90,7 +91,7 @@ module Ruact
         return "$undefined" if value == :undefined
 
         # Unknown symbols: just use the name as a string
-        value.to_s
+        Utf8.text(value.to_s)
       end
 
       def serialize_date(value)
@@ -104,7 +105,7 @@ module Ruact
       end
 
       def serialize_hash(value)
-        value.transform_keys(&:to_s).transform_values { |v| serialize_model(v) }
+        value.transform_keys { |key| Utf8.text(key.to_s) }.transform_values { |v| serialize_model(v) }
       end
 
       # --- React Element ---

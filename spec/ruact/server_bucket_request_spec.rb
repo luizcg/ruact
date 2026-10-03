@@ -94,6 +94,12 @@ module ServerBucketSpecSupport
       redirect_to "https://allowed.example.com/x", allow_other_host: true
     end
 
+    # `redirect_to "#{root_url}#{params[:path]}"` with path=/evil.com: an
+    # absolute, same-origin URL Rails' open-redirect check accepts.
+    def redirect_double_slash
+      redirect_to "#{request.base_url}/#{params[:slug]}"
+    end
+
     # Review round 1 — a host that sets Vary itself must keep it; Accept is
     # appended, not clobbered.
     def vary_clobber
@@ -287,6 +293,7 @@ if defined?(ControllerRequestSpecSupport) &&
     post "/bucket/redirecting",     to: "server_bucket_spec_support/bucket_server#redirecting"
     post "/bucket/redirect_external", to: "server_bucket_spec_support/bucket_server#redirect_external"
     post "/bucket/redirect_external_allowed", to: "server_bucket_spec_support/bucket_server#redirect_external_allowed"
+    post "/bucket/redirect_double_slash", to: "server_bucket_spec_support/bucket_server#redirect_double_slash"
     post "/bucket/vary_clobber",    to: "server_bucket_spec_support/bucket_server#vary_clobber"
     post "/bucket/vary_wildcard",   to: "server_bucket_spec_support/bucket_server#vary_wildcard"
     post "/bucket/before_redirect", to: "server_bucket_spec_support/bucket_before_redirect#never_runs"
@@ -400,6 +407,17 @@ RSpec.describe "Story 9.2: Ruact::Server dual-bucket response negotiation", :sto
       post "/bucket/redirect_external", "{}", json_headers
       expect(last_response.status).to eq(500)
       expect(JSON.parse(last_response.body).fetch("error_class")).to match(/RedirectError/)
+    end
+
+    # Rails accepts `http://example.org//evil.com` (same host). Reduced to a
+    # path it was `//evil.com`, which the runtime's location.assign sent to
+    # evil.com.
+    it "never emits a protocol-relative $redirect for a same-origin //path", :aggregate_failures do
+      post "/bucket/redirect_double_slash", JSON.generate(slug: "/evil.com"), json_headers
+      target = JSON.parse(last_response.body).fetch("$redirect")
+
+      expect(target).not_to start_with("//")
+      expect(target).to eq("http://example.org//evil.com")
     end
 
     it "honors allow_other_host: true — emits the absolute $redirect" do

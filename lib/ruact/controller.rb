@@ -3,6 +3,7 @@
 require "json"
 require "socket"
 require "uri"
+require_relative "redirect_path"
 require_relative "view_helper"
 require_relative "validation_errors_collector"
 require_relative "controller/document_rendering"
@@ -266,6 +267,8 @@ module Ruact
         redirect_url  = uri.path.nil? || uri.path.empty? ? "/" : uri.path
         redirect_url += "?#{uri.query}"    if uri.query
         redirect_url += "##{uri.fragment}" if uri.fragment
+        # Same-origin `https://app//evil.com` must not shrink to `//evil.com`.
+        redirect_url = url if Ruact::RedirectPath.protocol_relative?(redirect_url)
       rescue ::URI::InvalidURIError
         return super
       end

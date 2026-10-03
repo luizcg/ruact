@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Text in a prop could run as script on the page (stored XSS).** On a plain browser load, the page's Flight payload is inlined in a `<script>` element. It was embedded as a Ruby string literal with only a lowercase `</script>` escaped. A value containing `</SCRIPT>`, `</script >` or another casing closed the element, and the rest ran as HTML. A post titled `</SCRIPT><img src=x onerror=…>` executed its handler for everyone who opened the list. Any string a ruact page passes as a prop, such as user-written record content, could do it. The payload is now embedded as a JSON string literal with `<`, `>`, `&`, U+2028 and U+2029 escaped, so no character of it can end the element. Control characters such as `\e`, which the Ruby literal also delivered wrongly to JavaScript, now arrive intact. **Affects every version up to and including 0.0.14; upgrade.** `Ruact::Testing`'s matchers read both forms.
+
+- **A same-origin redirect could send the browser to another site.** `redirect_to "#{root_url}#{params[:path]}"` with `path=/evil.com` gives `https://your.app//evil.com`, which is your own host, so Rails' open-redirect check accepts it. ruact then shortened every same-origin URL to its path, `//evil.com`, and a browser reads that as a URL to `evil.com`. A server function answered `{"$redirect":"//evil.com"}` and the runtime navigated there. A page redirect produced a Flight row the router refused, so the navigation silently did nothing. A path that a browser would read as another host now keeps its absolute, same-origin URL.
+
+### Fixed
+
+- **Text that is not valid UTF-8 broke the page.** A string holding Latin-1 bytes, or bytes that are not text at all, made the page answer 500 for every viewer, because JSON refuses invalid UTF-8. A long one, 1024 bytes or more, was sent with a byte count that did not match what the browser decoded. Strings now leave as valid UTF-8: text in another encoding is transcoded, binary-tagged UTF-8 (`File.binread`, an HTTP body) is read as the text it is, and bytes that are not text become U+FFFD, as a browser shows them.
+
 ## [0.0.14] - 2026-10-02
 
 ### Fixed

@@ -119,6 +119,12 @@ module Ruact
         expect(html).to have_ruact_component("LikeButton").with_props(a_hash_including("postId" => 5))
       end
 
+      it "extracts a prop that would have closed the script, byte for byte" do
+        nasty = "</SCRIPT><img src=x> & \e   😀"
+        wire = %(1:I["/LikeButton.jsx","LikeButton",[]]\n0:["$","$L1",null,{"label":#{JSON.generate(nasty)}}]\n)
+        expect(html_shell(wire)).to have_ruact_component("LikeButton").with_props(a_hash_including("label" => nasty))
+      end
+
       it "ignores an unrelated earlier .push and anchors to __FLIGHT_DATA" do
         wire = render_wire("<LikeButton postId={5} />")
         shell = html_shell(wire)
