@@ -1,0 +1,4 @@
+2:I["ruact:boundary",[],"SuspenseBoundary"]
+3:"$Sreact.suspense"
+0:["$","$3",null,{"fallback":["$","span",null,{"children":"loading"}],"children":["$","$L2",null,{"fallback":["$","span",null,{"children":"loading"}],"children":"$L1"}]}]
+1:E{"digest":"ruact:suspense-timeout","name":"Error","message":"Suspense timeout exceeded","stack":[],"env":"Server"}

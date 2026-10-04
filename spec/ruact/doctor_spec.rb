@@ -78,6 +78,80 @@ RSpec.describe Ruact::Doctor do
     end
   end
 
+  # --- check_flight_client (Story 18-1) ---
+
+  describe "#check_flight_client" do
+    subject(:doctor) { described_class.new }
+
+    let(:vendored) do
+      JSON.parse(File.read(File.join(File.dirname(Ruact.vite_plugin_path),
+                                     "runtime/vendor/react-server-dom-webpack/VERSION.json")))["version"]
+    end
+
+    def install(root, name, version)
+      dir = File.join(root, "node_modules", name)
+      FileUtils.mkdir_p(dir)
+      File.write(File.join(dir, "package.json"), JSON.generate("version" => version))
+    end
+
+    def declare(root, deps)
+      FileUtils.mkdir_p(root)
+      File.write(File.join(root, "package.json"), JSON.generate("dependencies" => deps))
+    end
+
+    it "reports the copy vendored in ruact when the app has none" do
+      expect(doctor.send(:check_flight_client))
+        .to eq([:pass, "Flight client: react-server-dom-webpack #{vendored} vendored in ruact"])
+    end
+
+    it "reports the app's copy when its package.json declares it, which replaces the vendored copy" do
+      declare(tmpdir, "react-server-dom-webpack" => "19.2.8")
+      install(tmpdir, "react-server-dom-webpack", "19.2.8")
+      expect(doctor.send(:check_flight_client))
+        .to eq([:pass, "Flight client: react-server-dom-webpack 19.2.8 from the app (replaces the copy in ruact)"])
+    end
+
+    it "ignores an installed copy the app does not declare, as the Vite plugin does" do
+      declare(tmpdir, {})
+      install(tmpdir, "react-server-dom-webpack", "19.0.0")
+      expect(doctor.send(:check_flight_client).last).to include("vendored in ruact")
+    end
+
+    it "finds a declared copy a workspace hoisted to a parent directory, as Node would" do
+      Rails.root = tmpdir.join("apps", "web")
+      declare(Rails.root, "react-server-dom-webpack" => "19.3.0")
+      install(tmpdir, "react-server-dom-webpack", "19.3.0")
+      expect(doctor.send(:check_flight_client).last).to include("19.3.0 from the app")
+    end
+
+    it "warns when the app's copy is built for another React minor than the app's react" do
+      declare(tmpdir, "react-server-dom-webpack" => "19.3.0", "react" => "19.2.8")
+      install(tmpdir, "react-server-dom-webpack", "19.3.0")
+      install(tmpdir, "react", "19.2.8")
+      status, message, fix = doctor.send(:check_flight_client)
+      expect([status, message]).to eq([:warn, "Flight client: react-server-dom-webpack 19.3.0 from the app " \
+                                              "(replaces the copy in ruact), but the app's react is 19.2.8"])
+      expect(fix).to include("react-server-dom-webpack@19.2.8")
+    end
+
+    it "treats an unreadable app package.json, or an empty entry, as declaring nothing (as the plugin does)",
+       :aggregate_failures do
+      install(tmpdir, "react-server-dom-webpack", "19.3.0")
+      File.write(File.join(tmpdir, "package.json"), "{")
+      expect(doctor.send(:check_flight_client).last).to include("vendored in ruact")
+      declare(tmpdir, "react-server-dom-webpack" => "")
+      expect(doctor.send(:check_flight_client).last).to include("vendored in ruact")
+    end
+
+    it "warns, without failing the run, on an unreadable package.json" do
+      declare(tmpdir, "react-server-dom-webpack" => "19.3.0")
+      dir = File.join(tmpdir, "node_modules", "react-server-dom-webpack")
+      FileUtils.mkdir_p(dir)
+      File.write(File.join(dir, "package.json"), "{")
+      expect(doctor.send(:check_flight_client).first).to eq(:warn)
+    end
+  end
+
   # --- check_vite ---
 
   describe "#check_vite (AC#1, #3)" do

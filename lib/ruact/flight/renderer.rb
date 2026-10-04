@@ -14,17 +14,30 @@ module Ruact
         each(model, bundler_config, streaming: false, **).to_a.join
       end
 
-      def self.each(model, bundler_config, strict_serialization: false, on_as_json_warning: nil,
-                    streaming: true, &)
-        new(model, bundler_config,
-            strict_serialization: strict_serialization,
-            on_as_json_warning: on_as_json_warning).each(streaming: streaming, &)
+      # Keyword options other than +streaming:+ go to {#initialize}
+      # (strict_serialization:, on_as_json_warning:, development:).
+      def self.each(model, bundler_config, streaming: true, **, &)
+        new(model, bundler_config, **).each(streaming: streaming, &)
       end
 
-      def initialize(model, bundler_config, strict_serialization: false, on_as_json_warning: nil)
+      # Whether rows carry the slots React's development client reads (see
+      # Serializer#element_tuple): in Rails' development environment only. The
+      # test environment keeps the production wire, so what a request spec
+      # asserts is what production sends.
+      def self.development_default
+        return false unless defined?(Rails) && Rails.respond_to?(:env)
+
+        Rails.env.development?
+      rescue StandardError
+        false
+      end
+
+      def initialize(model, bundler_config, strict_serialization: false, on_as_json_warning: nil,
+                     development: false)
         @request = Request.new(model, bundler_config,
                                strict_serialization: strict_serialization,
-                               on_as_json_warning: on_as_json_warning)
+                               on_as_json_warning: on_as_json_warning,
+                               development: development)
       end
 
       # Yields Flight rows one at a time.
@@ -50,7 +63,8 @@ module Ruact
           if streaming && deferred[:delay]&.positive?
             timeout = Ruact.config.suspense_timeout
             if timeout&.positive? && deferred[:delay] > timeout
-              yield RowEmitter.error(deferred[:id], JSON.generate("Suspense timeout exceeded"))
+              error = RowEmitter.error_payload("Suspense timeout exceeded", digest: "ruact:suspense-timeout")
+              yield RowEmitter.error(deferred[:id], JSON.generate(error))
               next
             end
             sleep(deferred[:delay])
@@ -58,7 +72,7 @@ module Ruact
 
           # Serialize deferred content — may produce new import rows, and new
           # regular rows (a string of 1024+ bytes becomes a `T` row the deferred
-          # model row references as `$T<id>`).
+          # model row references as `$<id>`).
           import_count_before  = @request.completed_import_chunks.length
           regular_count_before = @request.completed_regular_chunks.length
           deferred_value = serializer.serialize_model(deferred[:element])

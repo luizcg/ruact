@@ -24,10 +24,10 @@ module Ruact
     # `Thread.current`.
     #
     # @example
-    #   wire = "1:I[\"/L.jsx\",\"L\",[\"/L.jsx\"]]\n0:[\"$\",\"$L1\",null,{}]\n"
+    #   wire = "1:I[\"/L.jsx\",[],\"L\"]\n0:[\"$\",\"$L1\",null,{}]\n"
     #   Ruact::Testing::FlightWireParser.parse(wire)
     #   # => [
-    #   #      { id: 1, class: :import, payload: ["/L.jsx", "L", ["/L.jsx"]], raw: "1:I...\n" },
+    #   #      { id: 1, class: :import, payload: ["/L.jsx", [], "L"], raw: "1:I...\n" },
     #   #      { id: 0, class: :model,  payload: ["$", "$L1", nil, {}],       raw: "0:[\"$\"...\n" }
     #   #    ]
     class FlightWireParser

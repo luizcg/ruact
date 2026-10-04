@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { installServerFunctionsHooks } from "./server-functions-codegen.mjs";
 
 /**
@@ -56,6 +57,11 @@ const RESOLVED_REGISTRY_ID = "\0" + REGISTRY_VIRTUAL_ID;
 // `/@id/__x00__virtual:ruact/bootstrap`; prod Vite-manifest key
 // `virtual:ruact/bootstrap`). Mirrors REGISTRY_VIRTUAL_ID exactly.
 export const BOOTSTRAP_VIRTUAL_ID = "virtual:ruact/bootstrap";
+
+// Story 18-1 — React's Flight client, as the runtime imports it. The plugin
+// decides which copy answers (see `flightClientSource`).
+export const FLIGHT_CLIENT_VIRTUAL_ID = "virtual:ruact/flight-client";
+const RESOLVED_FLIGHT_CLIENT_ID = "\0" + FLIGHT_CLIENT_VIRTUAL_ID;
 const RESOLVED_BOOTSTRAP_ID = "\0" + BOOTSTRAP_VIRTUAL_ID;
 
 // The gem-shipped runtime sources the virtual bootstrap pulls in. Resolved
@@ -71,18 +77,30 @@ export default function ruact(options = {}) {
 
   let root;
   let manifest = {};
+  let flightClient; // { source: "app" | "vendored", version, mode }
 
   return installServerFunctionsHooks({
     name: "vite-plugin-ruact",
 
+    // Story 18-1 — the runtime (and React's Flight client vendored with it) is
+    // served from the gem's directory, not the app's. Its `react` and
+    // `react-dom` imports must still be the app's: one React instance.
+    config() {
+      return { resolve: { dedupe: ["react", "react-dom"] } };
+    },
+
     configResolved(config) {
       root = config.root;
+      flightClient = resolveFlightClient(root, config.isProduction ? "production" : "development");
+      // Dev server and build alike, so a build log shows it too.
+      config.logger?.info?.(`[ruact] Flight client: ${describeFlightClient(flightClient)}`);
     },
 
     // Story 10.1b / 14.2 — resolve ruact's virtual module ids.
     resolveId(id) {
       if (id === REGISTRY_VIRTUAL_ID) return RESOLVED_REGISTRY_ID;
       if (id === BOOTSTRAP_VIRTUAL_ID) return RESOLVED_BOOTSTRAP_ID;
+      if (id === FLIGHT_CLIENT_VIRTUAL_ID) return RESOLVED_FLIGHT_CLIENT_ID;
       return null;
     },
 
@@ -96,6 +114,7 @@ export default function ruact(options = {}) {
       // Story 14.2 — serve the gem-shipped bootstrap source, with its relative
       // runtime imports rewritten to absolute fs specifiers (see below).
       if (id === RESOLVED_BOOTSTRAP_ID) return generateBootstrapSource();
+      if (id === RESOLVED_FLIGHT_CLIENT_ID) return flightClientSource(flightClient);
       return null;
     },
 
@@ -303,28 +322,84 @@ export function generateRegistrySource(manifest) {
 // Story 14.2 (FR104) — render the virtual bootstrap source from the gem-shipped
 // `runtime/bootstrap.jsx`. A `load` hook returns module TEXT whose relative
 // imports resolve against the resolved id (`\0virtual:ruact/bootstrap`), which
-// is NOT a filesystem path — so `./flight-client.js` / `./ruact-router.js`
-// would fail. We rewrite those two specifiers to ABSOLUTE fs specifiers into the
+// is NOT a filesystem path — so `./flight-modules.js` / `./ruact-router.js`
+// would fail. We rewrite those specifiers to ABSOLUTE fs specifiers into the
 // gem `runtime/` dir (the same technique `generateRegistrySource` uses via
 // `toImportSpecifier`). The bare `react` / `react-dom/client` specifiers and the
 // `virtual:ruact/registry` id are left untouched — Vite resolves them from the
 // app root (so React comes from the USER's node_modules: one React instance).
 export function generateBootstrapSource(runtimeDir = RUNTIME_DIR) {
   const src = fs.readFileSync(path.join(runtimeDir, "bootstrap.jsx"), "utf8");
-  const abs = (name) => toImportSpecifier(path.join(runtimeDir, name));
-  // Rewrite EVERY `from './<runtime>.js'` import specifier to its absolute fs
-  // path. Matching the quoted `from '...'` form (not the bare filename) avoids
-  // hitting prose mentions of the file in comments, and the global regex
-  // tolerates either quote style. The replacement is supplied as a function so a
-  // `$` in the absolute path is never treated as a replacement pattern.
-  const rewrite = (code, name) => {
-    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return code.replace(
-      new RegExp(`from\\s+(['"])\\./${escaped}\\1`, "g"),
-      () => `from '${abs(name)}'`,
+  // Rewrite EVERY relative `from './<runtime>.js'` and side-effect
+  // `import './<runtime>.js'` specifier to its absolute fs path. Matching the
+  // quoted specifier after `from`/`import` (not the bare filename) leaves prose
+  // mentions of a file in comments alone, and either quote style is accepted.
+  // The replacement is a function so a `$` in the absolute path is never read
+  // as a replacement pattern.
+  return src.replace(
+    /\b(from|import)(\s+)(['"])\.\/([\w.-]+\.js)\3/g,
+    (_match, keyword, space, _quote, name) =>
+      `${keyword}${space}'${toImportSpecifier(path.join(runtimeDir, name))}'`,
+  );
+}
+
+// Story 18-1 (packaging option C, docs/internal/decisions/flight-client-compatibility.md)
+// — which copy of React's Flight client the runtime uses. The app's own
+// `react-server-dom-webpack` when the app declares it in its package.json (an
+// app that needs a different React version installs it); otherwise the copy
+// vendored in the gem, which brings no `webpack` into the app's install. A copy
+// that only resolves — another package's dependency, hoisted — is not chosen:
+// it was not picked for this app's React.
+export function resolveFlightClient(appRoot, mode, runtimeDir = RUNTIME_DIR) {
+  const vendored = () => {
+    const { version } = JSON.parse(
+      fs.readFileSync(path.join(runtimeDir, "vendor", "react-server-dom-webpack", "VERSION.json"), "utf8"),
     );
+    return { source: "vendored", version, mode };
   };
-  return rewrite(rewrite(src, "flight-client.js"), "ruact-router.js");
+  let declared = false;
+  try {
+    const app = JSON.parse(fs.readFileSync(path.join(appRoot, "package.json"), "utf8"));
+    declared = Boolean(app.dependencies?.["react-server-dom-webpack"] ?? app.devDependencies?.["react-server-dom-webpack"]);
+  } catch {
+    return vendored();
+  }
+  if (!declared) return vendored();
+  try {
+    const require = createRequire(path.join(appRoot, "package.json"));
+    const pkg = require("react-server-dom-webpack/package.json");
+    return { source: "app", version: pkg.version, mode };
+  } catch {
+    // Declared but not installed: npm install has not run. The vendored copy
+    // keeps the page working meanwhile.
+    return vendored();
+  }
+}
+
+export function describeFlightClient({ source, version, mode }) {
+  return source === "app"
+    ? `react-server-dom-webpack ${version} from the app (${mode})`
+    : `react-server-dom-webpack ${version} vendored in ruact (${mode})`;
+}
+
+// The `virtual:ruact/flight-client` module. The vendored copy is an ES module
+// whose webpack hooks are module-local. The app's copy is CommonJS reading
+// webpack's globals, which must exist before it evaluates — hence the
+// side-effect import first.
+export function flightClientSource({ source, mode }, runtimeDir = RUNTIME_DIR) {
+  const names = "createFromReadableStream, createFromFetch";
+  if (source === "app") {
+    const globals = toImportSpecifier(path.join(runtimeDir, "flight-webpack-globals.js"));
+    return [
+      `import '${globals}';`,
+      `export { ${names} } from 'react-server-dom-webpack/client.browser';`,
+      "",
+    ].join("\n");
+  }
+  const vendored = toImportSpecifier(
+    path.join(runtimeDir, "vendor", "react-server-dom-webpack", `client.browser.${mode}.js`),
+  );
+  return `export { ${names} } from '${vendored}';\n`;
 }
 
 // A bundler import specifier for an absolute fs path. Vite/Rollup resolve

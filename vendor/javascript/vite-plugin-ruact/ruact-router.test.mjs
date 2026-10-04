@@ -481,6 +481,59 @@ describe("ruact-router — long text in a streamed navigation (Story 17-0d)", ()
   });
 });
 
+// Story 18-1 review round 3 — a connection that drops after the page is on
+// screen is reported once (by the Suspense boundary that is missing its row),
+// not again by the router; revalidate() still rejects.
+describe("ruact-router — a response cut after the page is on screen (Story 18-1)", () => {
+  const FIXTURES = path.join(import.meta.dirname, "../../../spec/fixtures/flight");
+  let dom;
+  let onNavigate;
+  let onError;
+
+  beforeEach(() => {
+    dom = installDom();
+    onNavigate = vi.fn();
+    onError = vi.fn();
+    globalThis.fetch = vi.fn();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    setupRouter({ onNavigate, moduleRegistry: {}, onError });
+  });
+
+  afterEach(() => {
+    teardownRouter();
+    vi.restoreAllMocks();
+  });
+
+  const cutResponse = () => {
+    const head = fs.readFileSync(path.join(FIXTURES, "conformance_suspense_timeout.txt"), "utf8")
+      .replace(/^1:E.*\n?/m, "");
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(head));
+        setTimeout(() => controller.error(new TypeError("Failed to fetch")), 5);
+      },
+    });
+    const headers = new Headers({ "content-type": "text/x-component" });
+    return { ok: true, status: 200, statusText: "200", url: `${ORIGIN}/posts`, headers, body };
+  };
+
+  it("renders the page and leaves the report to the Suspense boundary", async () => {
+    fetch.mockResolvedValue(cutResponse());
+    click(dom.listeners, "/posts");
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("still rejects revalidate()", async () => {
+    fetch.mockResolvedValue(cutResponse());
+    await expect(globalThis.__ruact_revalidate("/posts")).rejects.toThrow(/Failed to fetch/);
+    expect(onError).not.toHaveBeenCalled();
+  });
+});
+
 // Story 17-0c — a navigation decodes dates and big integers like the first load.
 describe("ruact-router — dates and big integers in a navigation (Story 17-0c)", () => {
   const FIXTURES = path.join(import.meta.dirname, "../../../spec/fixtures/flight");

@@ -180,8 +180,11 @@ jobs:
         # install them here. Without this the bundled run fails to resolve react.
         working-directory: vendor/javascript/ruact-server-functions-runtime
         run: npm install --no-audit --no-fund
-      - name: Run vitest (codegen + Ruby↔JS parity + runtime)
+      - name: Run vitest (codegen + Ruby↔JS parity + runtime + Flight conformance, both client builds)
         run: npm test
+      - name: Flight conformance against the lowest supported React (Story 18-1)
+        # The vendored client is React 19.3.0's; the gem supports react ^19.2.8.
+        run: npm run test:react-floor
       - name: Type-check emitted accessors (Story 13.4 / FR99)
         run: npm run typecheck
 

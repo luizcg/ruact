@@ -64,7 +64,9 @@ module Ruact
           @request.increment_pending
           row = RowEmitter.text(id, value)
           @request.completed_regular_chunks << row
-          return "$T#{id.to_s(16)}"
+          # A plain "$<hex>" reference: React reads "$T" as a temporary
+          # reference (Story 18-1).
+          return "$#{id.to_s(16)}"
         end
 
         # Escape leading $ so the client doesn't misinterpret it.
@@ -131,7 +133,16 @@ module Ruact
         key   = element.key
         props = serialize_hash(element.props)
 
-        ["$", resolved_type, key, props]
+        element_tuple(resolved_type, key, props)
+      end
+
+      # In development, React's client reads three more slots — owner, debug
+      # stack, and whether the children were validated. ERB has no `key`, so
+      # without the last one every element with sibling children or rendered in
+      # a loop logs React's "unique key" warning. Production reads four slots.
+      def element_tuple(type, key, props)
+        tuple = ["$", type, key, props]
+        @request.development ? tuple.push(nil, nil, 1) : tuple
       end
 
       # --- Suspense Boundary ---
@@ -143,11 +154,15 @@ module Ruact
 
         fallback_value = element.fallback ? serialize_model(element.fallback) : nil
 
-        # Children is an element tuple using the lazy ref as its type
-        lazy_ref = "$L#{deferred_id.to_s(16)}"
-        children_el = ["$", lazy_ref, nil, {}]
-
-        ["$", "$SS", nil, { "fallback" => fallback_value, "children" => children_el }]
+        # React's shape (Story 18-1): the type is a reference to a
+        # `"$Sreact.suspense"` symbol row, and the deferred content is a lazy
+        # child the client resolves when its row arrives. The lazy child sits
+        # inside the runtime's error boundary: an error row for it (a Suspense
+        # timeout) keeps the fallback on screen and reaches the router's
+        # `onError`, where an unhandled render error would unmount the page.
+        boundary = element_tuple(@request.boundary_ref, nil,
+                                 { "fallback" => fallback_value, "children" => "$L#{deferred_id.to_s(16)}" })
+        element_tuple(@request.suspense_symbol_ref, nil, { "fallback" => fallback_value, "children" => boundary })
       end
 
       # --- Unknown type fallback ---

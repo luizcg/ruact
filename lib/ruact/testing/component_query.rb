@@ -10,7 +10,9 @@ module Ruact
     #
     # A component is TWO wire rows (Story 7.5 / FR108 semantics):
     #
-    #   * an `:import` row — `["<module path>", "<export name>", [chunks…]]` —
+    #   * an `:import` row — `["<module path>", [chunks…], "<export name>"]`
+    #     (React's order since Story 18-1; the older `[path, name, chunks]` is
+    #     still read) —
     #     sourced from the client manifest (`reference_for`); its `:id` is the
     #     integer the model rows reference; AND
     #   * one or more `:model` rows carrying a React element
@@ -27,8 +29,10 @@ module Ruact
       # A client-component element's type is "$L" followed by the import's hex id.
       CLIENT_REF = /\A\$L(?<hex>\h+)\z/
       # A string of 1024+ bytes travels as a `T` row, and the props hold a
-      # `"$T<hex>"` reference to it (Story 17-0d).
-      TEXT_REF = /\A\$T(?<hex>\h+)\z/
+      # `"$<hex>"` reference to it (Story 17-0d; `$T<hex>` before 18-1). A
+      # string that really starts with `$` travels escaped as `$$`, so this
+      # cannot match one.
+      TEXT_REF = /\A\$T?(?<hex>\h+)\z/
 
       # @param wire [String] the raw Flight wire byte string.
       def initialize(wire)
@@ -69,7 +73,10 @@ module Ruact
           next unless payload.is_a?(Array)
 
           module_path = payload[0]
-          export_name = payload[1]
+          # The runtime's own components (`ruact:boundary`) are not the app's.
+          next if module_path.is_a?(String) && module_path.start_with?("ruact:")
+
+          export_name = payload[1].is_a?(Array) ? payload[2] : payload[1]
           acc[row[:id]] = {
             module_path: module_path,
             export_name: export_name,

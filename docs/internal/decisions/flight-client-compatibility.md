@@ -176,18 +176,39 @@ the webpack name.
   `-0` (React writes `"$-0"`, ruact does not). Both belong to 18-1's
   conformance matrix.
 
-## What 18-1 inherits
+## Done in 18-1
 
-1. Ruby: changes 1–5 above, each with a fixture decoded by the pinned official
-   client in CI (dev and prod builds).
-2. Browser: bootstrap reads the inline `__FLIGHT_DATA` as a stream into
-   `createFromReadableStream`; the router uses `createFromFetch` inside a
-   transition and checks the root value for `redirectUrl`; the shim module
-   loads first.
-3. Delete `flight-client.js` and the router's row parser once nothing imports
-   them.
-4. Packaging option C: the vendored client, overridable by an installed
-   `react-server-dom-webpack`.
+1. Ruby: changes 1–5. Change 5 is emitted only in Rails' development
+   environment, so request specs assert the production wire. Each Suspense child
+   is also wrapped in a runtime-registered boundary (`ruact:boundary`): React 19
+   unmounts the root on an uncaught render error, and an error row for a
+   deferred child (a Suspense timeout) used to leave the fallback up. The
+   boundary catches only transport errors (an error row carries a `digest`, a
+   cut or aborted stream), resets when a new response brings a new child, and
+   maps the digest (`ruact:suspense-timeout`) back to the message React's
+   production client drops. A root boundary in the bootstrap shows a render
+   error (an unregistered component) instead of an empty page.
+2. Browser: the bootstrap reads the inline `__FLIGHT_DATA` as a stream and
+   mounts once the root resolves; the router decodes with
+   `createFromReadableStream`, checks the root for `redirectUrl`, never commits
+   an aborted navigation, and settles `revalidate()` when the last row is in.
+3. `runtime/flight-client.js` and the router's row parser are deleted.
+4. Option C: `scripts/vendor-flight-client.mjs` vendors `client.browser` (both
+   builds) as ES modules with module-local webpack hooks; `virtual:ruact/flight-client`
+   answers with that copy, or with the app's `react-server-dom-webpack` (behind
+   `runtime/flight-webpack-globals.js`) when the app's `package.json` declares it
+   — a copy that only resolves (hoisted for another package) is ignored.
+5. Conformance: `flight-conformance.test.mjs` decodes the serializer's fixtures
+   with both builds, and against React 19.2.8 in CI. The nav-islands browser
+   suite passes, and the production build was checked by hand.
+
+Measured on the nav-islands example: the bundle went from 74.35 kB to 80.82 kB
+gzipped (+6.47 kB, more than the spike's +3.1 kB: the vendored client keeps every
+export, `encodeReply` included, and the boundary is new). The `.gem` went from
+373 KB to 427 KB.
+
+Still open: lazy component loading (the registry stays eager), and a browser
+job in production mode (in `deferred-work.md`).
 
 ## How to reproduce
 

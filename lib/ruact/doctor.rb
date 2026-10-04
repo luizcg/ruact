@@ -8,8 +8,8 @@ module Ruact
   # Runs a suite of installation health checks and prints ✓/✗ per check.
   # Extracted from the ruact:doctor Rake task for direct testability (FR27).
   class Doctor # rubocop:disable Metrics/ClassLength
-    CHECKS = %i[manifest vite controller layout head_assets streaming legacy_constant serialize_only
-                flight_middleware].freeze
+    CHECKS = %i[manifest vite flight_client controller layout head_assets streaming legacy_constant
+                serialize_only flight_middleware].freeze
     # Built via Array#join so the gem-CI `name-propagation` guard does not
     # match these literals against itself (Story 5.1 review F4 — the doctor
     # file participates in the guard with no exclusion).
@@ -42,8 +42,8 @@ module Ruact
       /\b#{%w[from flight].join('_')}\b/,
       /\b#{%w[parse flight].join('_')}\b/,
       /\b#{%w[decode flight].join('_')}\b/,
-      # React Flight reader entry points invoked from Ruby (NOT createFromFlightPayload,
-      # which is the client/browser deserializing the server's own trusted payload)
+      # React Flight reader entry points invoked from Ruby (NOT the browser
+      # runtime's own calls, which read the server's own trusted payload)
       /\b#{%w[create From].join}(?:NodeStream|ReadableStream|Fetch)\b/
     ].freeze
     DESERIALIZE_SIGNAL_RE = Regexp.union(DESERIALIZE_SIGNALS)
@@ -161,6 +161,66 @@ module Ruact
     rescue Errno::ECONNREFUSED, Errno::EHOSTUNREACH
       [:fail, "Vite not accessible at localhost:5173 — run npm run dev",
        "Run npm run dev (or bin/dev) to start the Vite dev server."]
+    end
+
+    # Story 18-1 — which copy of React's Flight client the browser runtime
+    # uses, decided as the Vite plugin decides it (`resolveFlightClient`): the
+    # app's `react-server-dom-webpack` when the app's package.json declares it
+    # and Node finds it from the app (a workspace may hoist it to a parent
+    # directory), otherwise the one vendored in the gem. The plugin prints the
+    # same line when Vite starts. The client is built for one React minor; the
+    # app's copy is checked against the app's `react`.
+    def check_flight_client
+      vendored = [:pass, "Flight client: react-server-dom-webpack #{vendored_flight_client_version} vendored in ruact"]
+      return vendored unless app_declares?("react-server-dom-webpack")
+
+      app_package = node_package_json("react-server-dom-webpack")
+      return vendored unless app_package
+
+      version = JSON.parse(app_package.read)["version"]
+      react_package = node_package_json("react")
+      react = react_package && JSON.parse(react_package.read)["version"]
+      message = "Flight client: react-server-dom-webpack #{version} from the app (replaces the copy in ruact)"
+      return [:pass, message] if react.nil? || minor(react) == minor(version)
+
+      [:warn, "#{message}, but the app's react is #{react}",
+       "Install the react-server-dom-webpack matching your react (npm install react-server-dom-webpack@#{react}), " \
+       "or uninstall it to use the copy vendored in ruact."]
+    rescue JSON::ParserError => e
+      [:warn, "Flight client: a package.json under node_modules is not valid JSON (#{e.message})",
+       "Reinstall it (npm install), or remove react-server-dom-webpack to use the copy vendored in ruact."]
+    end
+
+    # As the Vite plugin reads it: a non-empty entry in dependencies or
+    # devDependencies; an unreadable package.json declares nothing.
+    def app_declares?(name)
+      manifest = Rails.root.join("package.json")
+      return false unless manifest.exist?
+
+      json = JSON.parse(manifest.read)
+      [json["dependencies"], json["devDependencies"]].any? { |deps| deps.is_a?(Hash) && !deps[name].to_s.empty? }
+    rescue JSON::ParserError
+      false
+    end
+
+    # The first `node_modules/<name>/package.json` from Rails.root upward, the
+    # way Node resolves a package.
+    def node_package_json(name)
+      Pathname(Rails.root).expand_path.ascend do |dir|
+        candidate = dir.join("node_modules", name, "package.json")
+        return candidate if candidate.exist?
+      end
+      nil
+    end
+
+    def minor(version)
+      version.to_s.split(".").first(2).join(".")
+    end
+
+    def vendored_flight_client_version
+      path = File.join(File.dirname(Ruact.vite_plugin_path), "runtime", "vendor", "react-server-dom-webpack",
+                       "VERSION.json")
+      JSON.parse(File.read(path))["version"]
     end
 
     # Story 17.0g (FR116) — reports the ADOPTION MODE instead of demanding one.

@@ -10,12 +10,12 @@ The React Flight wire protocol encodes a component tree as a series of newline-t
 
 ```
 <hex-id>:<payload>\n         # model row — a JSON value at position <hex-id>
-<hex-id>:I<json-array>\n     # import row — registers a client module: [moduleId, exportName, chunks]
+<hex-id>:I<json-array>\n     # import row — registers a client module: [moduleId, chunks, exportName] (React's order; chunks is always [], the runtime registry is eager)
 <hex-id>:E<json-error>\n     # error row — encodes a serialized error object
 <hex-id>:T<hex-len>,<text>    # text row — a string of 1024+ bytes, framed by its BYTE length, NO newline
 ```
 
-A text row is referenced from a model row as `"$T<hex-id>"`. It is the one row a newline-splitting reader cannot handle: the text may contain newlines and is not followed by one.
+A text row is referenced from a model row as `"$<hex-id>"`. It is the one row a newline-splitting reader cannot handle: the text may contain newlines and is not followed by one.
 
 - **Row `0`** is always the root — the main React element tree returned to the client.
 - **Import rows (`I` rows)** always appear *before* the model rows that reference them.
@@ -32,7 +32,7 @@ Ruact::Flight::Renderer.render(ref, manifest)
 
 Expected output (`client_reference.txt`):
 ```
-1:I["/LikeButton.jsx","LikeButton",["/LikeButton.jsx"]]
+1:I["/LikeButton.jsx",[],"LikeButton"]
 0:["$","$L1",null,{}]
 ```
 
@@ -64,11 +64,11 @@ expect(serialized).to match_flight_fixture("string_dollar_escape")
 
 **`match_flight_structure` — parsed-semantics assertion:**
 ```ruby
-wire = %(1:I["/LikeButton.jsx","LikeButton",["/LikeButton.jsx"]]\n) +
+wire = %(1:I["/LikeButton.jsx",[],"LikeButton"]\n) +
        %(0:["$","$L1",null,{"postId":42}]\n)
 
 expect(wire).to match_flight_structure([
-  { id: 1, class: :import, payload: ["/LikeButton.jsx", "LikeButton", ["/LikeButton.jsx"]] },
+  { id: 1, class: :import, payload: ["/LikeButton.jsx", [], "LikeButton"] },
   { id: 0, class: :model,  payload: ["$", "$L1", nil, { "postId" => 42 }] }
 ])
 # Passes even if `JSON.generate` re-orders props later — what matters is that postId=42 round-trips.
@@ -125,10 +125,12 @@ If `match_flight_fixture` fails after touching `Ruact::Flight::Serializer`, that
 | `serializable_object.txt` | An object including `Ruact::Serializable` and declaring `ruact_props` serializes only the declared props |
 | `text_framing.txt` | Strings around the 1024-byte threshold (1023/1024/1025), multibyte UTF-8, embedded newlines, a leading `$` and markup, as `T` rows; the JS client decodes it to `text_framing_expected.json`. Written by `text_framing_fixtures_spec.rb` (`RUACT_WRITE_FIXTURES=1`) |
 | `text_framing_suspense.txt` | A long multibyte string inside deferred Suspense content: its `T` row is emitted before the deferred row that references it |
-| `text_framing_expected.json` | The values `text_framing.txt` must decode to (read by `flight-client.test.mjs`) |
+| `text_framing_expected.json` | The values `text_framing.txt` must decode to (read by `flight-conformance.test.mjs`) |
 | `scalar_round_trip.txt` | `Time` (UTC and zoned), `DateTime`, integers beyond ±(2^53 − 1), the safe bounds, a literal `"$D…"` string and nested ones; the JS client rebuilds `Date`/`BigInt` as listed in `scalar_round_trip_expected.json`. Written by `scalar_fixtures_spec.rb` (`RUACT_WRITE_FIXTURES=1`) |
 | `scalar_round_trip_expected.json` | What `scalar_round_trip.txt` must decode to; `{ "date": ISO }` and `{ "bigint": "…" }` tag the types JSON cannot hold |
 | `redirect_row.txt` | A redirect instruction serializes to a JSON object with `redirectUrl` and `redirectType` keys in row 0 |
+| `conformance_tree.txt` / `conformance_tree_dev.txt` | One ERB page — sibling children, an ERB loop of client components, a one-element data array, a Suspense boundary — on the production wire and on the development wire (elements carry React's validated flag). React's Flight client decodes both in `flight-conformance.test.mjs`. Written by `conformance_fixtures_spec.rb` (`RUACT_WRITE_FIXTURES=1`) |
+| `conformance_suspense_timeout.txt` | A Suspense child past `suspense_timeout`: the boundary import, the `"$Sreact.suspense"` symbol row, and an `E` row holding the error object React reads |
 
 ---
 

@@ -93,8 +93,12 @@ module Ruact
           it "does NOT emit a plain model row for the timed-out chunk" do
             suspense = SuspenseElement.new(fallback: fallback, children: inner, delay: 5.0)
             rows = described_class.each(suspense, empty_manifest, streaming: true).to_a
-            # Only root (0:) and the error row (1:E...) should exist — no bare model for deferred id
-            unexpected = rows.reject { |r| r.start_with?("0:") || r.include?(":E") }
+            # Only root (0:), the Suspense symbol and boundary import rows, and
+            # the error row (1:E...) should exist — no bare model for the deferred id.
+            unexpected = rows.reject do |r|
+              r.start_with?("0:") || r.include?(":E") || r.include?('"$Sreact.suspense"') ||
+                r.include?(":I[\"ruact:boundary\"")
+            end
             expect(unexpected).to be_empty
           end
         end
@@ -126,7 +130,7 @@ module Ruact
           expect(text).not_to be_nil
           expect(text[:payload].force_encoding("UTF-8")).to eq(long)
 
-          referencing = rows.index { |row| row[:class] == :model && row[:raw].include?("$T#{text[:id].to_s(16)}") }
+          referencing = rows.index { |row| row[:class] == :model && row[:raw].include?("\"$#{text[:id].to_s(16)}\"") }
           expect(referencing).not_to be_nil
           expect(rows.index(text)).to be < referencing
         end
