@@ -2,36 +2,34 @@
  * RSC client-side router.
  *
  * Intercepts same-origin <a> clicks and <form> submits, fetches the Flight
- * payload for the new URL via ReadableStream (incremental), and:
+ * payload for the new URL, decodes it with React's Flight client (Story 18-1),
+ * and:
  *   1. Calls onNavigate(tree) as soon as row 0 arrives (shows Suspense fallback)
- *   2. Resolves deferred Suspense rows as they stream in (swaps in actual content)
+ *   2. Lets the client resolve deferred Suspense rows as they stream in
  *
  * Also handles popstate for browser back/forward.
  */
 
-import {
-  createRowParser,
-  buildTreeFromRows,
-  buildTree,
-  resolvePendingChunk,
-  clearPendingChunks,
-} from "./flight-client.js";
+import { createFromReadableStream } from "virtual:ruact/flight-client";
+import { setBoundaryErrorHandler } from "./suspense-boundary.js";
 
 let _onNavigate     = null;
-let _moduleRegistry = null;
 let _onError        = null;
 let _currentAbort   = null;
 
 /**
  * @param {object}   opts
  * @param {function} opts.onNavigate     - called with the new React element tree
- * @param {object}   opts.moduleRegistry - passed through to flight-client
- * @param {function} [opts.onError]      - called with an Error when navigation fails
+ * @param {function} [opts.onError]      - called with an Error when navigation fails,
+ *                                         or when a Suspense child's row is an error
  */
-export function setupRouter({ onNavigate, moduleRegistry, onError = null }) {
+export function setupRouter({ onNavigate, onError = null }) {
   _onNavigate     = onNavigate;
-  _moduleRegistry = moduleRegistry;
   _onError        = onError;
+  setBoundaryErrorHandler((error) => {
+    console.error("[ruact] Server error:", error);
+    _onError?.(error);
+  });
 
   // Bubble phase, on the document: the app's own handlers (React's, which
   // listen on the root container, and any other) run first, so an
@@ -65,9 +63,9 @@ export function teardownRouter() {
   document.removeEventListener("submit", handleSubmit);
   window.removeEventListener("popstate", handlePopstate);
   _onNavigate     = null;
-  _moduleRegistry = null;
   _onError        = null;
   _currentAbort   = null;
+  setBoundaryErrorHandler(null);
   // Story 8.2 — tear down the revalidate handle so a subsequent
   // setupRouter()-less code path (e.g., SSR) fails LOUDLY at the first
   // revalidate() call instead of using a stale handle.
@@ -376,8 +374,6 @@ function _hasField(form, name) {
 }
 
 async function _submitForm(form, submitter = null) {
-  clearPendingChunks();
-
   // R11: resolve the effective action and method from the submitter's
   // overrides before falling back to the form's attributes. The
   // previous implementation always read `form.action` and the form's
@@ -428,7 +424,9 @@ async function _submitForm(form, submitter = null) {
       else _nativeSubmit(form, submitter);
       return;
     }
-    await _processFlightResponse(response, { push: true, targetUrl: action, method: htmlMethod });
+    await _processFlightResponse(response, {
+      push: true, targetUrl: action, method: htmlMethod, signal: controller.signal,
+    });
   } catch (err) {
     if (err.name === "AbortError") return;
     console.error("[ruact-router] Form submission error:", err);
@@ -460,9 +458,6 @@ function handlePopstate() {
  * branch on success vs. failure of a programmatic refetch.
  */
 async function navigate(url, { push = true, scroll = true, throwOnError = false, replace = false } = {}) {
-  // Clear stale lazy refs from any previous streaming navigation
-  clearPendingChunks();
-
   // Abort any in-flight fetch so we don't apply a stale response
   _currentAbort?.abort();
   const controller = (_currentAbort = new AbortController());
@@ -487,6 +482,7 @@ async function navigate(url, { push = true, scroll = true, throwOnError = false,
       scroll,
       throwOnError,
       replace,
+      signal: controller.signal,
     });
   } catch (err) {
     if (err.name === "AbortError") {
@@ -504,7 +500,7 @@ async function navigate(url, { push = true, scroll = true, throwOnError = false,
 // ---------------------------------------------------------------------------
 
 async function _processFlightResponse(response, {
-  push, targetUrl, scroll = true, throwOnError = false, replace = false, method = "GET",
+  push, targetUrl, scroll = true, throwOnError = false, replace = false, method = "GET", signal = null,
 }) {
   // Story 17.0f — a response that is not Flight escaped the server's boundary
   // classifier. Feeding it to the line parser was the old dead click: every HTML
@@ -565,68 +561,38 @@ async function _processFlightResponse(response, {
     ? (() => { const u = new URL(response.url); return u.pathname + u.search + u.hash; })()
     : targetUrl;
 
-  const rows           = new Map();
-  let   initialTreeSet = false;
-  let   redirected     = false;
+  // Two readers of one body: React's client, and a drain that settles when the
+  // last row is in — `revalidate()` resolves then, as it always has.
+  const [forClient, forEnd] = response.body.tee();
+  const streamEnd = _drain(forEnd);
+  streamEnd.catch(() => {}); // awaited below; an abort must not be "unhandled" first
 
-  const processRow = (parsed) => {
-    rows.set(parsed.id, parsed.row);
-    // A text row is data a model row points at; nothing renders on its own.
-    if (parsed.row.kind === "text") return;
+  // Resolves when row 0 arrives; deferred Suspense rows keep streaming into it.
+  // A stream that ends without a root rejects ("Connection closed.").
+  const root = await createFromReadableStream(forClient);
 
-    if (!initialTreeSet && rows.has(0)) {
-      const rootRow = rows.get(0);
-      // Flight redirect instruction — delegate to navigate() and bail out.
-      if (rootRow.kind === "model" && rootRow.value != null && rootRow.value.redirectUrl) {
-        // Validate redirect is same-origin before following
-        try {
-          const rurl = new URL(rootRow.value.redirectUrl, location.href);
-          if (rurl.origin !== location.origin) return;
-        } catch { return; }
-        redirected = true;
-        navigate(rootRow.value.redirectUrl, { push: rootRow.value.redirectType !== "replace" });
-        return;
-      }
-      // Normal case: build tree and render immediately.
-      const tree = buildTreeFromRows(rows, _moduleRegistry);
-      if (pushEntry) history.pushState(null, "", finalPath);
-      _onNavigate(tree);
-      if (scroll) window.scrollTo(0, 0);
-      initialTreeSet = true;
-      return;
-    }
+  // A newer navigation started while this one was in flight: it owns the page.
+  if (signal?.aborted) return;
 
-    if (initialTreeSet && parsed.id !== 0) {
-      if (parsed.row.kind === "error") {
-        // Deferred error row — propagate via onError callback
-        _onError?.(new Error(`[ruact] Server error: ${parsed.row.message}`));
-        return;
-      }
-      if (parsed.row.kind === "model") {
-        // Deferred content row — resolve pending lazy chunk.
-        const element = buildTree(parsed.row.value, rows, _moduleRegistry);
-        resolvePendingChunk(parsed.id, element);
-      }
-    }
-  };
-
-  // The same byte parser the initial load uses: text rows are framed by byte
-  // length, so the stream is never decoded line by line.
-  const parser = createRowParser(processRow);
-  const reader = response.body.getReader();
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    parser.push(value);
+  // Flight redirect instruction — delegate to navigate() and bail out.
+  if (root != null && typeof root === "object" && root.redirectUrl) {
+    // Validate redirect is same-origin before following
+    try {
+      const rurl = new URL(root.redirectUrl, location.href);
+      if (rurl.origin !== location.origin) return;
+    } catch { return; }
+    navigate(root.redirectUrl, { push: root.redirectType !== "replace" });
+    return;
   }
-  parser.end();
 
-  // Fallback: if row 0 never triggered (shouldn't happen with valid server)
-  if (!initialTreeSet && !redirected && rows.has(0)) {
-    const tree = buildTreeFromRows(rows, _moduleRegistry);
-    if (pushEntry) history.pushState(null, "", finalPath);
-    _onNavigate(tree);
-    if (scroll) window.scrollTo(0, 0);
-  }
+  if (pushEntry) history.pushState(null, "", finalPath);
+  _onNavigate(root);
+  if (scroll) window.scrollTo(0, 0);
+
+  await streamEnd;
+}
+
+async function _drain(stream) {
+  const reader = stream.getReader();
+  while (!(await reader.read()).done) { /* the client has its own copy */ }
 }

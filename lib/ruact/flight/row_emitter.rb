@@ -22,6 +22,12 @@ module Ruact
         "#{id.to_s(16)}:E#{error_json}\n"
       end
 
+      # The error object React's Flight client reads from an E row. Its
+      # development build reads `stack` and `env`; a bare string crashes it.
+      def self.error_payload(message)
+        { "digest" => "", "name" => "Error", "message" => message, "stack" => [], "env" => "Server" }
+      end
+
       # A large text row (binary framing, no trailing newline)
       def self.text(id, text)
         byte_length = text.bytesize

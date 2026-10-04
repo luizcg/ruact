@@ -38,7 +38,7 @@ module Ruact
     end
 
     def like_button_import
-      { id: 1, class: :import, payload: [like_button_chunk, "LikeButton", [like_button_chunk]] }
+      { id: 1, class: :import, payload: [like_button_chunk, [], "LikeButton"] }
     end
 
     # Helper for the ERB-input path of #render. All describe blocks below — except
@@ -486,7 +486,7 @@ module Ruact
           output = render_erb('<CounterButton initialCount={0} label={"Votes"} disabled={false} />')
           counter_module = "/assets/CounterButton-abc.js"
           expected = [
-            { id: 1, class: :import, payload: [counter_module, "CounterButton", [counter_module]] },
+            { id: 1, class: :import, payload: [counter_module, [], "CounterButton"] },
             { id: 0, class: :model,
               payload: ["$", "$L1", nil, { "initialCount" => 0, "label" => "Votes", "disabled" => false }] }
           ]
@@ -741,7 +741,7 @@ module Ruact
         # intent (placeholder-token resolution + props serialization).
         expect(output).to match_flight_structure([
                                                    { id: 1, class: :import,
-                                                     payload: ["/NavBar.jsx", "NavBar", ["/NavBar.jsx"]] },
+                                                     payload: ["/NavBar.jsx", [], "NavBar"] },
                                                    { id: 0, class: :model,
                                                      payload: ["$", "div", nil, {
                                                        "children" => ["$", "$L1", nil, { "currentUser" => 42 }]

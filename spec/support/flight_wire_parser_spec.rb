@@ -21,13 +21,13 @@ module Ruact
         end
 
         it "parses a single import row and decodes the hex id" do
-          rows = described_class.parse(%(a:I["/L.jsx","L",["/L.jsx"]]\n))
+          rows = described_class.parse(%(a:I["/L.jsx",[],"L"]\n))
 
           expect(rows.length).to eq(1)
           expect(rows.first).to include(
             id: 10,
             class: :import,
-            payload: ["/L.jsx", "L", ["/L.jsx"]]
+            payload: ["/L.jsx", [], "L"]
           )
         end
 
@@ -63,7 +63,7 @@ module Ruact
         end
 
         it "parses a mixed-row sequence preserving wire order" do
-          wire = %(1:I["/L.jsx","L",["/L.jsx"]]\n0:["$","$L1",null,{}]\n)
+          wire = %(1:I["/L.jsx",[],"L"]\n0:["$","$L1",null,{}]\n)
 
           rows = described_class.parse(wire)
 

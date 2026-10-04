@@ -4,9 +4,23 @@
 // src/ + dist/ layout. Until then, run tests against the in-tree `.mjs` source
 // directly.
 
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
+// Story 18-1 — the runtime imports React's Flight client through a virtual id
+// the plugin answers; under vitest it is the vendored copy. FLIGHT_CLIENT_MODE
+// picks the build (the conformance suite runs both).
+const flightClient = fileURLToPath(
+  new URL(
+    `./runtime/vendor/react-server-dom-webpack/client.browser.${process.env.FLIGHT_CLIENT_MODE || "development"}.js`,
+    import.meta.url,
+  ),
+);
+
 export default defineConfig({
+  resolve: {
+    alias: { "virtual:ruact/flight-client": flightClient },
+  },
   test: {
     environment: "node",
     // The runtime's `index.test.mjs` is node-environment + dependency-free, so

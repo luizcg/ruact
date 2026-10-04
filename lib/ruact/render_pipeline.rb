@@ -15,10 +15,15 @@ module Ruact
   class RenderPipeline
     VALID_MODES = %i[string stream].freeze
 
-    def initialize(manifest, controller_path: nil, logger: nil)
+    # @param development [Boolean] emit the element slots React's development
+    #   client reads (see Flight::Serializer#element_tuple). The controller
+    #   passes {Flight::Renderer.development_default}; everything else gets the
+    #   production wire.
+    def initialize(manifest, controller_path: nil, logger: nil, development: false)
       @manifest         = manifest
       @controller_path  = controller_path
       @logger           = logger
+      @development      = development
     end
 
     # Render a server component tree to Flight wire format.
@@ -194,7 +199,8 @@ module Ruact
         Flight::Renderer.each(root_element, @manifest,
                               strict_serialization: Ruact.config.strict_serialization,
                               on_as_json_warning: as_json_warning_callback,
-                              streaming: streaming) { |row| y << row }
+                              streaming: streaming,
+                              development: @development) { |row| y << row }
       end
     end
 
@@ -215,7 +221,8 @@ module Ruact
         Flight::Renderer.each(root_element, @manifest,
                               strict_serialization: strict,
                               on_as_json_warning: warning_cb,
-                              streaming: streaming) { |row| y << row }
+                              streaming: streaming,
+                              development: @development) { |row| y << row }
       end
     end
 

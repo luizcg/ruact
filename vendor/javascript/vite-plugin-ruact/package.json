@@ -5,11 +5,15 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "vitest run",
+    "test": "vitest run && FLIGHT_CLIENT_MODE=production vitest run flight-conformance",
+    "test:react-floor": "npm install --no-save --no-audit --no-fund react@19.2.8 react-dom@19.2.8 && vitest run flight-conformance && FLIGHT_CLIENT_MODE=production vitest run flight-conformance",
+    "vendor:flight-client": "node scripts/vendor-flight-client.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.scaffold.json && tsc --noEmit -p tsconfig.scaffold-agnostic.json"
   },
   "devDependencies": {
+    "jsdom": "^25.0.1",
     "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"
   },

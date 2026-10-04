@@ -25,7 +25,7 @@ RSpec.describe "Flight wire matchers" do
 
   describe "match_flight_structure" do
     let(:simple_wire) { %(0:{"className":"box"}\n) }
-    let(:two_row_wire) { %(1:I["/L.jsx","L",["/L.jsx"]]\n0:["$","$L1",null,{}]\n) }
+    let(:two_row_wire) { %(1:I["/L.jsx",[],"L"]\n0:["$","$L1",null,{}]\n) }
 
     it "passes when the actual wire matches a single-row expected structure" do
       expect(simple_wire).to match_flight_structure([
@@ -35,7 +35,7 @@ RSpec.describe "Flight wire matchers" do
 
     it "passes for a two-row mixed import + model sequence" do
       expect(two_row_wire).to match_flight_structure([
-                                                       { id: 1, class: :import, payload: ["/L.jsx", "L", ["/L.jsx"]] },
+                                                       { id: 1, class: :import, payload: ["/L.jsx", [], "L"] },
                                                        { id: 0, class: :model, payload: ["$", "$L1", nil, {}] }
                                                      ])
     end
@@ -83,7 +83,7 @@ RSpec.describe "Flight wire matchers" do
       err = capture_failure do
         expect(two_row_wire).to match_flight_structure([
                                                          { id: 1, class: :import,
-                                                           payload: ["/L.jsx", "L", ["/L.jsx"]] }
+                                                           payload: ["/L.jsx", [], "L"] }
                                                        ])
       end
 
@@ -110,11 +110,11 @@ RSpec.describe "Flight wire matchers" do
     # still consider this a match because import-row ordering is not
     # protocol-significant within the import class.
     it "treats import rows as an unordered set (AC1)" do
-      wire = %(1:I["/A.jsx","A",["/A.jsx"]]\n2:I["/B.jsx","B",["/B.jsx"]]\n0:["$","$L1",null,{}]\n)
+      wire = %(1:I["/A.jsx",[],"A"]\n2:I["/B.jsx",[],"B"]\n0:["$","$L1",null,{}]\n)
 
       expect(wire).to match_flight_structure([
-                                               { id: 2, class: :import, payload: ["/B.jsx", "B", ["/B.jsx"]] },
-                                               { id: 1, class: :import, payload: ["/A.jsx", "A", ["/A.jsx"]] },
+                                               { id: 2, class: :import, payload: ["/B.jsx", [], "B"] },
+                                               { id: 1, class: :import, payload: ["/A.jsx", [], "A"] },
                                                { id: 0, class: :model, payload: ["$", "$L1", nil, {}] }
                                              ])
     end
@@ -139,11 +139,11 @@ RSpec.describe "Flight wire matchers" do
     # which rows passed (AC3 — "Other rows that match are summarized as
     # `Row N (<class>): ✓`").
     it "shows matching-row checkmarks alongside multi-row diffs" do
-      wire = %(1:I["/A.jsx","A",["/A.jsx"]]\n0:["$X","div",null,{}]\n)
+      wire = %(1:I["/A.jsx",[],"A"]\n0:["$X","div",null,{}]\n)
 
       err = capture_failure do
         expect(wire).to match_flight_structure([
-                                                 { id: 1, class: :import, payload: ["/A.jsx", "A", ["/A.jsx"]] },
+                                                 { id: 1, class: :import, payload: ["/A.jsx", [], "A"] },
                                                  { id: 0, class: :model, payload: ["$", "div", nil, {}] },
                                                  { id: 2, class: :model, payload: ["$", "span", nil, {}] }
                                                ])
@@ -158,7 +158,7 @@ RSpec.describe "Flight wire matchers" do
 
   describe "include_flight_row" do
     let(:wire_with_post_id) do
-      %(1:I["/L.jsx","L",["/L.jsx"]]\n0:["$","$L1",null,{"postId":42}]\n)
+      %(1:I["/L.jsx",[],"L"]\n0:["$","$L1",null,{"postId":42}]\n)
     end
 
     it "matches when at least one row satisfies a hash_including payload predicate" do

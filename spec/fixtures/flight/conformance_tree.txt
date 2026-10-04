@@ -1,0 +1,5 @@
+1:I["/LikeButton.jsx",[],"LikeButton"]
+3:I["ruact:boundary",[],"SuspenseBoundary"]
+4:"$Sreact.suspense"
+0:["$","main",null,{"children":[["$","h1",null,{"children":"Posts"}],["$","article",null,{"children":["$","$L1",null,{"likes":1,"tags":["only"]}]}],["$","article",null,{"children":["$","$L1",null,{"likes":2,"tags":["only"]}]}],["$","article",null,{"children":["$","$L1",null,{"likes":3,"tags":["only"]}]}],["$","$4",null,{"fallback":["$","p",null,{"children":"loading"}],"children":["$","$L3",null,{"fallback":["$","p",null,{"children":"loading"}],"children":"$L2"}]}],["$","p",null,{"children":"after"}]]}]
+2:["$","p",null,{"children":"late"}]

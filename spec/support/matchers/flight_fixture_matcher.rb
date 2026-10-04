@@ -60,7 +60,7 @@ end
 #
 # @example
 #   expect(wire).to match_flight_structure([
-#     { id: 1, class: :import, payload: ["/L.jsx", "L", ["/L.jsx"]] },
+#     { id: 1, class: :import, payload: ["/L.jsx", [], "L"] },
 #     { id: 0, class: :model,  payload: ["$", "$L1", nil, {}] }
 #   ])
 RSpec::Matchers.define :match_flight_structure do |expected|

@@ -168,7 +168,9 @@ module Ruact
       # its headers on the first row.
       self.status = status if status
 
-      pipeline  = RenderPipeline.new(ruact_manifest, controller_path: controller_path, logger: logger)
+      pipeline  = RenderPipeline.new(ruact_manifest,
+                                     controller_path: controller_path, logger: logger,
+                                     development: Flight::Renderer.development_default)
       streaming = ruact_request? && self.class.ancestors.include?(ActionController::Live)
 
       # Allocate a per-render context and expose it to the view via a normal

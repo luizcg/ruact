@@ -39,12 +39,16 @@ module Ruact
   # no validation" (fail open).
   class ClientManifest
     # Used by Flight::Serializer to produce I rows.
-    # Returns the metadata array the client expects: [id, name, chunks]
+    # Returns the metadata array React's Flight client reads: [id, chunks, name]
+    # (Story 18-1). +chunks+ is always empty: the browser runtime registers
+    # every client component eagerly (`virtual:ruact/registry`), so there is
+    # nothing to load — and React reads +chunks+ as `[chunkId, filename]` pairs,
+    # which the manifest's one-URL list is not.
     def resolve(module_id, _export_name)
       entry = by_module_id(module_id)
       raise "ClientManifest: no entry for module_id=#{module_id.inspect}" unless entry
 
-      [entry["id"], entry["name"], entry["chunks"]]
+      [entry["id"], [], entry["name"]]
     end
 
     # Returns true if +name+ is a top-level key in the manifest data.

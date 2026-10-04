@@ -78,6 +78,37 @@ RSpec.describe Ruact::Doctor do
     end
   end
 
+  # --- check_flight_client (Story 18-1) ---
+
+  describe "#check_flight_client" do
+    subject(:doctor) { described_class.new }
+
+    let(:vendored) do
+      JSON.parse(File.read(File.join(File.dirname(Ruact.vite_plugin_path),
+                                     "runtime/vendor/react-server-dom-webpack/VERSION.json")))["version"]
+    end
+
+    it "reports the copy vendored in ruact when the app has none" do
+      expect(doctor.send(:check_flight_client))
+        .to eq([:pass, "Flight client: react-server-dom-webpack #{vendored} vendored in ruact"])
+    end
+
+    it "reports the app's react-server-dom-webpack when installed, which replaces the vendored copy" do
+      dir = File.join(tmpdir, "node_modules", "react-server-dom-webpack")
+      FileUtils.mkdir_p(dir)
+      File.write(File.join(dir, "package.json"), JSON.generate("version" => "19.2.8"))
+      expect(doctor.send(:check_flight_client))
+        .to eq([:pass, "Flight client: react-server-dom-webpack 19.2.8 from the app (replaces the copy in ruact)"])
+    end
+
+    it "warns, without failing the run, on an unreadable package.json" do
+      dir = File.join(tmpdir, "node_modules", "react-server-dom-webpack")
+      FileUtils.mkdir_p(dir)
+      File.write(File.join(dir, "package.json"), "{")
+      expect(doctor.send(:check_flight_client).first).to eq(:warn)
+    end
+  end
+
   # --- check_vite ---
 
   describe "#check_vite (AC#1, #3)" do

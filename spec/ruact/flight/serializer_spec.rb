@@ -497,8 +497,8 @@ module Ruact
         # arriving collapsed can only have been collapsed by the client.
         #
         # The CLIENT half asserts the same bytes rebuild as a one-element
-        # array: vendor/javascript/vite-plugin-ruact/flight-client.test.mjs.
-        # Both sides read this one file; neither transcribes it.
+        # array: vendor/javascript/vite-plugin-ruact/flight-conformance.test.mjs
+        # (React's Flight client since Story 18-1, reading conformance_tree*.txt).
         let(:post_list_manifest) do
           ClientManifest.from_hash({
                                      "PostList" => {
@@ -533,7 +533,7 @@ RSpec.describe "Ruact::Flight::Serializer string encoding" do
   def decoded(value)
     rows = Ruact::Testing::FlightWireParser.parse(render(value))
     text = rows.find { |row| row[:class] == :model && row[:id].zero? }[:payload]["text"]
-    ref = text.to_s[/\A\$T(\h+)\z/, 1]
+    ref = text.to_s[/\A\$(\h+)\z/, 1]
     ref ? rows.find { |row| row[:id] == ref.to_i(16) }[:payload].force_encoding("UTF-8") : text
   end
 
