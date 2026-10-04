@@ -425,7 +425,8 @@ module Ruact
 
         show_shadcn_next_steps if shadcn?
 
-        say "\nThen add <MyComponent /> to any ERB view."
+        say "\nThen add <MyComponent /> to an ERB view of a ruact page:" unless whole_app?
+        say "\nThen add <MyComponent /> to any ERB view." if whole_app?
         say layout_summary
         say ""
         say "Note: re-run this generator after updating the ruact gem to refresh"

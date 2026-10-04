@@ -31,6 +31,7 @@
 // against shuffling being turned on later.
 
 import { describe, it, expect, beforeEach } from "vitest";
+import { Fragment } from "react";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -448,5 +449,51 @@ describe("dates and big integers (Story 17-0c)", () => {
   it("leaves a literal string that starts with $D a string", () => {
     const tree = createFromFlightPayload(payload, MODULE_REGISTRY);
     expect(tree.literal).toBe("$D2026-01-01 is a string");
+  });
+});
+
+// A server-rendered tree has unkeyed siblings (an <h1> beside a component, the
+// rows of an ERB loop). Handed to React as an array they made it log "Each
+// child in a list should have a unique key" on the Getting Started page. They
+// are passed as separate children instead — static, like JSX — and no key is
+// invented (an invented index key can collide with a template's own key and
+// duplicate a row, or reset state when a sibling comes or goes).
+describe("sibling children", () => {
+  const payload = [
+    '1:I["/TaskList.jsx","TaskList"]',
+    '0:[["$","h1",null,{"children":"Hello"}],["$","$L1",null,{"tasks":[]}],["$","ul",null,{"children":[["$","li",null,{"children":"a"}],["$","li","explicit",{"children":"b"}]]}]]',
+    "",
+  ].join("\n");
+
+  it("wraps several root siblings in a Fragment, without inventing keys", () => {
+    const tree = createFromFlightPayload(payload, MODULE_REGISTRY);
+    expect(tree.type).toBe(Fragment);
+    expect(tree.props.children.map((el) => el.key)).toEqual([null, null, null]);
+  });
+
+  it("keeps the template's own key and invents none for the others", () => {
+    const tree = createFromFlightPayload(payload, MODULE_REGISTRY);
+    const ul = tree.props.children[2];
+    expect(ul.props.children.map((el) => el.key)).toEqual([null, "explicit"]);
+    expect(ul.props.children).toHaveLength(2);
+  });
+
+  it("wraps a Suspense boundary's deferred siblings the same way", () => {
+    const deferred = buildTree([["$", "h2", null, { children: "A" }], ["$", "p", null, { children: "B" }]], EMPTY_ROWS, MODULE_REGISTRY);
+    expect(deferred.type).toBe(Fragment);
+    expect(deferred.props.children).toHaveLength(2);
+  });
+
+  it("does not spread a data array passed as children (it stays mutable)", () => {
+    const tree = createFromFlightPayload(payloadWithProps({ children: ["a", "b", "c"] }), MODULE_REGISTRY);
+    expect(tree.props.children).toEqual(["a", "b", "c"]);
+    expect(Object.isFrozen(tree.props.children)).toBe(false);
+  });
+
+  it("leaves a single root, data arrays and one-element children as they were", () => {
+    const tree = createFromFlightPayload(payloadWithProps({ tasks: [{ id: 1 }, { id: 2 }] }), MODULE_REGISTRY);
+    expect(tree.key).toBeNull();
+    expect(tree.props.tasks).toEqual([{ id: 1 }, { id: 2 }]);
+    expect(createFromFlightPayload('0:[1,2]\n', MODULE_REGISTRY)).toEqual([1, 2]);
   });
 });

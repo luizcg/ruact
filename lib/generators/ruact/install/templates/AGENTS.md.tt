@@ -84,8 +84,8 @@ READ IT instead of simulating the name generation. Regenerate after routes/queri
    `<Suspense fallback="...">...</Suspense>` pair.
 2. **`{}` props are Ruby, not JavaScript.** `<Badge label={@post.title} />`
    evaluates `@post.title` as a Ruby expression in the ERB. No JS ternaries,
-   no `{...spread}`, no JSX children. Plain unbraced string props are not
-   supported either — always use braces.
+   no `{...spread}`, no JSX children. A quoted value (`title="Hi"`) is a
+   plain string and a bare attribute is `true`, as in JSX.
 3. **One action, two response shapes.** A `Ruact::Server` non-GET action
    answers JSON — its instance variables, or `204`, or `{"$redirect": path}` —
    when the request's `Accept` header is exactly `application/json`, which is

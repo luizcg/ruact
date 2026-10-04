@@ -26,7 +26,7 @@
  *   - "$L{hex}" referencing a missing row → React.lazy() that resolves when the row arrives
  */
 
-import { createElement, Fragment, lazy, Suspense } from "react";
+import { createElement, Fragment, isValidElement, lazy, Suspense } from "react";
 
 // ---------------------------------------------------------------------------
 // Pending chunk registry — used for streaming Suspense deferred rows
@@ -273,7 +273,7 @@ export function buildTreeFromRows(rows, moduleRegistry) {
  * @param {Object} moduleRegistry
  */
 export function buildTree(value, rows, moduleRegistry) {
-  return _buildTree(value, rows, moduleRegistry);
+  return rootTree(_buildTree(value, rows, moduleRegistry));
 }
 
 /**
@@ -341,7 +341,7 @@ function _buildTree(value, rows, moduleRegistry) {
       }
       // Model row — deferred content already arrived (non-streaming path).
       // Wrap in a function component so it can be used as a type in createElement.
-      const content = _buildTree(row.value, rows, moduleRegistry);
+      const content = rootTree(_buildTree(row.value, rows, moduleRegistry));
       return () => content;
     }
     return value;
@@ -355,7 +355,7 @@ function _buildTree(value, rows, moduleRegistry) {
       const type   = resolveType(rawType, rows, moduleRegistry);
       const props  = buildProps(rawProps, rows, moduleRegistry);
       if (key != null) props.key = key;
-      return createElement(type, props);
+      return createWithChildren(type, props);
     }
 
     // Plain array — fragment children OR a data array sitting in a prop.
@@ -382,6 +382,34 @@ function _buildTree(value, rows, moduleRegistry) {
   }
 
   return value;
+}
+
+// A server-rendered tree is static: siblings (an <h1> beside a component, the
+// rows of an ERB loop) carry no key on the wire. Handed to React as an ARRAY,
+// they made it log "Each child in a list should have a unique key" — on the
+// Getting Started page itself. Passed as separate arguments, the way JSX
+// compiles `<div><h1/><p/></div>`, they are static children React does not
+// key-check, and nothing is invented: a key the template gave still wins, and
+// reconciliation is the one React does for JSX. Two or more only — a single
+// child or an explicit one-element array keeps its shape (Story 17-0a).
+function createWithChildren(type, props) {
+  const { children } = props;
+  if (!Array.isArray(children) || children.length < 2 || !children.some(isValidElement)) {
+    return createElement(type, props); // a data array passed as `children` stays a plain array
+  }
+  const rest = { ...props };
+  delete rest.children;
+  return createElement(type, rest, ...children);
+}
+
+// The page's root — or a Suspense boundary's deferred content — when it is
+// several siblings: a Fragment of them, for the same reason as above (React
+// logged the warning against <App>).
+function rootTree(tree) {
+  if (Array.isArray(tree) && tree.length >= 2 && tree.some(isValidElement)) {
+    return createElement(Fragment, null, ...tree);
+  }
+  return tree;
 }
 
 function resolveType(rawType, rows, moduleRegistry) {

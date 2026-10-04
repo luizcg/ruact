@@ -51,11 +51,6 @@ module Ruact
     # unrelated `<% "</Dialog>" %>` appears later).
     ERB_ISLAND_RE = /<%.*?%>/m
 
-    # Matches a +{ruby_expr}+ attribute value — captures everything between the braces.
-    # We use a simple bracket-depth counter approach during scanning instead of regex
-    # because expressions can contain nested braces: {foo.bar({ a: 1 })}.
-    PROP_RE = /\b([a-zA-Z_][a-zA-Z0-9_]*)=\{/
-
     # Transform ERB source, replacing component tags with ERB placeholders.
     # Returns the transformed source string.
     #
@@ -114,7 +109,7 @@ module Ruact
           # the render path surfaces the clear error). In prod this is the
           # boot-loaded Ruact.manifest, unchanged.
           registry = ManifestResolver.resolve_soft if registry == :default
-          pairs = parse_prop_pairs(attrs_string)
+          pairs = ComponentAttributes.parse(attrs_string)
           validate_contract(registry, component_name, pairs.map(&:first),
                             at: { file: identifier, line: line, snippet: match.strip })
           props_ruby = pairs.map { |name, expr| "#{name.inspect} => #{expr}" }.join(", ")
@@ -246,47 +241,6 @@ module Ruact
 
       m = identifier.to_s.match(%r{app/views/(.+)/[^/]+\z})
       m && m[1]
-    end
-
-    # Parses the attributes string of a component tag into ordered
-    # +[name, ruby_expr]+ pairs, e.g. [["postId", "@post.id"], ["count", "5"]].
-    # Honors nested braces in values (via {#extract_braced_expr}). The names
-    # feed the Story 13.5 contract check; the pairs render the props Hash.
-    def parse_prop_pairs(attrs_string)
-      return [] if attrs_string.empty?
-
-      pairs = []
-      remaining = attrs_string.dup
-
-      while (m = PROP_RE.match(remaining))
-        prop_name = m[1]
-        # Find the matching closing brace, respecting nesting
-        value_start = m.end(0)
-        value_expr  = extract_braced_expr(remaining, value_start)
-        pairs << [prop_name, value_expr]
-        # Advance past this prop
-        remaining = remaining[(value_start + value_expr.length + 1)..] # +1 for closing }
-        break if remaining.nil?
-      end
-
-      pairs
-    end
-
-    # Given a string and a start position (just after the opening '{'),
-    # returns the content up to the matching '}'.
-    def extract_braced_expr(str, start)
-      depth = 1
-      i = start
-      while i < str.length && depth.positive?
-        case str[i]
-        when "{" then depth += 1
-        when "}" then depth -= 1
-        end
-        i += 1
-      end
-      raise PreprocessorError, "unclosed brace in prop expression" if depth.positive?
-
-      str[start...(i - 1)]
     end
   end
 end

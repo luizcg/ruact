@@ -486,6 +486,17 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(message).to include("bin/dev")
       end
 
+      # Island mode is the default: "any ERB view" was untrue — a component
+      # renders only in a page whose controller includes Ruact::Controller.
+      it "does not promise any ERB view in island mode" do
+        gen = build_generator(app_root, { skip_npm: true })
+        silently { gen.install_javascript_dependencies }
+
+        output = capture_stdout { gen.show_post_install_message }
+        expect(output).not_to include("any ERB view")
+        expect(output).to include("an ERB view of a ruact page")
+      end
+
       it "tells the developer to install manually then bin/dev when skipped" do
         gen = build_generator(app_root, { skip_npm: true })
         silently { gen.install_javascript_dependencies }
