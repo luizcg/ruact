@@ -191,12 +191,16 @@ module Ruact
        "Reinstall it (npm install), or remove react-server-dom-webpack to use the copy vendored in ruact."]
     end
 
+    # As the Vite plugin reads it: a non-empty entry in dependencies or
+    # devDependencies; an unreadable package.json declares nothing.
     def app_declares?(name)
       manifest = Rails.root.join("package.json")
       return false unless manifest.exist?
 
       json = JSON.parse(manifest.read)
-      [json["dependencies"], json["devDependencies"]].any? { |deps| deps.is_a?(Hash) && deps.key?(name) }
+      [json["dependencies"], json["devDependencies"]].any? { |deps| deps.is_a?(Hash) && !deps[name].to_s.empty? }
+    rescue JSON::ParserError
+      false
     end
 
     # The first `node_modules/<name>/package.json` from Rails.root upward, the

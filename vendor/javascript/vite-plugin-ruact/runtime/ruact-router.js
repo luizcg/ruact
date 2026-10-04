@@ -14,6 +14,10 @@ import { createFromReadableStream } from "virtual:ruact/flight-client";
 import { setBoundaryErrorHandler } from "./suspense-boundary.js";
 import { labelledStream } from "./transport.js";
 
+// Errors already reported once (by a Suspense boundary) that navigate() must
+// not report again on their way out to a revalidate() caller.
+const _alreadyReported = new WeakSet();
+
 let _onNavigate     = null;
 let _onError        = null;
 let _currentAbort   = null;
@@ -490,6 +494,10 @@ async function navigate(url, { push = true, scroll = true, throwOnError = false,
       if (throwOnError) throw err;
       return;
     }
+    if (_alreadyReported.has(err)) {
+      if (throwOnError) throw err;
+      return;
+    }
     console.error("[ruact-router] Navigation error:", err);
     _onError?.(err);
     if (throwOnError) throw err;
@@ -590,7 +598,14 @@ async function _processFlightResponse(response, {
   _onNavigate(root);
   if (scroll) window.scrollTo(0, 0);
 
-  await streamEnd;
+  try {
+    await streamEnd;
+  } catch (err) {
+    // The page is on screen. A row that never arrived was reported by its
+    // Suspense boundary; a revalidate() caller still learns it failed.
+    if (err?.name !== "AbortError") _alreadyReported.add(err);
+    throw err;
+  }
 }
 
 async function _drain(stream) {

@@ -36,7 +36,9 @@ export function isAbort(error) {
 }
 
 // An error row (React's client gives it a `digest`), a response cut short
-// (runtime/transport.js gives it one too), or a superseded navigation.
+// (runtime/transport.js gives it one too), or a superseded navigation. An
+// AbortError thrown by the app's own code in a deferred child (an aborted fetch
+// handed to `use()`) is treated as a navigation's too: the fallback stays.
 function isTransportError(error) {
   if (error == null || typeof error !== "object") return false;
   return "digest" in error || isAbort(error);

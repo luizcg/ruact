@@ -134,6 +134,15 @@ RSpec.describe Ruact::Doctor do
       expect(fix).to include("react-server-dom-webpack@19.2.8")
     end
 
+    it "treats an unreadable app package.json, or an empty entry, as declaring nothing (as the plugin does)",
+       :aggregate_failures do
+      install(tmpdir, "react-server-dom-webpack", "19.3.0")
+      File.write(File.join(tmpdir, "package.json"), "{")
+      expect(doctor.send(:check_flight_client).last).to include("vendored in ruact")
+      declare(tmpdir, "react-server-dom-webpack" => "")
+      expect(doctor.send(:check_flight_client).last).to include("vendored in ruact")
+    end
+
     it "warns, without failing the run, on an unreadable package.json" do
       declare(tmpdir, "react-server-dom-webpack" => "19.3.0")
       dir = File.join(tmpdir, "node_modules", "react-server-dom-webpack")
