@@ -145,8 +145,19 @@ only Flight writer, and make it write the subset React's client reads.
 | --- | --- | --- |
 | **A. npm dependency** — the installer adds `react-server-dom-webpack` at the host's React version | Upgrades with React; React's own release | webpack's 61 packages / 31 MB in every app's `node_modules` (dev only, never bundled); a confusing name in a Vite app |
 | **B. vendored** — the gem ships React's prebuilt `client.browser` files (MIT) for one React minor | No webpack, no new npm dependency | ruact must release when React's wire changes; the host's React minor must match what the gem ships |
+| **C. vendored, overridable** — B by default; when the app has `react-server-dom-webpack` installed, use that instead | B's install, plus a way to follow another React version without waiting for ruact | Two resolution paths to test |
 
 This is Luiz's call: it trades install weight against release cadence.
+
+**There is no Vite-specific client.** React publishes `react-server-dom-webpack`,
+`-turbopack` and `-parcel` (all 19.3.0); `react-server-dom-esm` is a 0.0.1
+placeholder and `react-server-dom-vite` does not exist. Vite's own RSC plugin,
+`@vitejs/plugin-rsc` 0.5.35, uses the webpack one: it ships a vendored copy of
+`react-server-dom-webpack` 19.3.0 in `dist/vendor/react-server-dom/`, renames
+`__webpack_require__` to `__vite_rsc_require__` at transform time, and lists
+`react-server-dom-webpack` as an *optional* peer that, when installed, replaces
+the vendored copy. That is option C, and it is the Vite team's own answer to
+the webpack name.
 
 ## Risks
 
