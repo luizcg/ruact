@@ -164,15 +164,18 @@ module Ruact
     end
 
     # Story 18-1 — which copy of React's Flight client the browser runtime
-    # uses: the app's `react-server-dom-webpack` when Node would find one from
-    # the app (it wins — a workspace may hoist it to a parent directory), or
-    # the one vendored in the gem. The Vite plugin prints the same line when the
-    # dev server starts. The client is built for one React minor; the app's
-    # copy is checked against the app's `react`.
+    # uses, decided as the Vite plugin decides it (`resolveFlightClient`): the
+    # app's `react-server-dom-webpack` when the app's package.json declares it
+    # and Node finds it from the app (a workspace may hoist it to a parent
+    # directory), otherwise the one vendored in the gem. The plugin prints the
+    # same line when Vite starts. The client is built for one React minor; the
+    # app's copy is checked against the app's `react`.
     def check_flight_client
+      vendored = [:pass, "Flight client: react-server-dom-webpack #{vendored_flight_client_version} vendored in ruact"]
+      return vendored unless app_declares?("react-server-dom-webpack")
+
       app_package = node_package_json("react-server-dom-webpack")
-      return [:pass, "Flight client: react-server-dom-webpack #{vendored_flight_client_version} vendored in ruact"] \
-        unless app_package
+      return vendored unless app_package
 
       version = JSON.parse(app_package.read)["version"]
       react_package = node_package_json("react")
@@ -186,6 +189,14 @@ module Ruact
     rescue JSON::ParserError => e
       [:warn, "Flight client: a package.json under node_modules is not valid JSON (#{e.message})",
        "Reinstall it (npm install), or remove react-server-dom-webpack to use the copy vendored in ruact."]
+    end
+
+    def app_declares?(name)
+      manifest = Rails.root.join("package.json")
+      return false unless manifest.exist?
+
+      json = JSON.parse(manifest.read)
+      [json["dependencies"], json["devDependencies"]].any? { |deps| deps.is_a?(Hash) && deps.key?(name) }
     end
 
     # The first `node_modules/<name>/package.json` from Rails.root upward, the

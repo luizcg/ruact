@@ -7,7 +7,7 @@
 // #root; this keeps that: the error, visibly, in place of the page. The next
 // navigation brings a new tree and clears it.
 import { Component, createElement } from "react";
-import { isAbort } from "./suspense-boundary.js";
+import { isAbort, SuspenseBoundary } from "./suspense-boundary.js";
 
 export class RootBoundary extends Component {
   constructor(props) {
@@ -31,9 +31,11 @@ export class RootBoundary extends Component {
   }
 }
 
-// createRoot's onCaughtError: React logs every error a boundary catches; a
-// superseded navigation's AbortError is not one to log.
-export function onCaughtError(error) {
-  if (isAbort(error)) return;
-  console.error(error);
+// createRoot's onCaughtError, for every boundary on the page. The Suspense
+// boundary reports what it catches itself (to the router's onError), and a
+// superseded navigation's AbortError is not an error; everything else is
+// logged as React would, with its component stack.
+export function onCaughtError(error, errorInfo) {
+  if (isAbort(error) || errorInfo?.errorBoundary instanceof SuspenseBoundary) return;
+  console.error(error, errorInfo?.componentStack ?? "");
 }

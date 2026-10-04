@@ -12,6 +12,7 @@
 
 import { createFromReadableStream } from "virtual:ruact/flight-client";
 import { setBoundaryErrorHandler } from "./suspense-boundary.js";
+import { labelledStream } from "./transport.js";
 
 let _onNavigate     = null;
 let _onError        = null;
@@ -568,8 +569,8 @@ async function _processFlightResponse(response, {
   streamEnd.catch(() => {}); // awaited below; an abort must not be "unhandled" first
 
   // Resolves when row 0 arrives; deferred Suspense rows keep streaming into it.
-  // A stream that ends without a root rejects ("Connection closed.").
-  const root = await createFromReadableStream(forClient);
+  // A stream that ends without a root rejects (runtime/transport.js labels it).
+  const root = await createFromReadableStream(labelledStream(forClient));
 
   // A newer navigation started while this one was in flight: it owns the page.
   if (signal?.aborted) return;

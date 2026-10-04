@@ -8,8 +8,8 @@
 // router's `onError`, as it did before the official client.
 //
 // It catches only what the transport produced: an error row (React's client
-// gives those a `digest`), a stream cut short, a navigation that was
-// superseded. A crash in the app's own components passes through to the app's
+// gives those a `digest`), a stream cut short (labelled by ./transport.js), a
+// navigation that was superseded. A crash in the app's own components passes through to the app's
 // error boundaries, or to the root's.
 import { Component } from "react";
 import { registerBuiltin } from "./flight-modules.js";
@@ -24,8 +24,10 @@ export function setBoundaryErrorHandler(handler) {
 
 // What the server writes in an error row's `digest`, which React's production
 // client keeps (it drops the message). Mirrors Ruact::Flight::RowEmitter.
+// runtime/transport.js labels a response cut short the same way.
 const DIGEST_MESSAGES = {
   "ruact:suspense-timeout": "Suspense timeout exceeded",
+  "ruact:connection-closed": "the response ended before the whole page arrived",
 };
 
 /** A superseded navigation aborts its stream: not something to report. */
@@ -33,9 +35,11 @@ export function isAbort(error) {
   return error?.name === "AbortError";
 }
 
+// An error row (React's client gives it a `digest`), a response cut short
+// (runtime/transport.js gives it one too), or a superseded navigation.
 function isTransportError(error) {
   if (error == null || typeof error !== "object") return false;
-  return "digest" in error || isAbort(error) || error.message === "Connection closed.";
+  return "digest" in error || isAbort(error);
 }
 
 /** The error to hand the app: the server's message, in production too. */

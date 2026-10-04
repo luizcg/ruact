@@ -25,6 +25,7 @@ import { setModuleRegistry } from './flight-modules.js';
 // Registers the boundary the server wraps each Suspense child in.
 import './suspense-boundary.js';
 import { RootBoundary, onCaughtError } from './root-boundary.js';
+import { labelledStream } from './transport.js';
 import { setupRouter, teardownRouter } from './ruact-router.js';
 
 // MODULE_REGISTRY maps react-client-manifest "id" values to component exports.
@@ -67,7 +68,7 @@ if (!flightData || flightData.length === 0) {
 
   let initialTree;
   try {
-    initialTree = createFromReadableStream(stream);
+    initialTree = createFromReadableStream(labelledStream(stream));
   } catch (err) {
     showBootError(err);
     throw err;

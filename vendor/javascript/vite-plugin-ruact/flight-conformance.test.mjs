@@ -16,6 +16,7 @@ import { createFromReadableStream } from "virtual:ruact/flight-client";
 import { setModuleRegistry } from "./runtime/flight-modules.js";
 import { setBoundaryErrorHandler } from "./runtime/suspense-boundary.js";
 import { RootBoundary } from "./runtime/root-boundary.js";
+import { labelledStream } from "./runtime/transport.js";
 
 const MODE = process.env.FLIGHT_CLIENT_MODE || "development";
 const FIXTURES = path.join(import.meta.dirname, "../../../spec/fixtures/flight");
@@ -42,7 +43,9 @@ function streamOf(chunks) {
   });
 }
 
-const decode = (chunks) => createFromReadableStream(streamOf(chunks));
+// As the runtime reads a response: through ./runtime/transport.js. React's
+// client returns a thenable, not a Promise; wrap it so `rejects` really checks.
+const decode = (chunks) => Promise.resolve(createFromReadableStream(labelledStream(streamOf(chunks))));
 
 async function mount(value) {
   const container = document.createElement("div");
@@ -128,7 +131,7 @@ describe(`text rows (${MODE}) — Story 17-0d`, () => {
   it("rejects a stream cut inside a text row instead of rendering part of it", async () => {
     const bytes = read("text_framing.txt");
     const cut = Buffer.from(bytes).indexOf(":T") + 10;
-    await expect(decode([bytes.subarray(0, cut)])).rejects.toThrow(/Connection closed/);
+    await expect(decode([bytes.subarray(0, cut)])).rejects.toThrow(/the response ended before the whole page arrived/);
   });
 });
 
@@ -180,6 +183,45 @@ describe(`a Suspense child whose row is an error (${MODE})`, () => {
 
     expect(container.innerHTML).toBe("<span>loading</span>");
     expect(reported.map((e) => e.message)).toEqual(["[ruact] Server error: Suspense timeout exceeded"]);
+    act(() => root.unmount());
+  });
+
+  it("keeps the fallback when the response ends before the Suspense row, in production too", async () => {
+    const reported = [];
+    setBoundaryErrorHandler((error) => reported.push(error));
+    const cut = new TextDecoder().decode(timeout()).replace(/^1:E.*\n?/m, "");
+    const tree = await decode([new TextEncoder().encode(cut)]);
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(h(RootBoundary, { tree }, h(Suspense, { fallback: "…" }, tree)));
+    });
+    expect(container.innerHTML).toBe("<span>loading</span>");
+    expect(reported.map((e) => e.message)).toEqual([
+      "[ruact] Server error: the response ended before the whole page arrived",
+    ]);
+    act(() => root.unmount());
+  });
+
+  it("keeps the fallback when the network fails mid-response", async () => {
+    const reported = [];
+    setBoundaryErrorHandler((error) => reported.push(error));
+    const head = new TextDecoder().decode(timeout()).replace(/^1:E.*\n?/m, "");
+    const failing = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(head));
+        setTimeout(() => controller.error(new TypeError("network error")), 0);
+      },
+    });
+    const tree = await createFromReadableStream(labelledStream(failing));
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(h(RootBoundary, { tree }, h(Suspense, { fallback: "…" }, tree)));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(container.innerHTML).toBe("<span>loading</span>");
+    expect(reported).toHaveLength(1);
     act(() => root.unmount());
   });
 
@@ -237,6 +279,8 @@ describe(`responses the router reads (${MODE})`, () => {
   });
 
   it("rejects a stream that ends before its root row", async () => {
-    await expect(decode([new TextEncoder().encode('1:["$","p",null,{}]\n')])).rejects.toThrow(/Connection closed/);
+    await expect(decode([new TextEncoder().encode('1:["$","p",null,{}]\n')])).rejects.toThrow(
+      /the response ended before the whole page arrived/,
+    );
   });
 });

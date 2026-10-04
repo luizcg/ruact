@@ -88,34 +88,46 @@ RSpec.describe Ruact::Doctor do
                                      "runtime/vendor/react-server-dom-webpack/VERSION.json")))["version"]
     end
 
+    def install(root, name, version)
+      dir = File.join(root, "node_modules", name)
+      FileUtils.mkdir_p(dir)
+      File.write(File.join(dir, "package.json"), JSON.generate("version" => version))
+    end
+
+    def declare(root, deps)
+      FileUtils.mkdir_p(root)
+      File.write(File.join(root, "package.json"), JSON.generate("dependencies" => deps))
+    end
+
     it "reports the copy vendored in ruact when the app has none" do
       expect(doctor.send(:check_flight_client))
         .to eq([:pass, "Flight client: react-server-dom-webpack #{vendored} vendored in ruact"])
     end
 
-    it "reports the app's react-server-dom-webpack when installed, which replaces the vendored copy" do
-      dir = File.join(tmpdir, "node_modules", "react-server-dom-webpack")
-      FileUtils.mkdir_p(dir)
-      File.write(File.join(dir, "package.json"), JSON.generate("version" => "19.2.8"))
+    it "reports the app's copy when its package.json declares it, which replaces the vendored copy" do
+      declare(tmpdir, "react-server-dom-webpack" => "19.2.8")
+      install(tmpdir, "react-server-dom-webpack", "19.2.8")
       expect(doctor.send(:check_flight_client))
         .to eq([:pass, "Flight client: react-server-dom-webpack 19.2.8 from the app (replaces the copy in ruact)"])
     end
 
-    it "finds a copy a workspace hoisted to a parent directory, as Node would" do
+    it "ignores an installed copy the app does not declare, as the Vite plugin does" do
+      declare(tmpdir, {})
+      install(tmpdir, "react-server-dom-webpack", "19.0.0")
+      expect(doctor.send(:check_flight_client).last).to include("vendored in ruact")
+    end
+
+    it "finds a declared copy a workspace hoisted to a parent directory, as Node would" do
       Rails.root = tmpdir.join("apps", "web")
-      FileUtils.mkdir_p(Rails.root)
-      dir = File.join(tmpdir, "node_modules", "react-server-dom-webpack")
-      FileUtils.mkdir_p(dir)
-      File.write(File.join(dir, "package.json"), JSON.generate("version" => "19.3.0"))
+      declare(Rails.root, "react-server-dom-webpack" => "19.3.0")
+      install(tmpdir, "react-server-dom-webpack", "19.3.0")
       expect(doctor.send(:check_flight_client).last).to include("19.3.0 from the app")
     end
 
     it "warns when the app's copy is built for another React minor than the app's react" do
-      %w[react-server-dom-webpack react].zip(%w[19.3.0 19.2.8]).each do |name, version|
-        dir = File.join(tmpdir, "node_modules", name)
-        FileUtils.mkdir_p(dir)
-        File.write(File.join(dir, "package.json"), JSON.generate("version" => version))
-      end
+      declare(tmpdir, "react-server-dom-webpack" => "19.3.0", "react" => "19.2.8")
+      install(tmpdir, "react-server-dom-webpack", "19.3.0")
+      install(tmpdir, "react", "19.2.8")
       status, message, fix = doctor.send(:check_flight_client)
       expect([status, message]).to eq([:warn, "Flight client: react-server-dom-webpack 19.3.0 from the app " \
                                               "(replaces the copy in ruact), but the app's react is 19.2.8"])
@@ -123,6 +135,7 @@ RSpec.describe Ruact::Doctor do
     end
 
     it "warns, without failing the run, on an unreadable package.json" do
+      declare(tmpdir, "react-server-dom-webpack" => "19.3.0")
       dir = File.join(tmpdir, "node_modules", "react-server-dom-webpack")
       FileUtils.mkdir_p(dir)
       File.write(File.join(dir, "package.json"), "{")
