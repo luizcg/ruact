@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.16] - 2026-10-03
+
 ### Fixed
 
 - **A quoted attribute on a component was dropped without a word.** `<PostCard title="Hello" />` reached the component with no `title`: only `title={…}` was read, and the quoted form is the first thing a JSX hand writes. Component tags now take the three JSX forms. `name={ruby}` is a Ruby expression, as before — except that a hyphenated name keeps its hyphen: `aria-label={…}` used to arrive as `label`. `name="text"` is the string; a quoted value never runs Ruby. A bare `name` is `true`. Anything else raises a template error that names the attribute, including ERB inside a quoted value (`title="<%= @t %>"`), which a component attribute cannot run: write `title={@t}`.
@@ -434,7 +436,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **E2E test app** — `e2e/` Rails app (no DB, in-memory Post model) with full CRUD system tests validating the complete request cycle.
 
-[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.15...HEAD
+[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.16...HEAD
+[0.0.16]: https://github.com/luizcg/ruact/releases/tag/v0.0.16
 [0.0.15]: https://github.com/luizcg/ruact/releases/tag/v0.0.15
 [0.0.14]: https://github.com/luizcg/ruact/releases/tag/v0.0.14
 [0.0.13]: https://github.com/luizcg/ruact/releases/tag/v0.0.13
