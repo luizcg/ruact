@@ -1,0 +1,3 @@
+1:"$Sreact.suspense"
+0:["$","$1",null,{"fallback":["$","span",null,{"children":"loading"}],"children":"$L2"}]
+2:["$","p",null,{"children":"late"}]
