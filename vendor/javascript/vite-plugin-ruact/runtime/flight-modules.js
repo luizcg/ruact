@@ -27,7 +27,11 @@ export function setModuleRegistry(moduleRegistry) {
 
 export function requireModule(id) {
   const mod = BUILTINS[id] ?? registry[id];
-  if (!mod) throw new Error(`[ruact] Module not registered: ${id}`);
+  if (!mod) {
+    throw new Error(
+      `client component not registered: ${id} — is it under app/javascript/components/ with "use client" at the top?`,
+    );
+  }
   return mod;
 }
 

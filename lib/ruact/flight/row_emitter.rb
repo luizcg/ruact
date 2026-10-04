@@ -24,8 +24,11 @@ module Ruact
 
       # The error object React's Flight client reads from an E row. Its
       # development build reads `stack` and `env`; a bare string crashes it.
-      def self.error_payload(message)
-        { "digest" => "", "name" => "Error", "message" => message, "stack" => [], "env" => "Server" }
+      # Its production build drops the message and keeps `digest`, so the
+      # digest is a stable code the runtime turns back into the message
+      # (runtime/suspense-boundary.js, DIGEST_MESSAGES).
+      def self.error_payload(message, digest:)
+        { "digest" => digest, "name" => "Error", "message" => message, "stack" => [], "env" => "Server" }
       end
 
       # A large text row (binary framing, no trailing newline)

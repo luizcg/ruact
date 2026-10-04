@@ -92,6 +92,8 @@ export default function ruact(options = {}) {
     configResolved(config) {
       root = config.root;
       flightClient = resolveFlightClient(root, config.isProduction ? "production" : "development");
+      // Dev server and build alike, so a build log shows it too.
+      config.logger?.info?.(`[ruact] Flight client: ${describeFlightClient(flightClient)}`);
     },
 
     // Story 10.1b / 14.2 — resolve ruact's virtual module ids.
@@ -188,7 +190,6 @@ export default function ruact(options = {}) {
     configureServer(server) {
       const dir = path.resolve(root, componentsDir);
       server.watcher.add(dir);
-      if (flightClient) server.config?.logger?.info(`[ruact] Flight client: ${describeFlightClient(flightClient)}`);
 
       // Serve the LIVE in-memory manifest over HTTP so the Rails gem can
       // resolve components in dev without depending on the on-disk
@@ -344,19 +345,34 @@ export function generateBootstrapSource(runtimeDir = RUNTIME_DIR) {
 
 // Story 18-1 (packaging option C, docs/internal/decisions/flight-client-compatibility.md)
 // — which copy of React's Flight client the runtime uses. The app's own
-// `react-server-dom-webpack`, when it resolves from the app root (an app that
-// needs a different React version installs it); otherwise the copy vendored in
-// the gem, which brings no `webpack` into the app's install.
+// `react-server-dom-webpack` when the app declares it in its package.json (an
+// app that needs a different React version installs it); otherwise the copy
+// vendored in the gem, which brings no `webpack` into the app's install. A copy
+// that only resolves — another package's dependency, hoisted — is not chosen:
+// it was not picked for this app's React.
 export function resolveFlightClient(appRoot, mode, runtimeDir = RUNTIME_DIR) {
+  const vendored = () => {
+    const { version } = JSON.parse(
+      fs.readFileSync(path.join(runtimeDir, "vendor", "react-server-dom-webpack", "VERSION.json"), "utf8"),
+    );
+    return { source: "vendored", version, mode };
+  };
+  let declared = false;
+  try {
+    const app = JSON.parse(fs.readFileSync(path.join(appRoot, "package.json"), "utf8"));
+    declared = Boolean(app.dependencies?.["react-server-dom-webpack"] ?? app.devDependencies?.["react-server-dom-webpack"]);
+  } catch {
+    return vendored();
+  }
+  if (!declared) return vendored();
   try {
     const require = createRequire(path.join(appRoot, "package.json"));
     const pkg = require("react-server-dom-webpack/package.json");
     return { source: "app", version: pkg.version, mode };
   } catch {
-    const vendored = JSON.parse(
-      fs.readFileSync(path.join(runtimeDir, "vendor", "react-server-dom-webpack", "VERSION.json"), "utf8"),
-    );
-    return { source: "vendored", version: vendored.version, mode };
+    // Declared but not installed: npm install has not run. The vendored copy
+    // keeps the page working meanwhile.
+    return vendored();
   }
 }
 

@@ -24,6 +24,7 @@ import { createFromReadableStream } from 'virtual:ruact/flight-client';
 import { setModuleRegistry } from './flight-modules.js';
 // Registers the boundary the server wraps each Suspense child in.
 import './suspense-boundary.js';
+import { RootBoundary, onCaughtError } from './root-boundary.js';
 import { setupRouter, teardownRouter } from './ruact-router.js';
 
 // MODULE_REGISTRY maps react-client-manifest "id" values to component exports.
@@ -82,10 +83,11 @@ if (!flightData || flightData.length === 0) {
           return () => teardownRouter();
         }, []);
 
-        return current;
+        // A render error shows in place of the page instead of removing it.
+        return createElement(RootBoundary, { tree: current }, current);
       }
 
-      createRoot(document.getElementById('root')).render(createElement(App));
+      createRoot(document.getElementById('root'), { onCaughtError }).render(createElement(App));
     },
     (err) => {
       showBootError(err);

@@ -101,6 +101,27 @@ RSpec.describe Ruact::Doctor do
         .to eq([:pass, "Flight client: react-server-dom-webpack 19.2.8 from the app (replaces the copy in ruact)"])
     end
 
+    it "finds a copy a workspace hoisted to a parent directory, as Node would" do
+      Rails.root = tmpdir.join("apps", "web")
+      FileUtils.mkdir_p(Rails.root)
+      dir = File.join(tmpdir, "node_modules", "react-server-dom-webpack")
+      FileUtils.mkdir_p(dir)
+      File.write(File.join(dir, "package.json"), JSON.generate("version" => "19.3.0"))
+      expect(doctor.send(:check_flight_client).last).to include("19.3.0 from the app")
+    end
+
+    it "warns when the app's copy is built for another React minor than the app's react" do
+      %w[react-server-dom-webpack react].zip(%w[19.3.0 19.2.8]).each do |name, version|
+        dir = File.join(tmpdir, "node_modules", name)
+        FileUtils.mkdir_p(dir)
+        File.write(File.join(dir, "package.json"), JSON.generate("version" => version))
+      end
+      status, message, fix = doctor.send(:check_flight_client)
+      expect([status, message]).to eq([:warn, "Flight client: react-server-dom-webpack 19.3.0 from the app " \
+                                              "(replaces the copy in ruact), but the app's react is 19.2.8"])
+      expect(fix).to include("react-server-dom-webpack@19.2.8")
+    end
+
     it "warns, without failing the run, on an unreadable package.json" do
       dir = File.join(tmpdir, "node_modules", "react-server-dom-webpack")
       FileUtils.mkdir_p(dir)

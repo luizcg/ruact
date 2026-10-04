@@ -83,7 +83,8 @@ RSpec.describe "Flight conformance fixtures" do
 
   it "writes the timeout error as the object React's client reads" do
     error = Ruact::Testing::FlightWireParser.parse(ConformanceFixtures.render_timeout).find { |r| r[:class] == :error }
-    expect(error[:payload]).to eq("digest" => "", "name" => "Error", "message" => "Suspense timeout exceeded",
+    expect(error[:payload]).to eq("digest" => "ruact:suspense-timeout", "name" => "Error",
+                                  "message" => "Suspense timeout exceeded",
                                   "stack" => [], "env" => "Server")
   end
 

@@ -63,7 +63,7 @@ module Ruact
           if streaming && deferred[:delay]&.positive?
             timeout = Ruact.config.suspense_timeout
             if timeout&.positive? && deferred[:delay] > timeout
-              error = RowEmitter.error_payload("Suspense timeout exceeded")
+              error = RowEmitter.error_payload("Suspense timeout exceeded", digest: "ruact:suspense-timeout")
               yield RowEmitter.error(deferred[:id], JSON.generate(error))
               next
             end

@@ -21,6 +21,8 @@ import ruact, {
   BOOTSTRAP_VIRTUAL_ID,
   REGISTRY_VIRTUAL_ID,
   generateBootstrapSource,
+  resolveFlightClient,
+  flightClientSource,
 } from "./index.js";
 
 const RESOLVED = "\0" + BOOTSTRAP_VIRTUAL_ID;
@@ -95,5 +97,42 @@ describe("generateBootstrapSource — rewrites imports only (Story 14.2)", () =>
     expect(out).toContain("// reads ./flight-client.js at boot");
     expect(out).not.toMatch(/from\s+['"]\.\/flight-client\.js['"]/);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// Story 18-1 — option C: which copy of React's Flight client answers.
+describe("resolveFlightClient", () => {
+  const make = (pkg, installed) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ruact-rfc-"));
+    if (pkg) fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(pkg));
+    if (installed) {
+      const mod = path.join(dir, "node_modules", "react-server-dom-webpack");
+      fs.mkdirSync(mod, { recursive: true });
+      fs.writeFileSync(path.join(mod, "package.json"), JSON.stringify({ name: "react-server-dom-webpack", version: installed }));
+    }
+    return dir;
+  };
+
+  it("uses the copy vendored in the gem when the app declares none", () => {
+    expect(resolveFlightClient(make({ dependencies: {} }), "development")).toMatchObject({ source: "vendored" });
+  });
+
+  it("uses the app's copy when the app declares and installs it", () => {
+    const dir = make({ dependencies: { "react-server-dom-webpack": "19.2.8" } }, "19.2.8");
+    expect(resolveFlightClient(dir, "production")).toEqual({ source: "app", version: "19.2.8", mode: "production" });
+  });
+
+  it("ignores a copy that is installed but not declared (another package's, hoisted)", () => {
+    expect(resolveFlightClient(make({ dependencies: {} }, "19.0.0"), "development")).toMatchObject({ source: "vendored" });
+  });
+
+  it("falls back to the vendored copy when declared but not installed yet", () => {
+    const dir = make({ devDependencies: { "react-server-dom-webpack": "19.2.8" } });
+    expect(resolveFlightClient(dir, "development")).toMatchObject({ source: "vendored" });
+  });
+
+  it("serves the app's copy behind the webpack globals, imported first", () => {
+    const src = flightClientSource({ source: "app", mode: "development" });
+    expect(src.indexOf("flight-webpack-globals.js")).toBeLessThan(src.indexOf("react-server-dom-webpack/client.browser"));
   });
 });

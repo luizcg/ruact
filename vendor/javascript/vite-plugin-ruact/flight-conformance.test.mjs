@@ -15,6 +15,7 @@ import { createRoot } from "react-dom/client";
 import { createFromReadableStream } from "virtual:ruact/flight-client";
 import { setModuleRegistry } from "./runtime/flight-modules.js";
 import { setBoundaryErrorHandler } from "./runtime/suspense-boundary.js";
+import { RootBoundary } from "./runtime/root-boundary.js";
 
 const MODE = process.env.FLIGHT_CLIENT_MODE || "development";
 const FIXTURES = path.join(import.meta.dirname, "../../../spec/fixtures/flight");
@@ -23,10 +24,14 @@ const readJSON = (name) => JSON.parse(fs.readFileSync(path.join(FIXTURES, name),
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+function Bad() {
+  throw new Error("boom");
+}
+
 function LikeButton({ likes, tags }) {
   return h("button", null, `${likes}:${Array.isArray(tags) ? `[${tags.join(",")}]` : String(tags)}`);
 }
-setModuleRegistry({ "/LikeButton.jsx": { LikeButton } });
+setModuleRegistry({ "/LikeButton.jsx": { LikeButton }, "/Bad.jsx": { Bad } });
 
 function streamOf(chunks) {
   return new ReadableStream({
@@ -161,14 +166,66 @@ describe(`dates and big integers (${MODE}) — Story 17-0c`, () => {
 });
 
 describe(`a Suspense child whose row is an error (${MODE})`, () => {
-  it("keeps the fallback on screen and reports the error, without unmounting the page", async () => {
+  const timeout = () => read("conformance_suspense_timeout.txt");
+  // The same page, its Suspense row now content: the timeout fixture with the
+  // error row replaced.
+  const recovered = () => new TextEncoder().encode(
+    new TextDecoder().decode(timeout()).replace(/^1:E.*$/m, '1:["$","p",null,{"children":"late"}]'),
+  );
+
+  it("keeps the fallback on screen and reports the server's message, in production too", async () => {
     const reported = [];
     setBoundaryErrorHandler((error) => reported.push(error));
-    const { container, root } = await mount(decode([read("conformance_suspense_timeout.txt")]));
+    const { container, root } = await mount(decode([timeout()]));
 
     expect(container.innerHTML).toBe("<span>loading</span>");
-    expect(reported).toHaveLength(1);
-    if (MODE === "development") expect(reported[0].message).toBe("Suspense timeout exceeded");
+    expect(reported.map((e) => e.message)).toEqual(["[ruact] Server error: Suspense timeout exceeded"]);
+    act(() => root.unmount());
+  });
+
+  it("does not stay failed: the next response for the same page renders", async () => {
+    setBoundaryErrorHandler(() => {});
+    const { container, root } = await mount(decode([timeout()]));
+    expect(container.innerHTML).toBe("<span>loading</span>");
+
+    // What revalidate() or a navigation to a page of the same shape does.
+    const next = decode([recovered()]);
+    await act(async () => {
+      root.render(h(Suspense, { fallback: "…" }, next));
+    });
+    expect(container.innerHTML).toBe("<p>late</p>");
+    act(() => root.unmount());
+  });
+
+  it("lets a crash in the app's own component through, to the root's boundary", async () => {
+    const reported = [];
+    setBoundaryErrorHandler((error) => reported.push(error));
+    const wire = new TextDecoder().decode(timeout())
+      .replace(/^1:E.*$/m, '1:["$","$L5",null,{}]')
+      .replace(/^/, '5:I["/Bad.jsx",[],"Bad"]\n');
+    const tree = await decode([new TextEncoder().encode(wire)]);
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(h(RootBoundary, { tree }, tree));
+    });
+    expect(container.textContent).toBe("[ruact] Error: boom");
+    expect(reported).toEqual([]);
+    act(() => root.unmount());
+  });
+});
+
+describe(`a component missing from the registry (${MODE})`, () => {
+  it("shows an error in place of the page instead of removing it", async () => {
+    const tree = await decode([new TextEncoder().encode('1:I["/Gone.jsx",[],"Gone"]\n0:["$","$L1",null,{}]\n')]);
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(h(RootBoundary, { tree }, tree));
+    });
+    expect(container.textContent).toBe(
+      '[ruact] Error: client component not registered: /Gone.jsx — is it under app/javascript/components/ with "use client" at the top?',
+    );
     act(() => root.unmount());
   });
 });

@@ -182,7 +182,12 @@ the webpack name.
    environment, so request specs assert the production wire. Each Suspense child
    is also wrapped in a runtime-registered boundary (`ruact:boundary`): React 19
    unmounts the root on an uncaught render error, and an error row for a
-   deferred child (a Suspense timeout) used to leave the fallback up.
+   deferred child (a Suspense timeout) used to leave the fallback up. The
+   boundary catches only transport errors (an error row carries a `digest`, a
+   cut or aborted stream), resets when a new response brings a new child, and
+   maps the digest (`ruact:suspense-timeout`) back to the message React's
+   production client drops. A root boundary in the bootstrap shows a render
+   error (an unregistered component) instead of an empty page.
 2. Browser: the bootstrap reads the inline `__FLIGHT_DATA` as a stream and
    mounts once the root resolves; the router decodes with
    `createFromReadableStream`, checks the root for `redirectUrl`, never commits
@@ -191,13 +196,14 @@ the webpack name.
 4. Option C: `scripts/vendor-flight-client.mjs` vendors `client.browser` (both
    builds) as ES modules with module-local webpack hooks; `virtual:ruact/flight-client`
    answers with that copy, or with the app's `react-server-dom-webpack` (behind
-   `runtime/flight-webpack-globals.js`) when installed.
+   `runtime/flight-webpack-globals.js`) when the app's `package.json` declares it
+   — a copy that only resolves (hoisted for another package) is ignored.
 5. Conformance: `flight-conformance.test.mjs` decodes the serializer's fixtures
    with both builds, and against React 19.2.8 in CI. The nav-islands browser
    suite passes, and the production build was checked by hand.
 
-Measured on the nav-islands example: the bundle went from 74.4 kB to 80.8 kB
-gzipped (+6.5 kB, more than the spike's +3.1 kB: the vendored client keeps every
+Measured on the nav-islands example: the bundle went from 74.35 kB to 80.82 kB
+gzipped (+6.47 kB, more than the spike's +3.1 kB: the vendored client keeps every
 export, `encodeReply` included, and the boundary is new). The `.gem` went from
 373 KB to 427 KB.
 

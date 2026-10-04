@@ -164,20 +164,42 @@ module Ruact
     end
 
     # Story 18-1 — which copy of React's Flight client the browser runtime
-    # uses: the app's `react-server-dom-webpack` when installed (it wins), or
-    # the one vendored in the gem. Informational; both are supported. The Vite
-    # plugin prints the same line when the dev server starts.
+    # uses: the app's `react-server-dom-webpack` when Node would find one from
+    # the app (it wins — a workspace may hoist it to a parent directory), or
+    # the one vendored in the gem. The Vite plugin prints the same line when the
+    # dev server starts. The client is built for one React minor; the app's
+    # copy is checked against the app's `react`.
     def check_flight_client
-      app_package = Rails.root.join("node_modules", "react-server-dom-webpack", "package.json")
-      if app_package.exist?
-        version = JSON.parse(app_package.read)["version"]
-        [:pass, "Flight client: react-server-dom-webpack #{version} from the app (replaces the copy in ruact)"]
-      else
-        [:pass, "Flight client: react-server-dom-webpack #{vendored_flight_client_version} vendored in ruact"]
-      end
+      app_package = node_package_json("react-server-dom-webpack")
+      return [:pass, "Flight client: react-server-dom-webpack #{vendored_flight_client_version} vendored in ruact"] \
+        unless app_package
+
+      version = JSON.parse(app_package.read)["version"]
+      react_package = node_package_json("react")
+      react = react_package && JSON.parse(react_package.read)["version"]
+      message = "Flight client: react-server-dom-webpack #{version} from the app (replaces the copy in ruact)"
+      return [:pass, message] if react.nil? || minor(react) == minor(version)
+
+      [:warn, "#{message}, but the app's react is #{react}",
+       "Install the react-server-dom-webpack matching your react (npm install react-server-dom-webpack@#{react}), " \
+       "or uninstall it to use the copy vendored in ruact."]
     rescue JSON::ParserError => e
-      [:warn, "Flight client: #{app_package} is not valid JSON (#{e.message})",
-       "Reinstall it (npm install), or remove it to use the copy vendored in ruact."]
+      [:warn, "Flight client: a package.json under node_modules is not valid JSON (#{e.message})",
+       "Reinstall it (npm install), or remove react-server-dom-webpack to use the copy vendored in ruact."]
+    end
+
+    # The first `node_modules/<name>/package.json` from Rails.root upward, the
+    # way Node resolves a package.
+    def node_package_json(name)
+      Pathname(Rails.root).expand_path.ascend do |dir|
+        candidate = dir.join("node_modules", name, "package.json")
+        return candidate if candidate.exist?
+      end
+      nil
+    end
+
+    def minor(version)
+      version.to_s.split(".").first(2).join(".")
     end
 
     def vendored_flight_client_version

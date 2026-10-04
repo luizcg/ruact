@@ -27,7 +27,7 @@ export function setupRouter({ onNavigate, onError = null }) {
   _onNavigate     = onNavigate;
   _onError        = onError;
   setBoundaryErrorHandler((error) => {
-    console.error("[ruact] Server error:", error);
+    console.error(error.message);
     _onError?.(error);
   });
 

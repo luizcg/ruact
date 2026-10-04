@@ -182,5 +182,41 @@ module Ruact
           .with_props(a_hash_including("label" => a_string_matching(/quoted/)))
       end
     end
+
+    # Story 18-1 — the wire React's own Flight client reads.
+    describe "the wire since Story 18-1" do
+      it "finds a component inside Suspense content, and not the runtime's own boundary", :aggregate_failures do
+        wire = render_wire('<Suspense fallback="…"><LikeButton postId={7} /></Suspense>')
+        expect(wire).to include('"ruact:boundary"')
+        expect(wire).to have_ruact_component("LikeButton").with_props("postId" => 7)
+        expect(wire).not_to have_ruact_component("SuspenseBoundary")
+        expect(Ruact::Testing::ComponentQuery.new(wire).rendered_names).to eq(["LikeButton"])
+      end
+
+      it "reads the development wire (elements with React's three development slots)" do
+        erb = "<div><LikeButton postId={1} /><LikeButton postId={2} /></div>"
+        ctx = Object.new.instance_eval { binding }
+        wire = RenderPipeline.new(manifest, development: true).render({ erb: erb, binding: ctx }, mode: :string)
+        expect(wire).to include("null,null,1]")
+        props = Ruact::Testing::ComponentQuery.new(wire).props_for("LikeButton")
+        expect(props).to eq([{ "postId" => 1 }, { "postId" => 2 }])
+      end
+
+      it "resolves a long prop by its text, referenced as \"$<hex>\" and, from older wires, \"$T<hex>\"" do
+        long = "é" * 600
+        wire = render_wire("<LikeButton title={@long} />", long: long)
+        expect(wire).to have_ruact_component("LikeButton").with_props("title" => long)
+
+        old = wire.sub(/"title":"\$(\h+)"/) { %("title":"$T#{Regexp.last_match(1)}") }
+        expect(old).not_to eq(wire)
+        expect(old).to have_ruact_component("LikeButton").with_props("title" => long)
+      end
+
+      it "reads an import row in the older [path, name, chunks] order" do
+        wire = %(1:I["/assets/LikeButton-abc.js","LikeButton",["/assets/LikeButton-abc.js"]]\n) +
+               %(0:["$","$L1",null,{"postId":3}]\n)
+        expect(wire).to have_ruact_component("LikeButton").with_props("postId" => 3)
+      end
+    end
   end
 end
