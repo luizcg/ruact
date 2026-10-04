@@ -1,0 +1,2 @@
+1:I["/LikeButton.jsx",["/LikeButton.jsx"],"LikeButton"]
+0:["$","ul",null,{"children":[["$","li","1",{"children":["$","$L1",null,{"likes":1}]}],["$","li","2",{"children":["$","$L1",null,{"likes":2}]}]]}]
