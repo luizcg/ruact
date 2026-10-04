@@ -38,6 +38,11 @@ module Ruact
   # Story 13.5 preprocess-time call-site validator; +nil+ means "no contract →
   # no validation" (fail open).
   class ClientManifest
+    # The +chunks+ of every import row (see {#resolve}). One shared frozen
+    # array: a render resolves each component once, and the allocation guard
+    # counts every array.
+    NO_CHUNKS = [].freeze
+
     # Used by Flight::Serializer to produce I rows.
     # Returns the metadata array React's Flight client reads: [id, chunks, name]
     # (Story 18-1). +chunks+ is always empty: the browser runtime registers
@@ -48,7 +53,7 @@ module Ruact
       entry = by_module_id(module_id)
       raise "ClientManifest: no entry for module_id=#{module_id.inspect}" unless entry
 
-      [entry["id"], [], entry["name"]]
+      [entry["id"], NO_CHUNKS, entry["name"]]
     end
 
     # Returns true if +name+ is a top-level key in the manifest data.
