@@ -7,7 +7,7 @@ require_relative "../errors"
 module Ruact
   module ServerFunctions
     # Story 9.2 — pure serializer for the Bucket-2 (imperative `await fn()`)
-    # response body. Takes the host action's exposed instance variables (Rails
+    # response body. Takes the instance variables the action returns (Rails
     # `view_assigns`, resolved by the caller) and produces a JSON-ready Ruby
     # Hash, keyed by ivar name, applying the SAME prop-exposure policy as the
     # Flight serializer ({Ruact::Flight::Serializer#serialize_unknown}):

@@ -26,6 +26,7 @@ module Ruact
       shadcn_compatible_versions
       layout
       layout_stylesheets
+      server_function_hidden_ivars
     ].freeze
 
     # @!attribute [r] manifest_path
@@ -124,6 +125,19 @@ module Ruact
     #     call site (a reviewed per-call choice), never via this default.
     #   @example Set an app-wide default expiry
     #     Ruact.configure { |c| c.signed_global_id_default_expires_in = 1.hour }
+    #
+    # @!attribute [r] server_function_hidden_ivars
+    #   @return [Array<String>] Instance-variable names (no `@`) a server
+    #     function's JSON never returns, even when the action set them: the
+    #     memoization ivars of authentication and authorization libraries,
+    #     which an action fills just by calling `current_user` or `authorize`.
+    #     Names starting with `_` are always hidden. Default
+    #     `["current_user", "current_ability", "pundit"]` (Devise's `:user`
+    #     scope, CanCanCan, Pundit); another Devise scope memoizes its own
+    #     `@current_<scope>` — add it. Assign to replace the list; to keep the
+    #     defaults, add to them.
+    #   @example Also hide an app's own memoized account
+    #     Ruact.configure { |c| c.server_function_hidden_ivars += ["current_account"] }
     #
     # @!attribute [r] shadcn_compatible_versions
     #   @return [Array<Integer>] Story 10.5 — the shadcn/ui MAJOR versions the
@@ -255,6 +269,7 @@ module Ruact
         @shadcn_compatible_versions = [1, 2, 4]
         @layout = false
         @layout_stylesheets = [:app]
+        @server_function_hidden_ivars = %w[current_user current_ability pundit]
       end
     end
 
@@ -278,6 +293,9 @@ module Ruact
     # @api private
     # @return [Ruact::Configuration] self, frozen
     def seal!
+      # An Array attribute mutated in place inside the block (`list << x`)
+      # never passed through its writer; validate it here, before publication.
+      validate_attribute_value!(:server_function_hidden_ivars, server_function_hidden_ivars)
       ATTRIBUTES.each do |attr|
         value = public_send(attr)
         next if value.nil? || value.frozen?
@@ -322,6 +340,7 @@ module Ruact
       when :shadcn_compatible_versions then validate_shadcn_compatible_versions!(value)
       when :layout                     then validate_layout!(value)
       when :layout_stylesheets         then validate_layout_stylesheets!(value)
+      when :server_function_hidden_ivars then validate_server_function_hidden_ivars!(value)
       end
     end
 
@@ -438,6 +457,15 @@ module Ruact
       raise Ruact::ConfigurationError,
             "Ruact::Configuration#shadcn_compatible_versions must contain only Integer " \
             "major versions (e.g. [1, 2]); got #{value.inspect}."
+    end
+
+    # An Array of ivar names; a leading `@` is a typo that would hide nothing.
+    def validate_server_function_hidden_ivars!(value)
+      return if value.is_a?(Array) && value.all? { |name| name.is_a?(String) && !name.start_with?("@") }
+
+      raise Ruact::ConfigurationError,
+            "Ruact::Configuration#server_function_hidden_ivars must be an Array of instance-variable " \
+            "names without the @ (e.g. [\"current_user\"]); got #{value.inspect}."
     end
 
     def build_error_message(attr, location)

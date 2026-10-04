@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The install message said a component works in any ERB view.** In island mode, the default, it works in the views of a controller that has `include Ruact::Controller`; the message now says so.
 
+### Changed
+
+- **A server function no longer returns what callbacks and auth libraries put on the controller, or answers 500 because of it.** A function call's JSON was the controller's whole `view_assigns`. An authentication library that memoizes the user in an instance variable (Devise's `current_user` sets `@current_user` on its first call) put that user in every response. Under `strict_serialization`, on by default in production, a user model without `ruact_props` then made every function call answer 500. Two rules now decide what the JSON holds:
+  - **What callbacks set stays out, unless the action assigns it a different object.** `@post = Post.find(...)` in the action is returned. A `before_action :set_post` whose `@post` the action only updates in place (`@post.update(...)`) is not: reassign it (`@post = @post.reload`) or `render json:`. This covers plain values too: a callback's `@current_user_id = 5` is not returned, and neither is a value the action sets to the very same object the callback stored (`@count = 0` after a callback did the same, or a memoized helper's result).
+  - **Authentication and authorization memos are never returned,** even when the action fills them by calling `current_user` or `authorize`. The names are in the new `config.server_function_hidden_ivars`, default `["current_user", "current_ability", "pundit"]` for Devise's `:user` scope, CanCanCan and Pundit. Every name starting with `_` is hidden too. Add the memo of any other scope or helper, such as Devise's `@current_admin` for `devise_for :admins`: `config.server_function_hidden_ivars += ["current_admin"]`.
+
+  A page render's view still sees every instance variable.
+
 ## [0.0.15] - 2026-10-03
 
 ### Security
