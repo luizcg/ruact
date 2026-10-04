@@ -1,0 +1,22 @@
+{
+  "name": "ruact-flight-client-compat-spike",
+  "private": true,
+  "type": "module",
+  "description": "Story 18-0: does the official React Flight client decode ruact's payloads? See ../../decisions/flight-client-compatibility.md",
+  "scripts": {
+    "react-payloads": "NODE_ENV=production node --conditions=react-server ref-server.mjs",
+    "ruact-payloads": "cd ../../../.. && bundle exec ruby docs/internal/spikes/flight-client-compat/gen_ruact.rb docs/internal/spikes/flight-client-compat/payloads/ruact",
+    "fixed-payloads": "node fix.mjs",
+    "consume": "for d in react ruact ruact-fixed extra validated; do echo \"== $d\"; NODE_ENV=production node consume.mjs payloads/$d; done",
+    "consume:dev": "for d in ruact-fixed extra validated; do echo \"== $d\"; NODE_ENV=development node consume.mjs payloads/$d; done",
+    "stream": "NODE_ENV=production node stream.mjs && NODE_ENV=development node stream.mjs",
+    "browser": "cd vite-app && vite build && vite preview --port 4173"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "4.7.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-server-dom-webpack": "19.2.8",
+    "vite": "6.4.3"
+  }
+}
