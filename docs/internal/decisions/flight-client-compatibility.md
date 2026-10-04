@@ -3,7 +3,7 @@
 | Field | Value |
 | --- | --- |
 | Date | 2026-10-04 |
-| Status | Proposed — the replace/retain call is recommended below; one packaging choice is open |
+| Status | Accepted 2026-10-04 (Luiz): replace the decoder; packaging option C |
 | Story | 18-0 — official-client compatibility spike |
 | Measured against | ruact 0.0.16 payloads; `react`, `react-dom`, `react-server-dom-webpack` **19.2.8** and **19.3.0** (current `latest`); `vite` 6.4.3 + `@vitejs/plugin-react` 4.7.0; Node 24; Chrome |
 | Experiment | [`docs/internal/spikes/flight-client-compat/`](../spikes/flight-client-compat/) — every number below comes from its scripts |
@@ -120,7 +120,7 @@ that map and the second has nothing to load. Module resolution does not change.
 | npm install in the host app | nothing extra | `react-server-dom-webpack` declares **`webpack` as a required peer**: npm installs it — 61 extra packages, 31 MB in `node_modules`. Never bundled, never run. |
 | Version coupling | none | the client's peer range is the exact React minor (`^19.3.0` for 19.3.0) |
 
-## Decision (recommended)
+## Decision
 
 **Replace ruact's decoder with React's client.** Keep the Ruby side as the
 only Flight writer, and make it write the subset React's client reads.
@@ -139,7 +139,7 @@ only Flight writer, and make it write the subset React's client reads.
   Flight on the server (`decodeReply` is not used), so React's server-side
   advisories stay out of scope.
 
-### Open: how the client reaches the app
+### How the client reaches the app — option C
 
 | Option | For | Against |
 | --- | --- | --- |
@@ -147,7 +147,8 @@ only Flight writer, and make it write the subset React's client reads.
 | **B. vendored** — the gem ships React's prebuilt `client.browser` files (MIT) for one React minor | No webpack, no new npm dependency | ruact must release when React's wire changes; the host's React minor must match what the gem ships |
 | **C. vendored, overridable** — B by default; when the app has `react-server-dom-webpack` installed, use that instead | B's install, plus a way to follow another React version without waiting for ruact | Two resolution paths to test |
 
-This is Luiz's call: it trades install weight against release cadence.
+Luiz chose **C** on 2026-10-04: no webpack in the app's install, and an app that
+needs a different React minor installs `react-server-dom-webpack` itself.
 
 **There is no Vite-specific client.** React publishes `react-server-dom-webpack`,
 `-turbopack` and `-parcel` (all 19.3.0); `react-server-dom-esm` is a 0.0.1
@@ -185,7 +186,8 @@ the webpack name.
    loads first.
 3. Delete `flight-client.js` and the router's row parser once nothing imports
    them.
-4. The packaging option (A or B) chosen above.
+4. Packaging option C: the vendored client, overridable by an installed
+   `react-server-dom-webpack`.
 
 ## How to reproduce
 
