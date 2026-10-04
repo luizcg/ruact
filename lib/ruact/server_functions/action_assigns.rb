@@ -21,13 +21,6 @@ module Ruact
       # The snapshot's own name, kept out of what it filters.
       CALLBACK_IVARS_KEY = "__ruact_callback_ivars"
 
-      # Values an action re-setting cannot be told apart from a callback
-      # leaving them (`@ok = false`, `@count = 0` are the same object either
-      # way). They can neither leak a record nor fail strict serialization,
-      # so they are always the action's — the response shape never depends
-      # on the data.
-      IMMEDIATE = [NilClass, TrueClass, FalseClass, Integer, Float, Symbol].freeze
-
       private
 
       def send_action(...)
@@ -39,15 +32,19 @@ module Ruact
         super
       end
 
-      # +assigns+ minus what callbacks set and the action left as it was (the
-      # same object). An ivar the action reassigned — even to an equal
-      # object — is the action's.
+      # +assigns+ minus what callbacks set and the action left holding the
+      # same object. Only a DIFFERENT object makes it the action's: setting
+      # the same value again (`@ok = false` after a callback did, a memoized
+      # helper returning what the callback already stored) leaves it out.
+      # Security first — a callback's `@current_user_id = 5` must not ride
+      # every response — at the price of a key that is absent when callback
+      # and action happen to agree.
       def __ruact_action_assigns(assigns)
         before = @__ruact_callback_ivars || {}
         hidden = Ruact.config.server_function_hidden_ivars
         assigns.reject do |name, value|
           name == CALLBACK_IVARS_KEY || name.start_with?("_") || hidden.include?(name) ||
-            (before.key?(name) && before[name].equal?(value) && IMMEDIATE.none? { |type| value.is_a?(type) })
+            (before.key?(name) && before[name].equal?(value))
         end
       end
     end

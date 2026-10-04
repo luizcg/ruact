@@ -73,6 +73,7 @@ module ServerBucketSpecSupport
 
     before_action(except: %i[create_with_memoized_user create_flags]) { @current_user = UnserializableRecord.new }
     before_action(only: :create_flags) do
+      @current_user_id = 5
       @ok = false
       @count = 0
     end
@@ -96,8 +97,8 @@ module ServerBucketSpecSupport
     end
 
     def create_flags
-      @ok = false
-      @count = 0
+      @ok = true # a different object than the callback's false: returned
+      @count = 0 # the same object the callback stored: left out
     end
 
     def update_in_place
@@ -560,9 +561,12 @@ RSpec.describe "Story 9.2: Ruact::Server dual-bucket response negotiation", :sto
       expect(JSON.parse(last_response.body).keys).to eq(["post"])
     end
 
-    it "returns immediates the action set, even when a callback set the same value" do
+    # Security first: a callback's plain value (a user id) must not ride every
+    # response; the cost is that a value the action sets to the very same
+    # object is left out too.
+    it "leaves out a callback's plain values unless the action sets a different one" do
       post "/bucket/callback_ivars/create_flags", "{}", json_headers
-      expect(JSON.parse(last_response.body)).to eq("ok" => false, "count" => 0)
+      expect(JSON.parse(last_response.body)).to eq("ok" => true)
     end
 
     it "does not return a callback's ivar the action only mutated" do

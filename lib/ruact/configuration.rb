@@ -132,8 +132,10 @@ module Ruact
     #     memoization ivars of authentication and authorization libraries,
     #     which an action fills just by calling `current_user` or `authorize`.
     #     Names starting with `_` are always hidden. Default
-    #     `["current_user", "current_ability", "pundit"]` (Devise, CanCanCan,
-    #     Pundit). Assign to replace the list; to keep the defaults, add to them.
+    #     `["current_user", "current_ability", "pundit"]` (Devise's `:user`
+    #     scope, CanCanCan, Pundit); another Devise scope memoizes its own
+    #     `@current_<scope>` — add it. Assign to replace the list; to keep the
+    #     defaults, add to them.
     #   @example Also hide an app's own memoized account
     #     Ruact.configure { |c| c.server_function_hidden_ivars += ["current_account"] }
     #
@@ -291,6 +293,9 @@ module Ruact
     # @api private
     # @return [Ruact::Configuration] self, frozen
     def seal!
+      # An Array attribute mutated in place inside the block (`list << x`)
+      # never passed through its writer; validate it here, before publication.
+      validate_attribute_value!(:server_function_hidden_ivars, server_function_hidden_ivars)
       ATTRIBUTES.each do |attr|
         value = public_send(attr)
         next if value.nil? || value.frozen?
@@ -440,15 +445,6 @@ module Ruact
     # configuration-time errors. Element-type strictness (Integer-only majors)
     # is enforced too — a `["2"]` typo would silently never match a detected
     # Integer major and warn on every run.
-    # An Array of ivar names; a leading `@` is a typo that would hide nothing.
-    def validate_server_function_hidden_ivars!(value)
-      return if value.is_a?(Array) && value.all? { |name| name.is_a?(String) && !name.start_with?("@") }
-
-      raise Ruact::ConfigurationError,
-            "Ruact::Configuration#server_function_hidden_ivars must be an Array of instance-variable " \
-            "names without the @ (e.g. [\"current_user\"]); got #{value.inspect}."
-    end
-
     def validate_shadcn_compatible_versions!(value)
       unless value.is_a?(Array) && !value.empty?
         raise Ruact::ConfigurationError,
@@ -461,6 +457,15 @@ module Ruact
       raise Ruact::ConfigurationError,
             "Ruact::Configuration#shadcn_compatible_versions must contain only Integer " \
             "major versions (e.g. [1, 2]); got #{value.inspect}."
+    end
+
+    # An Array of ivar names; a leading `@` is a typo that would hide nothing.
+    def validate_server_function_hidden_ivars!(value)
+      return if value.is_a?(Array) && value.all? { |name| name.is_a?(String) && !name.start_with?("@") }
+
+      raise Ruact::ConfigurationError,
+            "Ruact::Configuration#server_function_hidden_ivars must be an Array of instance-variable " \
+            "names without the @ (e.g. [\"current_user\"]); got #{value.inspect}."
     end
 
     def build_error_message(attr, location)

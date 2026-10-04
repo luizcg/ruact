@@ -496,16 +496,23 @@ module Ruact
       end
     end
 
-    describe "Story 10.5 — shadcn_compatible_versions attribute", :story_10_5 do
+    describe "server_function_hidden_ivars" do
       it "hides the auth memo ivars of Devise, CanCanCan and Pundit by default" do
         expect(Ruact.config.server_function_hidden_ivars).to eq(%w[current_user current_ability pundit])
       end
 
-      it "rejects a hidden-ivar name written with @" do
+      it "rejects a name written with @" do
         expect { Ruact.configure { |c| c.server_function_hidden_ivars = ["@current_user"] } }
           .to raise_error(Ruact::ConfigurationError, /without the @/)
       end
 
+      it "validates a list changed in place inside the block, too" do
+        expect { Ruact.configure { |c| c.server_function_hidden_ivars << :current_account } }
+          .to raise_error(Ruact::ConfigurationError, /without the @/)
+      end
+    end
+
+    describe "Story 10.5 — shadcn_compatible_versions attribute", :story_10_5 do
       it "defaults to [1, 2, 4]" do
         expect(Ruact.config.shadcn_compatible_versions).to eq([1, 2, 4])
       end

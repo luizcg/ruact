@@ -1387,7 +1387,8 @@ ancestry) `Ruact::Controller`.
 
 > **SUPERSEDED 2026-10-03 (decided with Luiz).** A function call's JSON is no
 > longer `view_assigns` verbatim: ivars a callback set (unless the action assigns
-> them again) and the names in `server_function_hidden_ivars` (default
+> them a different object — plain values included) and the names in
+> `server_function_hidden_ivars` (default
 > `current_user`, `current_ability`, `pundit`) plus every `_`-prefixed name are
 > left out. Found by a cold-agent pre-flight: Devise's memoized
 > `@current_user` rode every response, and under `strict_serialization` a user
