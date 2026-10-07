@@ -938,9 +938,9 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         silently { build_generator(app_root).create_agents_md }
         content = File.read(agents_md_path)
 
-        # Trap 1 — children unsupported / self-closing only
-        expect(content).to include("self-closing")
-        expect(content).to include("children")
+        # Trap 1 — every component tag closes; a pair passes its ERB as children (Story 18-2)
+        expect(content).to include("**Every component tag closes.**")
+        expect(content).to include("to the component as `children`")
         # Trap 2 — Ruby (not JS) inside {} props
         expect(content).to include("Ruby, not JavaScript")
         # Trap 3 — Accept-header dual shape (exact application/json)

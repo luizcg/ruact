@@ -234,7 +234,7 @@ module Ruact
 
         it "refuses it in a template that also has paired tags" do
           expect { run(%(<Card>\n<Dialog open={true}>\n</Card>)) }
-            .to raise_error(Ruact::ComponentTagError, /<Dialog> at 2 is never closed/)
+            .to raise_error(Ruact::ComponentTagError, /<Dialog> at line 2 is never closed/)
         end
 
         it "refuses a closing tag that closes nothing" do
@@ -245,18 +245,35 @@ module Ruact
 
         it "names the tag left open when closing tags cross" do
           expect { run(%(<Card>\n<Box>\n</Card>\n</Box>)) }
-            .to raise_error(Ruact::ComponentTagError, /<Box> at 2 is never closed/)
+            .to raise_error(Ruact::ComponentTagError, /<Box> at line 2 is never closed/)
         end
 
         it "refuses content between the tags together with a children prop" do
           expect { run(%(<Card children={@x}>y</Card>)) }
             .to raise_error(Ruact::ComponentTagError,
-                            /<Card> at 1 has content between its tags and a `children=\{\.\.\.\}` prop/)
+                            /<Card> at line 1 has content between its tags and a `children=\{\.\.\.\}` prop/)
         end
 
         it "reports the template's own line after a multi-line Suspense and multi-line ERB" do
           source = %(<Suspense\n  fallback="…">\n<% x = 1\n y = 2 %>\n</Suspense>\n<Card>)
-          expect { run(source) }.to raise_error(Ruact::ComponentTagError, /<Card> at 6 is never closed/)
+          expect { run(source) }.to raise_error(Ruact::ComponentTagError, /<Card> at line 6 is never closed/)
+        end
+
+        it "takes `<X/>` (no space) as self-closing on the paired path too" do
+          expect(run(%(<Suspense fallback="…"><LikeButton/></Suspense>))).to eq(
+            %(<ruact-suspense data-ruact-fallback="…"><%= __ruact_component__("LikeButton", {}) %></ruact-suspense>)
+          )
+        end
+
+        it "reads a tag inside ERB the same with or without a closing tag elsewhere in the file" do
+          expect(run(%(<%# TODO: wrap in <Card> later %>\n<B />))).to eq(
+            %(<%# TODO: wrap in <Card> later %>\n<%= __ruact_component__("B", {}) %>)
+          )
+          expect(run(%(<%= "<Foo>" %>))).to eq(%(<%= "<Foo>" %>))
+        end
+
+        it "takes a closing tag with whitespace before `>`" do
+          expect(run(%(<Card>x</Card >))).to eq(%(<%= __ruact_component_open__("Card", {}) %>x</ruact-component>))
         end
 
         it "is a PreprocessorError" do
@@ -416,6 +433,12 @@ module Ruact
 
         it "counts content between the tags as children, unknown to a contract that does not declare it" do
           expect { run("<Card title={@t}>x</Card>") }.to raise_error(ComponentContractError, /children/)
+        end
+
+        it "counts no children for an empty or blank pair, like a self-closing tag" do
+          expect { run("<Card title={@t}></Card>") }.not_to raise_error
+          expect { run("<Panel title={@t}>\n  \n</Panel>") }
+            .to raise_error(ComponentContractError, /missing required slot.*children/m)
         end
 
         it "satisfies a contract that declares children" do

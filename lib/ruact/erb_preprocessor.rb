@@ -38,12 +38,12 @@ module Ruact
     # (`<Card />`), or closing (`</Card>`). Capture 1 is the leading slash
     # (present only on a closing tag); capture 2 is the name. The pairing scan
     # walks these left to right with one stack (Story 18-2).
-    COMPONENT_ANY_TAG_RE = %r{<(/)?([A-Z][A-Za-z0-9]*)(?:\s[^>]*)?>}
+    COMPONENT_ANY_TAG_RE = %r{<(/)?([A-Z][A-Za-z0-9]*)(?:\s[^>]*|/)?>}
 
     # Cheap allocation-free probe (`String#match?`) for "is there ANY PascalCase
     # closing tag at all?". Without one there is nothing to pair, so the
     # template takes the single-pass path; `</Suspense>` matches too — harmless.
-    CLOSING_TAG_PROBE_RE = %r{</[A-Z][A-Za-z0-9]*>}
+    CLOSING_TAG_PROBE_RE = %r{</[A-Z][A-Za-z0-9]*[\s>]}
 
     # Newline-preserving mask for ERB islands (`<% … %>`, `<%= … %>`, `<%# … %>`).
     # The pairing scan blanks these first so a `</Card>` that lives inside
@@ -111,19 +111,23 @@ module Ruact
     private
 
     # The common path: no PascalCase closing tag anywhere, so every component
-    # tag must be self-closing. One gsub, no masking copies — the render
-    # benchmark's allocation profile depends on it.
+    # tag should be self-closing. One gsub, no masking copies — the render
+    # benchmark's allocation profile depends on it. An opening tag that is not
+    # self-closing hands the whole template to {#rewrite_paired}, which masks
+    # ERB: `<%# wrap in <Card> later %>` is a comment, not an unclosed tag.
     def rewrite_self_closing(source)
-      source.gsub(COMPONENT_TAG_RE) do |match|
-        name = ::Regexp.last_match(1)
-        next match if name == "Suspense"
+      catch(:open_tag) do
+        return source.gsub(COMPONENT_TAG_RE) do |match|
+          name = ::Regexp.last_match(1)
+          next match if name == "Suspense"
 
-        attrs = ::Regexp.last_match(2).to_s.strip
-        line  = line_at(source, ::Regexp.last_match.begin(0))
-        raise_unclosed(name, line, attrs: attrs, snippet: match) unless match.end_with?("/>")
+          throw :open_tag unless match.end_with?("/>")
 
-        placeholder(name, attrs, match, line, paired: false)
+          placeholder(name, ::Regexp.last_match(2).to_s.strip, match,
+                      line_at(source, ::Regexp.last_match.begin(0)), :self_closing)
+        end
       end
+      rewrite_paired(source)
     end
 
     # Story 18-2 — pair opening and closing tags with one stack over the
@@ -150,34 +154,47 @@ module Ruact
           # `<Card><Box></Card>`: the tag left open is the one to fix.
           raise_open_tag(source, open) unless open[:name] == tag[:name]
 
-          paired[open[:from]] = true
+          # The value says whether anything sits between the tags: an empty
+          # pair passes no children, like `<Card />`.
+          paired[open[:from]] = !scan[open[:to]...tag[:from]].strip.empty?
         elsif !m[0].end_with?("/>")
           stack << tag
         end
       end
       raise_open_tag(source, stack.first) unless stack.empty?
 
+      splice(source, tags, paired)
+    end
+
+    # +source+ with each tag replaced by its placeholder. +paired+ maps an
+    # opening tag's offset to whether its pair holds anything.
+    def splice(source, tags, paired)
       out    = +""
       cursor = 0
       tags.each do |tag|
         out << source[cursor...tag[:from]]
-        out << rewrite_tag(source, tag, paired: paired[tag[:from]])
+        out << rewrite_tag(source, tag, paired)
         cursor = tag[:to]
       end
       out << source[cursor..]
     end
 
-    def rewrite_tag(source, tag, paired:)
+    def rewrite_tag(source, tag, paired)
       return "</#{WRAPPER_TAG}>" if tag[:closing]
 
+      kind = if !paired.key?(tag[:from]) then :self_closing
+             elsif paired[tag[:from]] then :with_children
+             else :empty_pair
+             end
       text = source[tag[:from]...tag[:to]]
-      attrs = text.match(COMPONENT_TAG_RE)[2].to_s.strip
-      placeholder(tag[:name], attrs, text, line_at(source, tag[:from]), paired: paired)
+      placeholder(tag[:name], text.match(COMPONENT_TAG_RE)[2].to_s.strip, text, line_at(source, tag[:from]), kind)
     end
 
     # The ERB placeholder for one component tag. Props are parsed (and the
-    # opt-in contract checked) here; a paired tag passes `children` as well.
-    def placeholder(name, attrs_string, match, line, paired:)
+    # opt-in contract checked) here; a pair with content passes `children` too.
+    # +kind+ is :self_closing, :empty_pair or :with_children.
+    def placeholder(name, attrs_string, match, line, kind)
+      children = kind == :with_children
       # lazy — only when a tag exists. `resolve_soft` returns the dev-fetched
       # manifest (same source the render path uses, so the boot-race doesn't
       # silence FR100 contract checks in dev) and FAILS OPEN to nil when the
@@ -187,14 +204,14 @@ module Ruact
       @registry = ManifestResolver.resolve_soft if @registry == :default
       pairs = ComponentAttributes.parse(attrs_string)
       names = pairs.map(&:first)
-      raise_children_twice(name, line) if paired && names.include?("children")
+      raise_children_twice(name, line) if children && names.include?("children")
 
       check_known!(name, line)
-      validate_contract(@registry, name, paired ? names + ["children"] : names,
+      validate_contract(@registry, name, children ? names + ["children"] : names,
                         at: { file: @identifier, line: line, snippet: match.strip })
       props_ruby = pairs.map { |prop, expr| "#{prop.inspect} => #{expr}" }.join(", ")
       props_hash = props_ruby.empty? ? "{}" : "{ #{props_ruby} }"
-      helper = paired ? "__ruact_component_open__" : "__ruact_component__"
+      helper = kind == :self_closing ? "__ruact_component__" : "__ruact_component_open__"
       %(<%= #{helper}(#{name.inspect}, #{props_hash}) %>)
     rescue ComponentContractError, ComponentTagError, UnknownComponentError
       # Already carry file:line and the fix — re-raise AS-IS (do NOT append the
@@ -223,7 +240,7 @@ module Ruact
     end
 
     def location(line)
-      [@identifier, line].compact.join(":")
+      @identifier ? "#{@identifier}:#{line}" : "line #{line}"
     end
 
     def raise_open_tag(source, tag)
