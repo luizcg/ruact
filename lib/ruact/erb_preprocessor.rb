@@ -244,13 +244,14 @@ module Ruact
     end
 
     # Whether +offset+ sits inside an ERB island (`<% … %>`): the nearest `<%`
-    # before it opens after the nearest `%>`. No allocation.
+    # before it closes after it. One search back, one short search forward; no
+    # allocation.
     def inside_erb?(source, offset)
       opened = source.rindex("<%", offset)
       return false unless opened
 
-      closed = source.rindex("%>", offset)
-      closed.nil? || opened > closed
+      closed = source.index("%>", opened + 2)
+      closed.nil? || closed + 2 > offset
     end
 
     def line_at(source, offset)
