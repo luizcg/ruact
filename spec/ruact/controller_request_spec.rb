@@ -23,6 +23,7 @@ require "tmpdir"
 require "fileutils"
 require "pathname"
 require "active_model"
+require "ruact/testing"
 
 # Ruact::Controller is normally loaded by the Railtie's `ruact.load_controller`
 # initializer at app boot. This spec instantiates a Rails::Application but does
@@ -96,7 +97,8 @@ module ControllerRequestSpecSupport
                                      "id" => "/DemoButton.jsx",
                                      "name" => "DemoButton",
                                      "chunks" => ["/DemoButton.jsx"]
-                                   }
+                                   },
+                                   "Card" => { "id" => "/Card.jsx", "name" => "Card", "chunks" => ["/Card.jsx"] }
                                  ))
 
       # Story 7.3: Ruact.config is frozen after the first configure block. The
@@ -134,6 +136,8 @@ module ControllerRequestSpecSupport
 
         routes.append do
           get "/demo/show", to: "controller_request_spec_support/demo#show"
+          # Story 18-2 — a component with children, through ActionView.
+          get "/children-demo/show", to: "controller_request_spec_support/children_demo#show"
           # Story 10.0 — implicit-`default_render` page action (empty body), backed
           # by a conventional `Rails.root/app/views` template, for the non-HTML
           # Accept graceful-degradation matrix.
@@ -212,6 +216,21 @@ module ControllerRequestSpecSupport
     append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
 
     def show
+      ruact_render
+    end
+  end
+
+  # Story 18-2 — a client component with children: ERB content (escaped
+  # output, a loop of components, a partial) evaluated in place.
+  class ChildrenDemoController < ActionController::Base
+    include Ruact::Controller
+
+    append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
+
+    def show
+      @title = "Hi"
+      @body  = "<b>not markup</b>"
+      @likes = [1, 2]
       ruact_render
     end
   end
@@ -774,6 +793,31 @@ module Ruact # rubocop:disable Style/OneClassPerFile
           expect(last_response.body).to include("host-app.css")
           expect(last_response.body).to include("DemoButton")
         end
+      end
+    end
+
+    # Story 18-2 — content between a component's tags reaches it as children.
+    describe "a component with children", :story_18_2 do
+      it "passes the ERB between the tags as children: escaped output, a loop of components, a partial",
+         :aggregate_failures do
+        get "/children-demo/show", {}, { "HTTP_ACCEPT" => "text/x-component" }
+        expect(last_response.status).to eq(200), last_response.body[0, 400]
+
+        query = Ruact::Testing::ComponentQuery.new(last_response.body)
+        card  = query.props_for("Card").first
+        expect(card["title"]).to eq("Hi")
+        # first(4): this app runs in development, whose wire adds React's dev slots.
+        p_el, *buttons, span = card["children"]
+        expect(p_el.first(4)).to eq(["$", "p", nil, { "children" => "<b>not markup</b>" }])
+        expect(buttons.map { |b| b[3] }).to eq([{ "n" => 1 }, { "n" => 2 }])
+        expect(span.first(4)).to eq(["$", "span", nil, { "children" => "from a partial" }])
+        expect(query.props_for("DemoButton")).to eq([{ "n" => 1 }, { "n" => 2 }])
+      end
+
+      it "renders the page on a plain browser load" do
+        get "/children-demo/show"
+        expect(last_response.status).to eq(200)
+        expect(last_response.body).to include("Card.jsx")
       end
     end
 

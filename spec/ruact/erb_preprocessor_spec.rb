@@ -6,6 +6,17 @@ module Ruact
   RSpec.describe ErbPreprocessor do
     subject(:transform) { ->(source) { described_class.transform(source) } }
 
+    # Story 18-2 — the preprocessor checks component names against the
+    # loaded manifest. A spec that boots a Rails app leaves one behind; these
+    # examples are about the transform, so they run without one.
+    around do |example|
+      saved = Ruact.manifest
+      Ruact.manifest = nil
+      example.run
+    ensure
+      Ruact.manifest = saved
+    end
+
     # A JSX hand writes `title="Hello"`; the preprocessor read only `{…}` and
     # dropped every other attribute without a word.
     describe "attribute forms, as JSX writes them" do
@@ -64,9 +75,8 @@ module Ruact
     end
 
     describe "opening tags" do
-      it "transforms an opening tag with props" do
-        result = transform.call("<Dialog open={true}>")
-        expect(result).to eq(%(<%= __ruact_component__("Dialog", { "open" => true }) %>))
+      it "refuses an opening tag without children that does not close (Story 18-2)" do
+        expect { transform.call("<Dialog open={true}>") }.to raise_error(Ruact::ComponentTagError, /never closed/)
       end
     end
 
@@ -162,148 +172,174 @@ module Ruact
       end
     end
 
-    # Story 15.2 (FR106) — children inside a PascalCase component tag (a matching
-    # closing tag) fail LOUDLY at preprocess time instead of degrading silently.
-    describe "loud children error (FR106)", :story_15_2 do
+    # Story 18-2 — a component tag with a matching closing tag takes children:
+    # its content stays ERB, inside the wrapper HtmlConverter turns into the
+    # component's `children`. Every opening tag must close (`/>` or `</Name>`).
+    describe "components with children", :story_18_2 do
       def run(source, identifier: nil)
-        described_class.transform(source, identifier: identifier)
+        described_class.transform(source, identifier: identifier, registry: nil)
       end
 
-      it "raises on `<Card>Hello</Card>` naming component + fix (AC#1)" do
-        expect { run("<Card>Hello</Card>") }
-          .to raise_error(ChildrenNotSupportedError) do |e|
-            expect(e.message).to include("Card")
-            expect(e.message).to include("children are not supported")
-            expect(e.message).to include("pass content as a prop")
-            expect(e.message).to include("<Card content={...} />")
+      it "opens a wrapper for a paired tag and closes it at the closing tag" do
+        expect(run(%(<Card title={@t}><p><%= @body %></p></Card>))).to eq(
+          %(<%= __ruact_component_open__("Card", { "title" => @t }) %><p><%= @body %></p></ruact-component>)
+        )
+      end
+
+      it "nests, the same component inside itself included" do
+        expect(run(%(<Card><Card>x</Card><Button /></Card>))).to eq(
+          %(<%= __ruact_component_open__("Card", {}) %><%= __ruact_component_open__("Card", {}) %>x</ruact-component>) +
+          %(<%= __ruact_component__("Button", {}) %></ruact-component>)
+        )
+      end
+
+      it "leaves ERB between the tags as ERB: loops, conditionals, partials" do
+        source = %(<List>\n<% @items.each do |i| %><Item n={i} /><% end %>\n<%= render "row" if @x %>\n</List>)
+        out = run(source)
+        expect(out).to include(%(<% @items.each do |i| %><%= __ruact_component__("Item", { "n" => i }) %><% end %>))
+        expect(out).to include(%(<%= render "row" if @x %>))
+        expect(out).to end_with("</ruact-component>")
+      end
+
+      it "works around and inside Suspense" do
+        out = run(%(<Card><Suspense fallback="…"><Card>late</Card></Suspense></Card>))
+        expect(out).to eq(
+          %(<%= __ruact_component_open__("Card", {}) %><ruact-suspense data-ruact-fallback="…">) +
+          %(<%= __ruact_component_open__("Card", {}) %>late</ruact-component></ruact-suspense></ruact-component>)
+        )
+      end
+
+      it "takes an empty pair" do
+        expect(run("<Card></Card>")).to eq(%(<%= __ruact_component_open__("Card", {}) %></ruact-component>))
+      end
+
+      it "leaves tags inside ERB text alone" do
+        source = %(<Card><%= "</Card>" %></Card>)
+        expect(run(source)).to eq(%(<%= __ruact_component_open__("Card", {}) %><%= "</Card>" %></ruact-component>))
+      end
+
+      it "keeps a self-closing-only template byte-identical to before" do
+        expect(run(%(<div><A x={1} /><B /></div>))).to eq(
+          %(<div><%= __ruact_component__("A", { "x" => 1 }) %><%= __ruact_component__("B", {}) %></div>)
+        )
+      end
+
+      describe "tags that do not pair" do
+        it "refuses an opening tag that never closes, naming file:line and both fixes" do
+          expect { run(%(<p>\n<Dialog open={true}>\n</p>), identifier: "app/views/x.html.erb") }
+            .to raise_error(Ruact::ComponentTagError,
+                            "ruact: <Dialog> at app/views/x.html.erb:2 is never closed — write " \
+                            "`<Dialog ... />` for a component without children, or close it with `</Dialog>`.")
+        end
+
+        it "refuses it in a template that also has paired tags" do
+          expect { run(%(<Card>\n<Dialog open={true}>\n</Card>)) }
+            .to raise_error(Ruact::ComponentTagError, /<Dialog> at line 2 is never closed/)
+        end
+
+        it "refuses a closing tag that closes nothing" do
+          expect { run(%(<div>\n</Card>\n</div>), identifier: "x.html.erb") }
+            .to raise_error(Ruact::ComponentTagError,
+                            "ruact: </Card> at x.html.erb:2 closes nothing — there is no open <Card> before it.")
+        end
+
+        it "names the tag left open when closing tags cross" do
+          expect { run(%(<Card>\n<Box>\n</Card>\n</Box>)) }
+            .to raise_error(Ruact::ComponentTagError, /<Box> at line 2 is never closed/)
+        end
+
+        it "refuses content between the tags together with a children prop" do
+          expect { run(%(<Card children={@x}>y</Card>)) }
+            .to raise_error(Ruact::ComponentTagError,
+                            /<Card> at line 1 has content between its tags and a `children=\{\.\.\.\}` prop/)
+        end
+
+        it "reports the template's own line after a multi-line Suspense and multi-line ERB" do
+          source = %(<Suspense\n  fallback="…">\n<% x = 1\n y = 2 %>\n</Suspense>\n<Card>)
+          expect { run(source) }.to raise_error(Ruact::ComponentTagError, /<Card> at line 6 is never closed/)
+        end
+
+        it "takes `<X/>` (no space) as self-closing on the paired path too" do
+          expect(run(%(<Suspense fallback="…"><LikeButton/></Suspense>))).to eq(
+            %(<ruact-suspense data-ruact-fallback="…"><%= __ruact_component__("LikeButton", {}) %></ruact-suspense>)
+          )
+        end
+
+        it "reads a tag inside ERB the same with or without a closing tag elsewhere in the file" do
+          expect(run(%(<%# TODO: wrap in <Card> later %>\n<B />))).to eq(
+            %(<%# TODO: wrap in <Card> later %>\n<%= __ruact_component__("B", {}) %>)
+          )
+          expect(run(%(<%= "<Foo>" %>))).to eq(%(<%= "<Foo>" %>))
+        end
+
+        it "leaves a component tag inside ERB alone, with or without a closing tag elsewhere" do
+          comment = %(<%# <LikeButton likes={@likes} /> %>\n<p>x</p>)
+          expect(run(comment)).to eq(comment)
+          with_pair = %(#{comment}<Card>y</Card>)
+          expect(run(with_pair)).to start_with(comment)
+        end
+
+        it "counts an ERB comment alone between the tags as no children" do
+          expect(run("<Card><%# todo %></Card>"))
+            .to eq(%(<%= __ruact_component_open__("Card", {}) %><%# todo %></ruact-component>))
+        end
+
+        it "takes `</Suspense >` and a stray `</X/>`" do
+          expect(run(%(<Suspense fallback="x"><B /></Suspense >))).to end_with("</ruact-suspense>")
+          expect { run("<p>x</p></LikeButton/>") }.to raise_error(Ruact::ComponentTagError, /closes nothing/)
+        end
+
+        it "takes a closing tag with whitespace before `>`" do
+          expect(run(%(<Card>x</Card >))).to eq(%(<%= __ruact_component_open__("Card", {}) %>x</ruact-component>))
+        end
+
+        it "is a PreprocessorError" do
+          expect(Ruact::ComponentTagError.ancestors).to include(Ruact::PreprocessorError)
+        end
+
+        it "stays linear on thousands of unpaired closing tags" do
+          source = "<Card>#{'</Card>' * 5000}"
+          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          expect { run(source) }.to raise_error(Ruact::ComponentTagError, /closes nothing/)
+          expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 1.0
+        end
+      end
+    end
+
+    # Story 18-2 — a component name the manifest does not have fails while the
+    # template compiles, with its file:line, when a manifest is available.
+    describe "unknown component names", :story_18_2 do
+      let(:manifest) do
+        ClientManifest.from_hash(
+          "LikeButton" => { "id" => "/LikeButton.jsx", "name" => "LikeButton", "chunks" => [] },
+          "posts/_post_card" => { "id" => "/posts/_post_card.jsx", "name" => "default", "chunks" => [] }
+        )
+      end
+
+      def run(source, identifier: "app/views/home/index.html.erb")
+        described_class.transform(source, identifier: identifier, registry: manifest)
+      end
+
+      it "names the tag, the file:line and the closest component" do
+        expect { run(%(<h1>Hi</h1>\n\n<LikeButon likes={1} />)) }
+          .to raise_error(UnknownComponentError) do |e|
+            expect(e.message).to start_with(
+              %(ruact: <LikeButon> at app/views/home/index.html.erb:3 — Component "LikeButon" not found in manifest.)
+            )
+            expect(e.message).to include(%(Did you mean "LikeButton"?))
           end
       end
 
-      it "is a Ruact::PreprocessorError (AC#1 — subclass IS-A base)" do
-        expect { run("<Card>Hello</Card>") }.to raise_error(Ruact::PreprocessorError)
+      it "checks paired tags too" do
+        expect { run(%(<LikeButon>x</LikeButon>)) }.to raise_error(UnknownComponentError, /<LikeButon> at/)
       end
 
-      it "raises on an empty pair `<Card></Card>` (AC#1)" do
-        expect { run("<Card></Card>") }.to raise_error(ChildrenNotSupportedError, /Card/)
+      it "accepts a co-located component from any folder, the controller not being known yet" do
+        expect { run(%(<PostCard />), identifier: "app/views/shared/_list.html.erb") }.not_to raise_error
       end
 
-      it "raises on multi-line children (AC#1)" do
-        source = "<Card>\n  <p>hi</p>\n</Card>"
-        expect { run(source) }.to raise_error(ChildrenNotSupportedError, /children are not supported/)
-      end
-
-      it "raises on a paired tag that also holds a nested component" do
-        expect { run("<Card><Button /></Card>") }
-          .to raise_error(ChildrenNotSupportedError, /<Card>/)
-      end
-
-      it "names the supplied identifier and the correct line for a non-first-line pair (AC#4)" do
-        source = "line1\nline2\n<Card>Hello</Card>"
-        expect { run(source, identifier: "app/views/posts/show.html.erb") }
-          .to raise_error(ChildrenNotSupportedError) do |e|
-            expect(e.message).to include("app/views/posts/show.html.erb:3")
-          end
-      end
-
-      it "reports the opening tag's line, honoring attributes on the opening tag" do
-        expect { run("<Card variant={:wide}>x</Card>", identifier: "t.erb") }
-          .to raise_error(ChildrenNotSupportedError, /t\.erb:1/)
-      end
-
-      # Regression (Codex Round 1, Patch 1): a MULTI-LINE Suspense opening tag
-      # must not shift the reported line — the `<Card>` below is physically on
-      # line 5 and must report :5 (Suspense is masked newline-for-newline).
-      it "reports the exact source line even after a multi-line Suspense opening" do
-        source = <<~ERB
-          <Suspense
-            fallback="loading"
-            delay="2.5">
-          </Suspense>
-          <Card>Hello</Card>
-        ERB
-        expect { run(source, identifier: "t.erb") }
-          .to raise_error(ChildrenNotSupportedError, /t\.erb:5/)
-      end
-
-      # Regression (Codex Round 2, Patch 1): a `</Dialog>` living inside an ERB
-      # island (Ruby string/comment) must NOT be mistaken for a real component
-      # closing tag — a valid bare `<Dialog open={true}>` stays valid.
-      it "does not false-pair a bare opening with a `</Tag>` inside an ERB island" do
-        source = %(<Dialog open={true}>\n<% x = "</Dialog>" %>)
-        expect { run(source) }.not_to raise_error
-      end
-
-      it "still fires when the closing tag is real ERB body, not inside `<% %>`" do
-        expect { run("<Card><%= @body %></Card>") }
-          .to raise_error(ChildrenNotSupportedError, /Card/)
-      end
-
-      # Regression (Codex Round 2, Patch 2): many bare non-self-closing openings
-      # with no close must stay linear (single-pass stack scan) and silent (D3).
-      it "stays silent and does not blow up on many bare unclosed openings" do
-        source = "<Dialog open={true}>\n" * 5000
-        expect { run(source) }.not_to raise_error
-      end
-
-      # Regression (Codex Round 3, Patch 1): stray/unmatched PascalCase closing
-      # tags (no preceding matching open) are literal text — never an error — and
-      # must stay linear (per-name O(1) lookup, no `rindex`). Correctness pin;
-      # perf verified live, not timed here (avoids a flaky benchmark spec).
-      it "does not raise on stray closing tags with no matching opening" do
-        source = "</Card>\n" * 5000
-        expect { run(source) }.not_to raise_error
-      end
-
-      it "still raises when a real opening precedes the stray closes" do
-        source = "<Card>x</Card>\n#{'</Card>' * 100}"
-        expect { run(source) }.to raise_error(ChildrenNotSupportedError, /Card/)
-      end
-
-      # AC#2 regression — the loud error must NOT fire on any valid pattern.
-      describe "does NOT fire on valid patterns (AC#2 byte-identical)" do
-        it "self-closing tag, no props" do
-          expect { run("<Button />") }.not_to raise_error
-        end
-
-        it "self-closing tag with props" do
-          expect { run("<LikeButton postId={@post.id} />") }.not_to raise_error
-        end
-
-        it "bare non-self-closing opening tag with NO closing tag (`<Dialog open={true}>`)" do
-          expect { run("<Dialog open={true}>") }.not_to raise_error
-        end
-
-        it "nested-brace prop value" do
-          expect { run("<Select options={Category.all.map { |c| c.id }} />") }.not_to raise_error
-        end
-
-        it "multiple self-closing components" do
-          expect { run('<Button /> and <Badge label={"hello"} />') }.not_to raise_error
-        end
-
-        it "mixed HTML around a self-closing component" do
-          source = %(<div class="container">\n  <h1>Hi</h1>\n  <LikeButton postId={1} />\n</div>)
-          expect { run(source) }.not_to raise_error
-        end
-
-        it "emits byte-identical output for `<Dialog open={true}>`" do
-          expect(run("<Dialog open={true}>"))
-            .to eq(%(<%= __ruact_component__("Dialog", { "open" => true }) %>))
-        end
-      end
-
-      # AC#3 — Suspense children are the ONE legitimate paired PascalCase tag and
-      # must never trip the error (normalized to <ruact-suspense> in Step 1).
-      describe "Suspense children never trip the error (AC#3)" do
-        it "does not raise for `<Suspense><Spinner /></Suspense>`" do
-          expect { run(%(<Suspense fallback="loading"><Spinner /></Suspense>)) }.not_to raise_error
-        end
-
-        it "normalizes Suspense to <ruact-suspense> exactly as today" do
-          result = run(%(<Suspense fallback="loading"><Spinner /></Suspense>))
-          expect(result).to include(%(data-ruact-fallback="loading"))
-          expect(result).to include("</ruact-suspense>")
-        end
+      it "fails open without a manifest — the render path reports it, as before" do
+        expect { described_class.transform(%(<Nope />), registry: nil) }.not_to raise_error
       end
     end
 
@@ -400,6 +436,44 @@ module Ruact
 
         it "passes when the declared slot is supplied as an attribute" do
           expect { run("<Card title={@t} header={@h} />") }.not_to raise_error
+        end
+      end
+
+      # Story 18-2 — content between the tags is the `children` prop.
+      describe "children", :story_18_2 do
+        let(:registry) do
+          registry_for(
+            "Card" => { "props" => { "title" => "required" } },
+            "Panel" => { "props" => { "title" => "required" }, "slots" => { "children" => "required" } }
+          )
+        end
+
+        it "counts content between the tags as children, unknown to a contract that does not declare it" do
+          expect { run("<Card title={@t}>x</Card>") }.to raise_error(ComponentContractError, /children/)
+        end
+
+        it "counts no children for an empty or blank pair, like a self-closing tag" do
+          expect { run("<Card title={@t}></Card>") }.not_to raise_error
+          expect { run("<Panel title={@t}>\n  \n</Panel>") }
+            .to raise_error(ComponentContractError, /missing required slot.*children/m)
+        end
+
+        it "counts an ERB comment alone between the tags as no children" do
+          expect { run("<Card title={@t}><%# todo %></Card>") }.not_to raise_error
+        end
+
+        it "counts ERB alone between the tags as children" do
+          expect { run("<Card title={@t}><%= @body %></Card>") }.to raise_error(ComponentContractError, /children/)
+        end
+
+        it "satisfies a contract that declares children" do
+          expect { run("<Panel title={@t}>x</Panel>") }.not_to raise_error
+        end
+
+        it "reports a required children slot left empty by a self-closing tag" do
+          expect do
+            run("<Panel title={@t} />")
+          end.to raise_error(ComponentContractError, /missing required slot.*children/m)
         end
       end
     end

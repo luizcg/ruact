@@ -11,7 +11,8 @@ module ConformanceFixtures
   DIR = File.expand_path("../../fixtures/flight", __dir__)
 
   MANIFEST = {
-    "LikeButton" => { "id" => "/LikeButton.jsx", "name" => "LikeButton", "chunks" => ["/LikeButton.jsx"] }
+    "LikeButton" => { "id" => "/LikeButton.jsx", "name" => "LikeButton", "chunks" => ["/LikeButton.jsx"] },
+    "Card" => { "id" => "/Card.jsx", "name" => "Card", "chunks" => ["/Card.jsx"] }
   }.freeze
 
   # Sibling children, an ERB loop of client components (ERB has no `key`), a
@@ -25,11 +26,22 @@ module ConformanceFixtures
     </main>
   ERB
 
-  def self.render_tree(development:)
+  # Story 18-2 — a client component with children: server HTML, a loop of
+  # client components, and the same component nested inside itself.
+  CHILDREN = <<~ERB
+    <Card title={@title}>
+      <p>from ERB</p>
+      <% @likes.each do |n| %><LikeButton likes={n} tags={["only"]} /><% end %>
+      <Card title="inner">nested</Card>
+    </Card>
+  ERB
+
+  def self.render_tree(development:, erb: TREE)
     pipeline = Ruact::RenderPipeline.new(Ruact::ClientManifest.from_hash(MANIFEST), development: development)
     ctx = Object.new
     ctx.instance_variable_set(:@likes, [1, 2, 3])
-    pipeline.render({ erb: TREE, binding: ctx.instance_eval { binding } }, mode: :string)
+    ctx.instance_variable_set(:@title, "Server title")
+    pipeline.render({ erb: erb, binding: ctx.instance_eval { binding } }, mode: :string)
   end
 
   # A Suspense child that ran past `suspense_timeout`: its row is an error.
@@ -49,7 +61,9 @@ module ConformanceFixtures
   FILES = {
     "conformance_tree.txt" => -> { render_tree(development: false) },
     "conformance_tree_dev.txt" => -> { render_tree(development: true) },
-    "conformance_suspense_timeout.txt" => -> { render_timeout }
+    "conformance_suspense_timeout.txt" => -> { render_timeout },
+    "conformance_children.txt" => -> { render_tree(development: false, erb: CHILDREN) },
+    "conformance_children_dev.txt" => -> { render_tree(development: true, erb: CHILDREN) }
   }.freeze
 end
 

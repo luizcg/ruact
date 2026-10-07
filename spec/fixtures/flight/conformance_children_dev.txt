@@ -1,0 +1,3 @@
+1:I["/Card.jsx",[],"Card"]
+2:I["/LikeButton.jsx",[],"LikeButton"]
+0:["$","$L1",null,{"title":"Server title","children":[["$","p",null,{"children":"from ERB"},null,null,1],["$","$L2",null,{"likes":1,"tags":["only"]},null,null,1],["$","$L2",null,{"likes":2,"tags":["only"]},null,null,1],["$","$L2",null,{"likes":3,"tags":["only"]},null,null,1],["$","$L1",null,{"title":"inner","children":"nested"},null,null,1]]},null,null,1]

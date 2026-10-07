@@ -113,7 +113,7 @@ RSpec.describe "README.md", :story_5_14 do
   def expected_demo_img
     <<~HTML
       <img src="https://ruact.dev/readme-write-verify.gif" width="800"
-           alt="An ERB template holding a &lt;LikeButton likes=&#123;@likes&#125; /&gt; tag, and the &quot;use client&quot; React component that tag resolves to. The component renders in a browser and its count changes when it is clicked. Children are then put inside the tag — the JSX habit — and the next request stops server-side with Ruact::ChildrenNotSupportedError, which names the component, the template file and line, and the fix. The children come out again and the page renders." />
+           alt="An ERB template holding a &lt;LikeButton likes=&#123;@likes&#125; /&gt; tag, and the &quot;use client&quot; React component that tag resolves to. The component renders in a browser and its count changes when it is clicked. The tag&#39;s name is then misspelled, and the next request stops server-side with Ruact::UnknownComponentError, which names the tag, the template file and line, and the component it was probably meant to be. The name is corrected and the page renders." />
     HTML
   end
 
@@ -230,7 +230,7 @@ RSpec.describe "README.md", :story_5_14 do
     alt = demo_node["alt"].to_s
 
     expect(alt.split.length).to be > 40, "the demo's alt text does not describe the arc: #{alt.inspect}"
-    expect(alt).to include("Ruact::ChildrenNotSupportedError")
+    expect(alt).to include("Ruact::UnknownComponentError")
     expect(alt).not_to match(/\bbuild\b/i),
                        "the failure the demo shows happens server-side at render, not at build — " \
                        "see Story 5.2 AC4"

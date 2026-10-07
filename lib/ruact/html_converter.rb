@@ -182,12 +182,30 @@ module Ruact
     def convert_element(node)
       tag = node.name.downcase
       return convert_suspense_element(node) if tag == "ruact-suspense"
+      return convert_component_with_children(node) if tag == ErbPreprocessor::WRAPPER_TAG
 
       props = build_props(node, tag)
       children = convert_children(node)
       props["children"] = children.length == 1 ? children.first : children unless children.empty?
 
       Flight::ReactElement.new(type: tag, key: node["data-react-key"], props: props)
+    end
+
+    # Story 18-2 — a component with children: the wrapper the preprocessor put
+    # around the content between `<Card>` and `</Card>`. Its children become the
+    # component's `children` prop, converted like any element's; an empty pair
+    # passes none, like `<Card />`.
+    def convert_component_with_children(node)
+      token = node["data-ruact-token"]
+      entry = @registry.find { |c| c[:token] == token }
+      raise Ruact::HtmlConverterError, "ruact: no component registered for #{token.inspect}" unless entry
+
+      props = entry[:props]
+      children = convert_children(node)
+      unless children.empty?
+        props = props.merge("children" => children.length == 1 ? children.first : children)
+      end
+      Flight::ReactElement.new(type: entry[:ref], key: nil, props: props)
     end
 
     def convert_suspense_element(node)

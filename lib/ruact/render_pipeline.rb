@@ -251,12 +251,13 @@ module Ruact
       receiver.instance_variable_set(:@__ruact_render_context__, render_context)
       return if receiver.respond_to?(:__ruact_component__)
 
-      receiver.define_singleton_method(:__ruact_component__) do |name, props = {}|
-        ctx = instance_variable_get(:@__ruact_render_context__)
-        raise Ruact::Error, "ruact: __ruact_component__ called outside an active render context" if ctx.nil?
+      ErbPreprocessor::PLACEHOLDERS.each do |helper, placeholder|
+        receiver.define_singleton_method(helper) do |name, props = {}|
+          ctx = instance_variable_get(:@__ruact_render_context__)
+          raise Ruact::Error, "ruact: #{helper} called outside an active render context" if ctx.nil?
 
-        token = ctx.register(name, props)
-        "<!-- #{token} -->"
+          placeholder.call(ctx.register(name, props))
+        end
       end
     end
   end

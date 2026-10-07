@@ -1,0 +1,2 @@
+ruact: <LikeButon> at app/views/home/index.html.erb:3 — Component "LikeButon" not found in manifest.
+  Did you mean "LikeButton"?

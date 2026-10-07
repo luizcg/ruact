@@ -212,6 +212,14 @@ module Ruact
         expect(old).to have_ruact_component("LikeButton").with_props("title" => long)
       end
 
+      it "finds a component inside another's children, and shows the children in its props (Story 18-2)",
+         :aggregate_failures do
+        wire = render_wire("<PostCard title={1}><p>body</p><LikeButton postId={9} /></PostCard>")
+        expect(wire).to have_ruact_component("LikeButton").with_props("postId" => 9)
+        card = Ruact::Testing::ComponentQuery.new(wire).props_for("PostCard").first
+        expect(card["children"].map { |child| child[1] }).to eq(["p", "$L2"])
+      end
+
       it "reads an import row in the older [path, name, chunks] order" do
         wire = %(1:I["/assets/LikeButton-abc.js","LikeButton",["/assets/LikeButton-abc.js"]]\n) +
                %(0:["$","$L1",null,{"postId":3}]\n)
