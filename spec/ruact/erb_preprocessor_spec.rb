@@ -441,6 +441,10 @@ module Ruact
             .to raise_error(ComponentContractError, /missing required slot.*children/m)
         end
 
+        it "counts ERB alone between the tags as children" do
+          expect { run("<Card title={@t}><%= @body %></Card>") }.to raise_error(ComponentContractError, /children/)
+        end
+
         it "satisfies a contract that declares children" do
           expect { run("<Panel title={@t}>x</Panel>") }.not_to raise_error
         end

@@ -155,8 +155,9 @@ module Ruact
           raise_open_tag(source, open) unless open[:name] == tag[:name]
 
           # The value says whether anything sits between the tags: an empty
-          # pair passes no children, like `<Card />`.
-          paired[open[:from]] = !scan[open[:to]...tag[:from]].strip.empty?
+          # pair passes no children, like `<Card />`. Read from the template
+          # itself — ERB between the tags (`<%= @body %>`) is content.
+          paired[open[:from]] = !source[open[:to]...tag[:from]].strip.empty?
         elsif !m[0].end_with?("/>")
           stack << tag
         end
