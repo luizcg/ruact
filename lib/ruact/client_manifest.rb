@@ -89,6 +89,24 @@ module Ruact
       end
     end
 
+    # Story 18-2 — whether +name+ resolves for SOME controller: the shared key,
+    # or a co-located one in any folder (`posts/_like_button`). The ERB
+    # preprocessor asks while it compiles a template, before it knows which
+    # controller will render it, so a co-located component is never refused
+    # for being looked up from a shared partial.
+    def component?(name)
+      return true if include?(name)
+
+      suffix = "/_#{pascal_to_snake_case(name)}"
+      entries_by_name.keys.any? { |key| key.end_with?(suffix) }
+    end
+
+    # Story 18-2 — the "not found" message {#reference_for} raises, for the
+    # preprocessor to put the template's file:line in front of.
+    def unknown_component_message(name, controller_path: nil)
+      build_unknown_component_message(name, controller_path)
+    end
+
     # Story 13.5 (FR100) — return the optional component +contract+ Hash for
     # +name+, or +nil+ when the component declared none (or is absent from the
     # manifest). Honors the same co-located/shared +resolve_key+ precedence as

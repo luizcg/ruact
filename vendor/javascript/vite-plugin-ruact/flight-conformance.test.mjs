@@ -32,7 +32,11 @@ function Bad() {
 function LikeButton({ likes, tags }) {
   return h("button", null, `${likes}:${Array.isArray(tags) ? `[${tags.join(",")}]` : String(tags)}`);
 }
-setModuleRegistry({ "/LikeButton.jsx": { LikeButton }, "/Bad.jsx": { Bad } });
+function Card({ title, children }) {
+  return h("section", null, h("h2", null, title), children);
+}
+
+setModuleRegistry({ "/LikeButton.jsx": { LikeButton }, "/Bad.jsx": { Bad }, "/Card.jsx": { Card } });
 
 function streamOf(chunks) {
   return new ReadableStream({
@@ -100,6 +104,22 @@ describe(`React's Flight client (${MODE}) reads a page the Ruby side rendered`, 
       expect(container.innerHTML).toBe(html);
       act(() => root.unmount());
     }
+  });
+});
+
+describe(`a client component with children from ERB (${MODE}) — Story 18-2`, () => {
+  const fixture = MODE === "development" ? "conformance_children_dev.txt" : "conformance_children.txt";
+
+  it("renders the server's children inside the component, a nested one included, and logs nothing", async () => {
+    const { container, root } = await mount(decode([read(fixture)]));
+    expect(container.innerHTML).toBe(
+      "<section><h2>Server title</h2><p>from ERB</p>" +
+      "<button>1:[only]</button><button>2:[only]</button><button>3:[only]</button>" +
+      "<section><h2>inner</h2>nested</section></section>",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(consoleError).not.toHaveBeenCalled();
+    act(() => root.unmount());
   });
 });
 

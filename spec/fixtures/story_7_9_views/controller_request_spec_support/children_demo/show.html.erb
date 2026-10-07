@@ -1,0 +1,5 @@
+<Card title={@title}>
+  <p><%= @body %></p>
+  <% @likes.each do |n| %><DemoButton n={n} /><% end %>
+  <%= render "controller_request_spec_support/children_demo/item", label: "from a partial" %>
+</Card>

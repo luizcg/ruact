@@ -77,14 +77,14 @@ READ IT instead of simulating the name generation. Regenerate after routes/queri
 
 ## Five traps
 
-1. **Component tags take no children.** Client component tags are self-closing
-   ONLY: `<Card content={@body} />`, never `<Card>...</Card>`. Children (a
-   matching closing tag) fail LOUDLY with a `PreprocessorError` at preprocess
-   time — pass content as a prop instead. Sole exception: the built-in
-   `<Suspense fallback="...">...</Suspense>` pair.
+1. **Every component tag closes.** `<Badge label={@x} />` has no children;
+   `<Card title={@t}>...</Card>` passes the ERB between its tags — HTML, loops,
+   partials, other components — to the component as `children`. An opening tag
+   that never closes, or a closing tag with no opening, fails LOUDLY with a
+   `PreprocessorError` naming file:line. `<Suspense fallback="...">` pairs too.
 2. **`{}` props are Ruby, not JavaScript.** `<Badge label={@post.title} />`
    evaluates `@post.title` as a Ruby expression in the ERB. No JS ternaries,
-   no `{...spread}`, no JSX children. A quoted value (`title="Hi"`) is a
+   no `{...spread}`. A quoted value (`title="Hi"`) is a
    plain string and a bare attribute is `true`, as in JSX.
 3. **One action, two response shapes.** A `Ruact::Server` non-GET action
    answers JSON — its instance variables, or `204`, or `{"$redirect": path}` —

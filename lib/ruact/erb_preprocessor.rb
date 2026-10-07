@@ -14,186 +14,253 @@ module Ruact
   # The placeholder is replaced by an HTML comment with a unique token:
   #   <!-- __RUACT_0__ -->
   #
+  # A component with children (Story 18-2) keeps its content as ERB, inside a
+  # wrapper element HtmlConverter turns into the component's `children`:
+  #
+  #   <Card title={@t}><p><%= @body %></p></Card>
+  #   → <%= __ruact_component_open__("Card", { "title" => @t }) %><p><%= @body %></p></ruact-component>
+  #
   # The actual ClientReference + props are registered in the binding and
   # collected by HtmlConverter after the ERB renders.
-  class ErbPreprocessor
+  class ErbPreprocessor # rubocop:disable Metrics/ClassLength
     # Matches a PascalCase opening tag with optional attributes and optional self-closing.
     # Examples:
     #   <Button />
     #   <LikeButton postId={@post.id} initialCount={5} />
-    #   <Dialog open={true}>
+    #   <Card title={@post.title}>
     COMPONENT_TAG_RE = %r{<([A-Z][A-Za-z0-9]*)(\s[^>]*)?\s*/?>}
 
     # Matches <Suspense ...> opening tags (handled before general PascalCase processing).
     SUSPENSE_OPEN_RE  = /<Suspense\b([^>]*?)>/m
     SUSPENSE_CLOSE_RE = %r{</Suspense>}
 
-    # Story 15.2 (FR106) — matches ANY PascalCase component tag: opening
-    # (`<Card>`), self-closing (`<Card />`), or closing (`</Card>`). Capture 1 is
-    # the leading slash (present only on a closing tag); capture 2 is the name.
-    # The loud-children detection scans these left-to-right with a stack: an
-    # opening pushes, a self-closing (`/>`) is ignored, and a closing that pops a
-    # matching opening means that opening had children (paired usage) → loud
-    # error. A single linear pass (no backreference/lazy backtracking) keeps the
-    # component-dense fast path linear regardless of how many tags go unclosed.
+    # Matches ANY PascalCase component tag: opening (`<Card>`), self-closing
+    # (`<Card />`), or closing (`</Card>`). Capture 1 is the leading slash
+    # (present only on a closing tag); capture 2 is the name. The pairing scan
+    # walks these left to right with one stack (Story 18-2).
     COMPONENT_ANY_TAG_RE = %r{<(/)?([A-Z][A-Za-z0-9]*)(?:\s[^>]*)?>}
 
     # Cheap allocation-free probe (`String#match?`) for "is there ANY PascalCase
-    # closing tag at all?". The loud-children scan only matters when one exists,
-    # so this gates the (copy-heavy) mask/scan work off the common all-self-
-    # closing fast path. `</Suspense>` matches too — harmless, it gets masked.
+    # closing tag at all?". Without one there is nothing to pair, so the
+    # template takes the single-pass path; `</Suspense>` matches too — harmless.
     CLOSING_TAG_PROBE_RE = %r{</[A-Z][A-Za-z0-9]*>}
 
     # Newline-preserving mask for ERB islands (`<% … %>`, `<%= … %>`, `<%# … %>`).
-    # The loud-children scan blanks these first so a `</Card>` that lives inside
-    # Ruby/ERB string or comment text can never be mistaken for a real component
-    # closing tag (a valid bare `<Dialog>` opening must not error because some
-    # unrelated `<% "</Dialog>" %>` appears later).
+    # The pairing scan blanks these first so a `</Card>` that lives inside
+    # Ruby/ERB string or comment text is never taken for a real closing tag.
     ERB_ISLAND_RE = /<%.*?%>/m
+
+    # The element a paired component's content is wrapped in until
+    # {HtmlConverter} turns it into the component's `children`.
+    WRAPPER_TAG = "ruact-component"
+
+    # What each helper the transformed template calls leaves in the HTML, by
+    # its render-context token: a component, or the opening of one with
+    # children. {RenderPipeline} installs these for a plain-ERB render;
+    # ViewHelper writes the same strings in ActionView.
+    PLACEHOLDERS = {
+      __ruact_component__: ->(token) { "<!-- #{token} -->" },
+      __ruact_component_open__: ->(token) { %(<#{WRAPPER_TAG} data-ruact-token="#{token}">) }
+    }.freeze
 
     # Transform ERB source, replacing component tags with ERB placeholders.
     # Returns the transformed source string.
     #
     # +identifier+ is the template path (forwarded by {ErbPreprocessorHook} as
-    # +template.identifier+) so a Story 13.5 contract violation can name the
-    # call site's file:line. +registry+ is the component contract source — an
-    # injectable seam (Story 7.1 explicit-context grain); it defaults to the
-    # process-loaded {Ruact.manifest}. Pass +registry: nil+ (or a stub) in
-    # specs to control contract lookup; +nil+ forces fail-open (no validation).
+    # +template.identifier+) so an error can name the call site's file:line.
+    # +registry+ is the component contract source — an injectable seam (Story
+    # 7.1 explicit-context grain); it defaults to the process-loaded
+    # {Ruact.manifest}. Pass +registry: nil+ (or a stub) in specs to control
+    # contract lookup; +nil+ forces fail-open (no validation).
     def self.transform(source, identifier: nil, registry: :default)
       new.transform(source, identifier: identifier, registry: registry)
     end
 
     def transform(source, identifier: nil, registry: :default)
       # NOTE: +registry+ stays the +:default+ sentinel here. It is resolved to
-      # +Ruact.manifest+ LAZILY, only inside the component-tag block below — a
-      # source with no PascalCase tags must touch the registry not at all
-      # (AC2/AC6 fast-path invariant).
-      # Step 1: transform <Suspense> paired tags into <ruact-suspense> HTML elements.
-      # This runs before the general component regex so Suspense isn't treated as a component.
-      result = source
-               .gsub(SUSPENSE_OPEN_RE) do
-                 attrs    = ::Regexp.last_match(1)
-                 fallback = extract_string_attr(attrs, "fallback") || ""
-                 escaped  = fallback.gsub('"', "&quot;")
-                 # Optional `delay="2.5"` — the server-side wait (seconds) before
-                 # the deferred chunk streams. Forwarded to SuspenseElement#delay.
-                 delay      = extract_string_attr(attrs, "delay")
-                 delay_attr = delay ? %( data-ruact-delay="#{delay.gsub('"', '&quot;')}") : ""
-                 %(<ruact-suspense data-ruact-fallback="#{escaped}"#{delay_attr}>)
+      # +Ruact.manifest+ LAZILY, only when a component tag exists — a source
+      # with no PascalCase tags must touch the registry not at all (AC2/AC6
+      # fast-path invariant).
+      @identifier = identifier
+      @registry   = registry
+
+      # Step 1: component tags → ERB placeholders. Story 18-2: a tag with a
+      # matching closing tag is a component WITH children; its content stays
+      # ERB, evaluated in place, inside a wrapper element.
+      result = if source.match?(CLOSING_TAG_PROBE_RE)
+                 rewrite_paired(source)
+               else
+                 rewrite_self_closing(source)
                end
-        .gsub(SUSPENSE_CLOSE_RE, "</ruact-suspense>")
 
-      # Step 1.5 (Story 15.2 / FR106): before the general component pass, fail
-      # loudly if any PascalCase component tag is used with children (a matching
-      # closing tag). Silent degradation of `<Card>Hello</Card>` — the #1
-      # predictable JSX-habit mistake — becomes a self-contained, re-raised-as-is
-      # PreprocessorError naming the fix. It scans the ORIGINAL +source+ (so
-      # file:line is exact) and masks Suspense (the one legitimate paired
-      # PascalCase tag) newline-for-newline, so `<Suspense>...</Suspense>` can
-      # never trip and every reported line matches the template verbatim.
-      detect_children!(source, identifier)
-
-      # Step 2: transform remaining PascalCase self-closing / opening component tags.
-      result.gsub(COMPONENT_TAG_RE) do |match|
-        component_name = ::Regexp.last_match(1)
-        attrs_string   = ::Regexp.last_match(2).to_s.strip
-        match_start    = ::Regexp.last_match.begin(0)
-        line           = result[0...match_start].count("\n") + 1
-
-        begin
-          # lazy — only when a tag exists. `resolve_soft` returns the dev-fetched
-          # manifest (same source the render path uses, so the boot-race doesn't
-          # silence FR100 contract checks in dev) and FAILS OPEN to nil when the
-          # manifest is unresolvable (contract validation is opt-in/fail-open;
-          # the render path surfaces the clear error). In prod this is the
-          # boot-loaded Ruact.manifest, unchanged.
-          registry = ManifestResolver.resolve_soft if registry == :default
-          pairs = ComponentAttributes.parse(attrs_string)
-          validate_contract(registry, component_name, pairs.map(&:first),
-                            at: { file: identifier, line: line, snippet: match.strip })
-          props_ruby = pairs.map { |name, expr| "#{name.inspect} => #{expr}" }.join(", ")
-          props_hash = props_ruby.empty? ? "{}" : "{ #{props_ruby} }"
-          %(<%= __ruact_component__(#{component_name.inspect}, #{props_hash}) %>)
-        rescue ComponentContractError
-          # Already carries file:line + offending prop + suggestion — re-raise
-          # AS-IS (do NOT append the generic "at line N: snippet" tail).
-          raise
-        rescue PreprocessorError => e
-          raise PreprocessorError, "#{e.message} at line #{line}: #{match.strip}"
+      # Step 2: <Suspense> paired tags → <ruact-suspense> HTML elements.
+      result
+        .gsub(SUSPENSE_OPEN_RE) do
+          attrs    = ::Regexp.last_match(1)
+          fallback = extract_string_attr(attrs, "fallback") || ""
+          escaped  = fallback.gsub('"', "&quot;")
+          # Optional `delay="2.5"` — the server-side wait (seconds) before
+          # the deferred chunk streams. Forwarded to SuspenseElement#delay.
+          delay      = extract_string_attr(attrs, "delay")
+          delay_attr = delay ? %( data-ruact-delay="#{delay.gsub('"', '&quot;')}") : ""
+          %(<ruact-suspense data-ruact-fallback="#{escaped}"#{delay_attr}>)
         end
-      end
+        .gsub(SUSPENSE_CLOSE_RE, "</ruact-suspense>")
     end
 
     private
 
-    # Story 15.2 (FR106) — raise a loud, self-contained {ChildrenNotSupportedError}
-    # on the FIRST PascalCase component tag used with children (a matching closing
-    # tag). +source+ is the ORIGINAL template text; +identifier+ is the template
-    # path (from {ErbPreprocessorHook}). Suspense — the one legitimate paired
-    # PascalCase tag — is masked newline-for-newline first, so it never trips AND
-    # every byte position (hence every reported line) still lines up with the raw
-    # template. The line uses the same idiom as Step 2 (`count("\n") + 1`) on the
-    # OPENING tag's offset. Message mirrors {ComponentContract.raise_error} shape
-    # so both loud preprocess errors read identically. A no-op when no pair is
-    # present — the fast path stays byte-identical.
-    def detect_children!(source, identifier)
-      # Fast path: a children pair REQUIRES a literal PascalCase closing tag, so
-      # a source without one (the common all-self-closing case) can never trip —
-      # bail before allocating anything. `match?` builds no MatchData, and this
-      # skips the mask/scan copies entirely, keeping the hot render/preprocess
-      # path's allocation profile flat (the benchmark renders only self-closing
-      # components, so it must stay at baseline).
-      return unless source.match?(CLOSING_TAG_PROBE_RE)
+    # The common path: no PascalCase closing tag anywhere, so every component
+    # tag must be self-closing. One gsub, no masking copies — the render
+    # benchmark's allocation profile depends on it.
+    def rewrite_self_closing(source)
+      source.gsub(COMPONENT_TAG_RE) do |match|
+        name = ::Regexp.last_match(1)
+        next match if name == "Suspense"
 
-      # ERB islands first, then Suspense — both blank their text newline-for-
-      # newline so byte offsets (hence reported lines) still match the raw
-      # template, while neither ERB string text nor the legitimate Suspense pair
-      # can be seen by the tag scan.
-      scan = mask_suspense(mask_erb(source))
-      # PER-NAME open stacks (name → [offsets]) so a closing tag checks for a
-      # matching open in O(1) via `open_ats[name].last`, keeping the whole scan
-      # linear even under thousands of stray/unmatched PascalCase closing tags
-      # (a global stack + `rindex` was quadratic — Codex Round 3).
-      open_ats = Hash.new { |h, k| h[k] = [] }
+        attrs = ::Regexp.last_match(2).to_s.strip
+        line  = line_at(source, ::Regexp.last_match.begin(0))
+        raise_unclosed(name, line, attrs: attrs, snippet: match) unless match.end_with?("/>")
+
+        placeholder(name, attrs, match, line, paired: false)
+      end
+    end
+
+    # Story 18-2 — pair opening and closing tags with one stack over the
+    # template with ERB islands and Suspense blanked (offsets preserved, so
+    # every line reported is the template's own), then rewrite each tag in
+    # place: a paired opening becomes {ViewHelper#__ruact_component_open__}'s
+    # wrapper, its closing `</ruact-component>`, a self-closing tag the usual
+    # placeholder. Tags inside ERB text are left alone.
+    def rewrite_paired(source)
+      scan   = mask_suspense(mask_erb(source))
+      tags   = []
+      stack  = []
+      paired = {}
 
       scan.scan(COMPONENT_ANY_TAG_RE) do
-        m    = ::Regexp.last_match
-        name = m[2]
+        m = ::Regexp.last_match
+        tag = { name: m[2], from: m.begin(0), to: m.end(0) }
+        tags << tag
 
         if m[1] # a closing tag `</Name>`
-          at = open_ats[name].last
-          next unless at # stray close with no open → literal text, ignore
+          tag[:closing] = true
+          open = stack.pop
+          raise_stray(tag[:name], line_at(source, tag[:from])) if open.nil?
+          # `<Card><Box></Card>`: the tag left open is the one to fix.
+          raise_open_tag(source, open) unless open[:name] == tag[:name]
 
-          raise_children_error(name, identifier, scan, at)
-        elsif m[0].end_with?("/>") # self-closing → carries no children
-          next
-        else # an opening tag `<Name ...>` — record the NEAREST open of this name
-          open_ats[name] << m.begin(0)
+          paired[open[:from]] = true
+        elsif !m[0].end_with?("/>")
+          stack << tag
         end
       end
+      raise_open_tag(source, stack.first) unless stack.empty?
 
-      nil
+      out    = +""
+      cursor = 0
+      tags.each do |tag|
+        out << source[cursor...tag[:from]]
+        out << rewrite_tag(source, tag, paired: paired[tag[:from]])
+        cursor = tag[:to]
+      end
+      out << source[cursor..]
     end
 
-    # Raise the self-contained {ChildrenNotSupportedError}. +at+ is the OPENING
-    # tag's byte offset in +scan+ (position-faithful to the raw source), so the
-    # line uses the same idiom as Step 2. Message mirrors
-    # {ComponentContract.raise_error} so both loud preprocess errors read alike.
-    def raise_children_error(component, identifier, scan, at)
-      line     = scan[0...at].count("\n") + 1
-      location = [identifier, line].compact.join(":")
-      location = "(unknown location)" if location.empty?
-      raise ChildrenNotSupportedError,
-            "ruact: <#{component}> at #{location} children are not supported " \
-            "— pass content as a prop, e.g. `<#{component} content={...} />`."
+    def rewrite_tag(source, tag, paired:)
+      return "</#{WRAPPER_TAG}>" if tag[:closing]
+
+      text = source[tag[:from]...tag[:to]]
+      attrs = text.match(COMPONENT_TAG_RE)[2].to_s.strip
+      placeholder(tag[:name], attrs, text, line_at(source, tag[:from]), paired: paired)
     end
 
-    # Blank out Suspense open/close tags (the one legitimate paired PascalCase
-    # tag) while preserving EVERY newline and byte offset, so the loud-children
-    # scan neither trips on `<Suspense>...</Suspense>` nor mis-reports a line when
-    # a multi-line Suspense opening precedes the offending tag. Non-newline chars
-    # → spaces (same length); newlines kept verbatim.
+    # The ERB placeholder for one component tag. Props are parsed (and the
+    # opt-in contract checked) here; a paired tag passes `children` as well.
+    def placeholder(name, attrs_string, match, line, paired:)
+      # lazy — only when a tag exists. `resolve_soft` returns the dev-fetched
+      # manifest (same source the render path uses, so the boot-race doesn't
+      # silence FR100 contract checks in dev) and FAILS OPEN to nil when the
+      # manifest is unresolvable (contract validation is opt-in/fail-open; the
+      # render path surfaces the clear error). In prod this is the boot-loaded
+      # Ruact.manifest, unchanged.
+      @registry = ManifestResolver.resolve_soft if @registry == :default
+      pairs = ComponentAttributes.parse(attrs_string)
+      names = pairs.map(&:first)
+      raise_children_twice(name, line) if paired && names.include?("children")
+
+      check_known!(name, line)
+      validate_contract(@registry, name, paired ? names + ["children"] : names,
+                        at: { file: @identifier, line: line, snippet: match.strip })
+      props_ruby = pairs.map { |prop, expr| "#{prop.inspect} => #{expr}" }.join(", ")
+      props_hash = props_ruby.empty? ? "{}" : "{ #{props_ruby} }"
+      helper = paired ? "__ruact_component_open__" : "__ruact_component__"
+      %(<%= #{helper}(#{name.inspect}, #{props_hash}) %>)
+    rescue ComponentContractError, ComponentTagError, UnknownComponentError
+      # Already carry file:line and the fix — re-raise AS-IS (do NOT append the
+      # generic "at line N: snippet" tail).
+      raise
+    rescue PreprocessorError => e
+      raise PreprocessorError, "#{e.message} at line #{line}: #{match.strip}"
+    end
+
+    # Story 18-2 — a component the manifest does not have fails here, with the
+    # template's file:line, instead of at render with no location. Skipped
+    # when there is no manifest to ask (fail open, like the contract check).
+    def check_known!(name, line)
+      return unless @registry.respond_to?(:component?)
+      return if @registry.component?(name)
+
+      message = @registry.unknown_component_message(name, controller_path: controller_path_from(@identifier))
+      # With a close name on offer it is a typo; "did you run the Vite build?"
+      # would send the reader the wrong way.
+      message = message.lines.grep_v(/Did you run the Vite build/).join.rstrip if message.include?('Did you mean "')
+      raise UnknownComponentError, message.sub(/\Aruact: /, "ruact: <#{name}> at #{location(line)} — ")
+    end
+
+    def line_at(source, offset)
+      source[0...offset].count("\n") + 1
+    end
+
+    def location(line)
+      [@identifier, line].compact.join(":")
+    end
+
+    def raise_open_tag(source, tag)
+      text = source[tag[:from]...tag[:to]]
+      raise_unclosed(tag[:name], line_at(source, tag[:from]),
+                     attrs: text.match(COMPONENT_TAG_RE)[2].to_s.strip, snippet: text)
+    end
+
+    # A tag that looks open may only be a `>` inside an attribute value
+    # (`title="a > b"`, `title="<%= @t %>"`) cutting the tag short; the
+    # attribute's own error says that, so it goes first.
+    def raise_unclosed(name, line, attrs:, snippet:)
+      begin
+        ComponentAttributes.parse(attrs)
+      rescue PreprocessorError => e
+        raise PreprocessorError, "#{e.message} at line #{line}: #{snippet.strip}"
+      end
+      raise ComponentTagError,
+            "ruact: <#{name}> at #{location(line)} is never closed — write `<#{name} ... />` for a " \
+            "component without children, or close it with `</#{name}>`."
+    end
+
+    def raise_stray(name, line)
+      raise ComponentTagError,
+            "ruact: </#{name}> at #{location(line)} closes nothing — there is no open <#{name}> before it."
+    end
+
+    def raise_children_twice(name, line)
+      raise ComponentTagError,
+            "ruact: <#{name}> at #{location(line)} has content between its tags and a `children={...}` " \
+            "prop — pass one of them."
+    end
+
+    # Blank out Suspense open/close tags while preserving EVERY newline and
+    # byte offset, so the pairing scan neither sees `<Suspense>...</Suspense>`
+    # nor mis-reports a line after a multi-line Suspense opening. Non-newline
+    # chars → spaces (same length); newlines kept verbatim.
     def mask_suspense(source)
       source
         .gsub(SUSPENSE_OPEN_RE)  { |m| m.gsub(/[^\n]/, " ") }
@@ -202,7 +269,7 @@ module Ruact
 
     # Blank ERB islands (position-faithful, see {mask_suspense}) so component
     # tags that appear only inside Ruby/ERB string or comment text are invisible
-    # to the loud-children tag scan.
+    # to the pairing scan.
     def mask_erb(source)
       source.gsub(ERB_ISLAND_RE) { |m| m.gsub(/[^\n]/, " ") }
     end

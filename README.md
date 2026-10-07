@@ -11,7 +11,7 @@
      scripted and live with the project's other capture harnesses, and the message the demo
      shows is pinned here by `spec/readme_demo_message_spec.rb`. -->
 <img src="https://ruact.dev/readme-write-verify.gif" width="800"
-     alt="An ERB template holding a &lt;LikeButton likes=&#123;@likes&#125; /&gt; tag, and the &quot;use client&quot; React component that tag resolves to. The component renders in a browser and its count changes when it is clicked. Children are then put inside the tag — the JSX habit — and the next request stops server-side with Ruact::ChildrenNotSupportedError, which names the component, the template file and line, and the fix. The children come out again and the page renders." />
+     alt="An ERB template holding a &lt;LikeButton likes=&#123;@likes&#125; /&gt; tag, and the &quot;use client&quot; React component that tag resolves to. The component renders in a browser and its count changes when it is clicked. The tag&#39;s name is then misspelled, and the next request stops server-side with Ruact::UnknownComponentError, which names the tag, the template file and line, and the component it was probably meant to be. The name is corrected and the page renders." />
 
 ## Quick start
 

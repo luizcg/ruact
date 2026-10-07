@@ -32,6 +32,19 @@ module Ruact
       "<!-- #{token} -->".html_safe
     end
 
+    # Story 18-2 — the opening of a component with children. Registers it like
+    # {#__ruact_component__} and opens the wrapper element whose content (the
+    # ERB between the tags, evaluated in place) HtmlConverter hands the
+    # component as `children`. The preprocessor writes the matching
+    # `</ruact-component>`.
+    def __ruact_component_open__(name, props = {})
+      ctx = @ruact_render_context
+      raise Ruact::Error, __ruact_outside_render_message(name) if ctx.nil?
+
+      token = ctx.register(name, props)
+      %(<ruact-component data-ruact-token="#{token}">).html_safe
+    end
+
     # Story 17.0i — a client component in a template Rails is rendering on its
     # own. Says which component and template, and the two ways to a ruact page:
     # `ruact_render` for this template, or listing the action in the

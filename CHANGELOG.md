@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Client components take children from ERB.** Content between a component's opening and closing tags reaches it as `children`, evaluated on the server like the rest of the template: HTML, `<%= %>` output (escaped as usual), loops, conditionals, partials, and other components, the same one included.
+
+  ```erb
+  <Card title={@post.title}>
+    <p><%= @post.body %></p>
+    <LikeButton postId={@post.id} />
+  </Card>
+  ```
+
+  A component that declares a contract (`__ruactContract`) has to list `children` among its `props` or `slots` to take them. `<Suspense>` works inside a component and around one.
+
+- **A misspelled component name is caught where it is written.** When a manifest is available, a template naming a component that does not exist now fails while it compiles, with `Ruact::UnknownComponentError` naming the tag, the template's file and line, and the closest component (`Did you mean "LikeButton"?`). It used to fail at render with no location. Without a manifest the render reports it, as before.
+
+### Changed
+
+- **Every component tag must close.** `<Dialog open={true}>` with no closing tag used to render as a component without children. It now raises `Ruact::ComponentTagError` at file:line: write `<Dialog open={true} />`, or close it with `</Dialog>`. The same error names a closing tag that closes nothing, and a tag given both content and a `children={...}` prop.
+
+### Removed
+
+- **`Ruact::ChildrenNotSupportedError`.** It was raised for content between a component's tags, which is now supported. Rescue `Ruact::ComponentTagError` for tags that do not pair, or `Ruact::PreprocessorError` for any template error.
+
 ## [0.0.17] - 2026-10-06
 
 ### Changed

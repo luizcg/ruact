@@ -4,6 +4,17 @@ require "spec_helper"
 
 module Ruact
   RSpec.describe ErbPreprocessorHook do
+    # Story 18-2 — the preprocessor checks component names against the
+    # loaded manifest. A spec that boots a Rails app leaves one behind; these
+    # examples are about the transform, so they run without one.
+    around do |example|
+      saved = Ruact.manifest
+      Ruact.manifest = nil
+      example.run
+    ensure
+      Ruact.manifest = saved
+    end
+
     # Minimal stand-in for ActionView::Template::Handlers::ERB:
     # base implementation just returns source unchanged so we can inspect the
     # transformed version that the hook passes to super.
