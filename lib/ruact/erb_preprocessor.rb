@@ -32,7 +32,7 @@ module Ruact
 
     # Matches <Suspense ...> opening tags (handled before general PascalCase processing).
     SUSPENSE_OPEN_RE  = /<Suspense\b([^>]*?)>/m
-    SUSPENSE_CLOSE_RE = %r{</Suspense>}
+    SUSPENSE_CLOSE_RE = %r{</Suspense\s*>}
 
     # Matches ANY PascalCase component tag: opening (`<Card>`), self-closing
     # (`<Card />`), or closing (`</Card>`). Capture 1 is the leading slash
@@ -43,12 +43,15 @@ module Ruact
     # Cheap allocation-free probe (`String#match?`) for "is there ANY PascalCase
     # closing tag at all?". Without one there is nothing to pair, so the
     # template takes the single-pass path; `</Suspense>` matches too — harmless.
-    CLOSING_TAG_PROBE_RE = %r{</[A-Z][A-Za-z0-9]*[\s>]}
+    CLOSING_TAG_PROBE_RE = %r{</[A-Z][A-Za-z0-9]*[\s/>]}
 
     # Newline-preserving mask for ERB islands (`<% … %>`, `<%= … %>`, `<%# … %>`).
     # The pairing scan blanks these first so a `</Card>` that lives inside
     # Ruby/ERB string or comment text is never taken for a real closing tag.
     ERB_ISLAND_RE = /<%.*?%>/m
+
+    # An ERB comment, which renders nothing.
+    ERB_COMMENT_RE = /<%#.*?%>/m
 
     # The element a paired component's content is wrapped in until
     # {HtmlConverter} turns it into the component's `children`.
@@ -115,6 +118,8 @@ module Ruact
     # benchmark's allocation profile depends on it. An opening tag that is not
     # self-closing hands the whole template to {#rewrite_paired}, which masks
     # ERB: `<%# wrap in <Card> later %>` is a comment, not an unclosed tag.
+    # So does any tag inside an ERB island (a commented-out component): the
+    # paired path leaves those alone.
     def rewrite_self_closing(source)
       catch(:open_tag) do
         return source.gsub(COMPONENT_TAG_RE) do |match|
@@ -122,6 +127,7 @@ module Ruact
           next match if name == "Suspense"
 
           throw :open_tag unless match.end_with?("/>")
+          throw :open_tag if inside_erb?(source, ::Regexp.last_match.begin(0))
 
           placeholder(name, ::Regexp.last_match(2).to_s.strip, match,
                       line_at(source, ::Regexp.last_match.begin(0)), :self_closing)
@@ -156,8 +162,9 @@ module Ruact
 
           # The value says whether anything sits between the tags: an empty
           # pair passes no children, like `<Card />`. Read from the template
-          # itself — ERB between the tags (`<%= @body %>`) is content.
-          paired[open[:from]] = !source[open[:to]...tag[:from]].strip.empty?
+          # itself — ERB between the tags (`<%= @body %>`) is content, an ERB
+          # comment is not.
+          paired[open[:from]] = !source[open[:to]...tag[:from]].gsub(ERB_COMMENT_RE, "").strip.empty?
         elsif !m[0].end_with?("/>")
           stack << tag
         end
@@ -234,6 +241,16 @@ module Ruact
       # would send the reader the wrong way.
       message = message.lines.grep_v(/Did you run the Vite build/).join.rstrip if message.include?('Did you mean "')
       raise UnknownComponentError, message.sub(/\Aruact: /, "ruact: <#{name}> at #{location(line)} — ")
+    end
+
+    # Whether +offset+ sits inside an ERB island (`<% … %>`): the nearest `<%`
+    # before it opens after the nearest `%>`. No allocation.
+    def inside_erb?(source, offset)
+      opened = source.rindex("<%", offset)
+      return false unless opened
+
+      closed = source.rindex("%>", offset)
+      closed.nil? || opened > closed
     end
 
     def line_at(source, offset)

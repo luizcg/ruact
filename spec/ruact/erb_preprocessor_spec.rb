@@ -272,6 +272,23 @@ module Ruact
           expect(run(%(<%= "<Foo>" %>))).to eq(%(<%= "<Foo>" %>))
         end
 
+        it "leaves a component tag inside ERB alone, with or without a closing tag elsewhere" do
+          comment = %(<%# <LikeButton likes={@likes} /> %>\n<p>x</p>)
+          expect(run(comment)).to eq(comment)
+          with_pair = %(#{comment}<Card>y</Card>)
+          expect(run(with_pair)).to start_with(comment)
+        end
+
+        it "counts an ERB comment alone between the tags as no children" do
+          expect(run("<Card><%# todo %></Card>"))
+            .to eq(%(<%= __ruact_component_open__("Card", {}) %><%# todo %></ruact-component>))
+        end
+
+        it "takes `</Suspense >` and a stray `</X/>`" do
+          expect(run(%(<Suspense fallback="x"><B /></Suspense >))).to end_with("</ruact-suspense>")
+          expect { run("<p>x</p></LikeButton/>") }.to raise_error(Ruact::ComponentTagError, /closes nothing/)
+        end
+
         it "takes a closing tag with whitespace before `>`" do
           expect(run(%(<Card>x</Card >))).to eq(%(<%= __ruact_component_open__("Card", {}) %>x</ruact-component>))
         end
@@ -439,6 +456,10 @@ module Ruact
           expect { run("<Card title={@t}></Card>") }.not_to raise_error
           expect { run("<Panel title={@t}>\n  \n</Panel>") }
             .to raise_error(ComponentContractError, /missing required slot.*children/m)
+        end
+
+        it "counts an ERB comment alone between the tags as no children" do
+          expect { run("<Card title={@t}><%# todo %></Card>") }.not_to raise_error
         end
 
         it "counts ERB alone between the tags as children" do

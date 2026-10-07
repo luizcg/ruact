@@ -103,8 +103,10 @@ module Ruact
     # @param detail [String] the violation clause
     # @param where [Hash] keys +component+, +file+, +line+, +snippet+
     def self.raise_error(detail, where)
-      location = [where[:file], where[:line]].compact.join(":")
-      location = "(unknown location)" if location.empty?
+      location = if where[:file] then [where[:file], where[:line]].compact.join(":")
+                 elsif where[:line] then "line #{where[:line]}"
+                 else "(unknown location)"
+                 end
       message = "ruact: <#{where[:component]}> at #{location} #{detail}."
       message += "\n  in: #{where[:snippet]}" if where[:snippet] && !where[:snippet].empty?
       raise ComponentContractError, message
