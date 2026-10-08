@@ -116,6 +116,40 @@ module Ruact
       end
     end
 
+    # Story 18-3: one file exporting several components, as shadcn/ui's
+    # components/ui/dialog.tsx does. Each tag must import its own export; the
+    # import row used to carry the file's first export for every one of them.
+    describe "#resolve with several components exported by one file" do
+      let(:manifest) do
+        described_class.from_hash(
+          %w[Dialog DialogTrigger DialogContent].to_h do |name|
+            [name, { "id" => "/ui/dialog.jsx", "name" => name, "chunks" => ["/ui/dialog.jsx"] }]
+          end
+        )
+      end
+
+      it "returns each export's own name" do
+        %w[Dialog DialogTrigger DialogContent].each do |name|
+          ref = manifest.reference_for(name)
+          expect(manifest.resolve(ref.module_id, ref.export_name)).to eq(["/ui/dialog.jsx", [], name])
+        end
+      end
+
+      it "imports each tag's own export on the wire" do
+        tree = %w[Dialog DialogTrigger DialogContent].map do |name|
+          Flight::ReactElement.new(type: manifest.reference_for(name), key: nil, props: {})
+        end
+        wire = Flight::Renderer.render(tree, manifest)
+        imports = wire.lines.grep(/\A\h+:I/).map { |row| JSON.parse(row.split(":I", 2).last).last }
+        expect(imports).to eq(%w[Dialog DialogTrigger DialogContent])
+      end
+
+      it "refuses an export the module does not have" do
+        expect { manifest.resolve("/ui/dialog.jsx", "DialogFooter") }
+          .to raise_error(%r{no entry for module_id="/ui/dialog.jsx" export="DialogFooter"})
+      end
+    end
+
     describe ".from_hash" do
       it "returns a mutable manifest (not frozen)" do
         manifest = described_class.from_hash(manifest_data)

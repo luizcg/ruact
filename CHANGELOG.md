@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A component exported from a file that exports several now renders as itself.** When one file exported more than one client component — as shadcn/ui's `components/ui/dialog.tsx` exports `Dialog`, `DialogTrigger`, `DialogContent` and the rest — every ERB tag naming one of them rendered whichever of the file's components the manifest listed first, with no error: a `<DialogTrigger>` rendered a `Dialog`, and a dialog composed from its parts in ERB never opened. Each tag now imports its own export. Files exporting a single component were not affected.
+
 ## [0.0.18] - 2026-10-07
 
 ### Added
