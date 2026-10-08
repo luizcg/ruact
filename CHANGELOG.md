@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.18] - 2026-10-07
+
 ### Added
 
 - **Client components take children from ERB.** Content between a component's opening and closing tags reaches it as `children`, evaluated on the server like the rest of the template: HTML, `<%= %>` output (escaped as usual), loops, conditionals, partials, and other components, the same one included.
@@ -478,7 +480,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **E2E test app** — `e2e/` Rails app (no DB, in-memory Post model) with full CRUD system tests validating the complete request cycle.
 
-[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.17...HEAD
+[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.18...HEAD
+[0.0.18]: https://github.com/luizcg/ruact/releases/tag/v0.0.18
 [0.0.17]: https://github.com/luizcg/ruact/releases/tag/v0.0.17
 [0.0.16]: https://github.com/luizcg/ruact/releases/tag/v0.0.16
 [0.0.15]: https://github.com/luizcg/ruact/releases/tag/v0.0.15
