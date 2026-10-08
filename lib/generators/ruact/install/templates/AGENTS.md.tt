@@ -20,8 +20,7 @@ truth" below) instead of guessing.
   adds it; `ruact_pages only:` narrows it). The page's renderer owns navigation:
   going between a ruact page and a plain Rails/Turbo page is a full page load.
 - Interactive components live in `app/javascript/components/` as `"use client"`
-  files, mounted from ERB with a PascalCase self-closing tag:
-  `<LikeButton postId={@post.id} />`.
+  files, mounted from ERB with a PascalCase tag: `<LikeButton postId={@post.id} />`.
 - Mutations are ordinary non-GET controller actions on a controller that does
   `include Ruact::Server`. Reads are `Ruact::Query` classes in `app/queries/`.
 - ruact generates a typed TypeScript module from the route table; React imports
@@ -78,10 +77,11 @@ READ IT instead of simulating the name generation. Regenerate after routes/queri
 ## Five traps
 
 1. **Every component tag closes.** `<Badge label={@x} />` has no children;
-   `<Card title={@t}>...</Card>` passes the ERB between its tags — HTML, loops,
-   partials, other components — to the component as `children`. An opening tag
-   that never closes, or a closing tag with no opening, fails LOUDLY with a
+   `<Card title={@t}>...</Card>` passes the ERB between its tags to the
+   component as `children`. An unclosed or stray tag fails LOUDLY with a
    `PreprocessorError` naming file:line. `<Suspense fallback="...">` pairs too.
+   In a loop of items holding components, give each item a `data-react-key`
+   (the record's id): React matches them by position otherwise, silently.
 2. **`{}` props are Ruby, not JavaScript.** `<Badge label={@post.title} />`
    evaluates `@post.title` as a Ruby expression in the ERB. No JS ternaries,
    no `{...spread}`. A quoted value (`title="Hi"`) is a
