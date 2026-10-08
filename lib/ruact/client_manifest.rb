@@ -49,9 +49,13 @@ module Ruact
     # every client component eagerly (`virtual:ruact/registry`), so there is
     # nothing to load — and React reads +chunks+ as `[chunkId, filename]` pairs,
     # which the manifest's one-URL list is not.
-    def resolve(module_id, _export_name)
-      entry = by_module_id(module_id)
-      raise "ClientManifest: no entry for module_id=#{module_id.inspect}" unless entry
+    #
+    # The entry is looked up by module AND export: one file can export several
+    # components (shadcn/ui's dialog.tsx exports Dialog, DialogTrigger, …), and
+    # each tag imports its own.
+    def resolve(module_id, export_name)
+      entry = data.each_value.find { |e| e["id"] == module_id && e["name"] == export_name }
+      raise "ClientManifest: no entry for module_id=#{module_id.inspect} export=#{export_name.inspect}" unless entry
 
       [entry["id"], NO_CHUNKS, entry["name"]]
     end
@@ -247,10 +251,6 @@ module Ruact
     # raise +FrozenError+.
     def entries_by_name
       data
-    end
-
-    def by_module_id(id)
-      data.values.find { |entry| entry["id"] == id }
     end
   end
 end

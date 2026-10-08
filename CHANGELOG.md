@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A component exported from a file that exports several now renders as itself.** When one file exported more than one client component — as shadcn/ui's `components/ui/dialog.tsx` exports `Dialog`, `DialogTrigger`, `DialogContent` and the rest — every ERB tag naming one of them rendered whichever of the file's components the manifest listed first, with no error: a `<DialogTrigger>` rendered a `Dialog`, and a dialog composed from its parts in ERB never opened. Each tag now imports its own export. Files exporting a single component were not affected.
+
+### Changed
+
+- **The `AGENTS.md` section the install writes tells agents to key list items.** In an ERB loop whose items hold components, each item needs a `data-react-key`: ERB has no `key`, so React matches the items by position, and when the list changes a component's state shows on the wrong item, with no warning. Re-run `rails generate ruact:install --force` to refresh the section.
+
 ## [0.0.18] - 2026-10-07
 
 ### Added

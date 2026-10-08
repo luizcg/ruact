@@ -940,7 +940,9 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
 
         # Trap 1 — every component tag closes; a pair passes its ERB as children (Story 18-2)
         expect(content).to include("**Every component tag closes.**")
-        expect(content).to include("to the component as `children`")
+        expect(content).to include("component as `children`")
+        # ... and a loop of items holding components keys each item (Story 18-3)
+        expect(content).to include("`data-react-key`")
         # Trap 2 — Ruby (not JS) inside {} props
         expect(content).to include("Ruby, not JavaScript")
         # Trap 3 — Accept-header dual shape (exact application/json)
