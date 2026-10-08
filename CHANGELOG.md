@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.19] - 2026-10-08
+
 ### Fixed
 
 - **A component exported from a file that exports several now renders as itself.** When one file exported more than one client component — as shadcn/ui's `components/ui/dialog.tsx` exports `Dialog`, `DialogTrigger`, `DialogContent` and the rest — every ERB tag naming one of them rendered whichever of the file's components the manifest listed first, with no error: a `<DialogTrigger>` rendered a `Dialog`, and a dialog composed from its parts in ERB never opened. Each tag now imports its own export. Files exporting a single component were not affected.
@@ -488,7 +490,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **E2E test app** — `e2e/` Rails app (no DB, in-memory Post model) with full CRUD system tests validating the complete request cycle.
 
-[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.18...HEAD
+[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.19...HEAD
+[0.0.19]: https://github.com/luizcg/ruact/releases/tag/v0.0.19
 [0.0.18]: https://github.com/luizcg/ruact/releases/tag/v0.0.18
 [0.0.17]: https://github.com/luizcg/ruact/releases/tag/v0.0.17
 [0.0.16]: https://github.com/luizcg/ruact/releases/tag/v0.0.16
