@@ -400,6 +400,28 @@ section "after_action" do
   say
 end
 
+section "unchanged" do
+  say "## A page with no Suspense (`/same`): what the prototype sends against what 0.0.19 sends"
+  say
+  responses = {}
+  { "0.0.19" => "baseline", "prototype, Live" => "live", "prototype, lazy body" => "body" }.each do |label, mode|
+    with_server("SPIKE_MODE" => mode, "RAILS_ENV" => "production") do |base|
+      flight = http(base, "/same", headers: { "Accept" => "text/x-component" }).body
+      document = http(base, "/same").body
+      responses[label] = { flight: flight, inline: document[/d\.push\((".*?")\);/m, 1] }
+    end
+  end
+  reference = responses.delete("0.0.19")
+  raise "no payload found in the 0.0.19 document" if reference[:inline].to_s.empty?
+
+  responses.each do |label, response|
+    say "- **#{label}**: Flight body identical to 0.0.19's = **#{response[:flight] == reference[:flight]}** " \
+        "(#{response[:flight].bytesize} bytes); payload inlined in the document identical = " \
+        "**#{response[:inline] == reference[:inline]}**"
+  end
+  say
+end
+
 section "middleware_state" do
   say "## What a middleware set on the thread (`/mw`: a middleware wraps the request in `I18n.with_locale(:pt)` and sets a thread variable)"
   say

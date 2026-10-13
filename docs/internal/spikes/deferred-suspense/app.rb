@@ -185,6 +185,7 @@ class PagesController < ApplicationController
   def error; end
   def late_cookie; end
   def mw; end
+  def same; end
   def timeout; end
 
   def context
@@ -249,7 +250,7 @@ end
 
 Rails.application.routes.draw do
   root "pages#home"
-  %w[plain slow two nested error context db db_async late_cookie timeout mw].each do |page|
+  %w[plain slow two nested error context db db_async late_cookie timeout mw same].each do |page|
     get page, to: "pages##{page}"
   end
   post "__gate/reset", to: "probe#reset"
