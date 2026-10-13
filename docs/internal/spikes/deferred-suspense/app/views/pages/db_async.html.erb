@@ -1,0 +1,7 @@
+<h1 id="shell">DB async</h1>
+<Suspense fallback="Loading A…">
+  <p id="a"><%= @first.map(&:name).join(",") %></p>
+</Suspense>
+<Suspense fallback="Loading B…">
+  <p id="b"><%= @second.map(&:name).join(",") %></p>
+</Suspense>

@@ -1,0 +1,10 @@
+node_modules/
+/tmp/
+/log/
+/public/assets/
+/public/react-client-manifest.json
+/app/javascript/.ruact/
+/test-results/
+/playwright-report/
+/results/*.raw
+/.bundle/

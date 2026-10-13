@@ -1,0 +1,10 @@
+en:
+  greeting: "hello"
+  pages:
+    context:
+      lazy: "lazy lookup (en)"
+pt:
+  greeting: "olá"
+  pages:
+    context:
+      lazy: "lazy lookup (pt)"

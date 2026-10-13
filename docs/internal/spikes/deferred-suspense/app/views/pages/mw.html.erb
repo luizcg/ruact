@@ -1,0 +1,7 @@
+<h1 id="shell">Middleware state</h1>
+<p id="shell-locale"><%= I18n.locale %></p>
+<p id="shell-variable"><%= Thread.current.thread_variable_get(:spike_thread_variable).inspect %></p>
+<Suspense fallback="Loading A…">
+  <p id="block-locale"><%= I18n.locale %></p>
+  <p id="block-variable"><%= Thread.current.thread_variable_get(:spike_thread_variable).inspect %></p>
+</Suspense>

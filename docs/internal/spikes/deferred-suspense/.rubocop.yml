@@ -1,0 +1,19 @@
+# An experiment (a one-file Rails app, a prototype that patches the gem, a
+# measurement script), not library code: the cops that keep `lib/` in shape
+# do not describe it.
+inherit_from: ../../../../.rubocop.yml
+
+Ruact/NoSharedState:
+  Enabled: false
+Style/OneClassPerFile:
+  Enabled: false
+Metrics/BlockLength:
+  Enabled: false
+Metrics/AbcSize:
+  Enabled: false
+Metrics/MethodLength:
+  Enabled: false
+Performance/CollectionLiteralInLoop:
+  Enabled: false
+Layout/LineLength:
+  Max: 160

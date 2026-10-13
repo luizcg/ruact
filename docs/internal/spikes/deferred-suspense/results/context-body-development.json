@@ -1,0 +1,35 @@
+{
+  "shell": {
+    "locale": "pt",
+    "t": "olá",
+    "lazy": "lazy lookup (pt)",
+    "zone": "Tokyo",
+    "tenant": "acme",
+    "current": "\"ada\"",
+    "fiber_local": "\"set\"",
+    "thread_variable": "\"set\"",
+    "thread": "request thread"
+  },
+  "block": {
+    "locale": "en",
+    "t": "hello",
+    "lazy": "lazy lookup (en)",
+    "zone": "UTC",
+    "tenant": "(none)",
+    "current": "\"ada\"",
+    "fiber_local": "\"set\"",
+    "thread_variable": "\"set\"",
+    "thread": "request thread"
+  },
+  "lazy": {
+    "shell": "lazy lookup (pt)",
+    "block": "lazy lookup (en)"
+  },
+  "events": [
+    "after_action",
+    "shell_written",
+    "block_start:0",
+    "block_end:0",
+    "complete"
+  ]
+}
