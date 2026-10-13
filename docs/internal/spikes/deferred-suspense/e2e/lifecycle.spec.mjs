@@ -67,6 +67,7 @@ test("a block that raises: its boundary keeps the fallback, the next block still
 
   await waitingAt(request, { b: 1 });
   expect(await events(request)).toContain("block_error:NoMethodError");
+  expect(await events(request)).toContain("reported:NoMethodError:ruact.suspense");
   await expect(fallback(page, "A")).toBeVisible();
   await expect(page.locator("#a")).toHaveCount(0);
 
@@ -98,6 +99,8 @@ test("a block that had already raised when the page mounts", async ({ page, requ
   await open(request, "b");
   await page.goto("/error");
   await expect(page.locator("#b")).toHaveText("open:b");
+  // The whole document was in before React mounted: the error row with it.
+  expect(await page.evaluate(() => globalThis.__SPIKE_MOUNTED_WHILE_LOADING)).toBe(false);
   await expect(fallback(page, "A")).toBeVisible();
   await expect(page.locator("#ruact-dev-overlay [data-overlay-message]")).toContainText("NoMethodError");
 });
@@ -143,7 +146,8 @@ test("a cookie or session write inside a block does not reach the browser", asyn
   const names = (await page.context().cookies()).map((cookie) => cookie.name);
   expect(names).toContain("early");
   expect(names).not.toContain("late");
-  expect(await (await page.request.get("/__session")).json()).toMatchObject({ late: null });
+  // The session value written before the first byte is there; the one written in the block is not.
+  expect(await (await page.request.get("/__session")).json()).toMatchObject({ early: "1", late: null });
 });
 
 // A lazy relation is loaded where the view walks it: inside the block.

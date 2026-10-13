@@ -158,7 +158,7 @@ section "baseline" do
       open_gate(base, "a")
       client.finish
       took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
-      say "- #{kind}: with the gate closed, headers or body received = **#{arrived}**; " \
+      say "- #{kind}: with the gate closed, headers or body received within 1 s = **#{arrived}**; " \
           "after the gate opened the response took #{format('%.2f', took)} s to complete"
     end
   end
@@ -224,6 +224,9 @@ end
 section "disconnect" do
   say "## A client that goes away while a block is waiting"
   say
+  say "\"Still waiting\" and \"started\" are read up to 1 s and 2 s after the event: a bound, where every other " \
+      "line here is an order."
+  say
   [["live", nil], ["body", nil], %w[live 1], %w[body 1]].each do |mode, peek|
     env = { "SPIKE_MODE" => mode }
     env["SPIKE_PEEK"] = "1" if peek
@@ -257,7 +260,13 @@ section "disconnect" do
       wait_for("block a") { state(base)["events"].include?("block_end:0") }
       started_b = within?(2.0) { state(base)["waiting"] == { "b" => 1 } }
       open_gate(base, "b")
-      wait_for("the end") { state(base)["events"].grep(/disconnected|complete|client_gone/).any? }
+      begin
+        wait_for("the end") { state(base)["events"].grep(/disconnected|complete|client_gone/).any? }
+      rescue RuntimeError
+        raise "no end after both gates opened (#{mode}): #{state(base).slice('events', 'waiting')}\n" \
+              "#{File.read(Dir[File.join(TMP, 'puma-*.log')].max_by { |f| File.mtime(f) }).lines.last(25).join}\n" \
+              "#{File.read(File.join(ROOT, 'log', 'development.log')).lines.last(40).join}"
+      end
       say "- **#{mode}**, two blocks (`/two`): the second block started for a client that had left = **#{started_b}**; " \
           "events = `#{state(base)['events'].join(' → ')}`"
     end
@@ -277,11 +286,24 @@ section "timeout" do
       body = client.finish
       after = state(base)
       error_row = body.lines.find { |line| line.include?(":E{") }
-      say "- **#{mode}**: busy while waiting = #{busy}; error row = `#{error_row&.strip}`; " \
+      query = http(base, "/same", headers: { "Accept" => "text/x-component" })
+      say "- **#{mode}**, the client stays: busy while waiting = #{busy}; error row = `#{error_row&.strip}`; " \
           "the next block arrived = #{body.include?('b is quick')}; afterwards waiting = #{after['waiting']}, " \
           "pool = busy #{after['pool']['busy']} / idle #{after['pool']['idle']} / dead #{after['pool']['dead']}; " \
-          "a query on the same pool afterwards = #{http(base, '/plain').code}"
-      open_gate(base, "a")
+          "a page that queries the same pool afterwards = #{query.code}, rows read = #{query.body.scan('"li"').length}"
+
+      # The client leaves and the gate is never opened: only the timeout can end the block.
+      reset(base)
+      client = Curl.new(base, "/db")
+      wait_for("gate a") { state(base)["waiting"] == { "a" => 1 } }
+      wait_for("shell") { client.received.include?("Loading A") }
+      busy = state(base)["pool"]["busy"]
+      client.disconnect
+      wait_for("the timeout") { state(base)["waiting"].empty? }
+      wait_for("the pool") { state(base)["pool"]["busy"].zero? }
+      say "- **#{mode}**, the client leaves and the gate never opens: busy while waiting = #{busy}; " \
+          "after the timeout, waiting = #{state(base)['waiting']} and busy = #{state(base)['pool']['busy']}; " \
+          "events = `#{state(base)['events'].join(' → ')}`"
     end
   end
   say
@@ -319,12 +341,16 @@ end
 section "live_cost" do
   say "## What `ActionController::Live` costs a page with no Suspense (`/plain`, production)"
   say
+  say "Throughput is three 4-second `wrk` runs after a warm-up, on a machine doing other things: " \
+      "read the spread between runs before reading a difference between rows."
+  say
   unless system("which wrk > /dev/null 2>&1")
     say "- not measured: `wrk` is not installed"
     say
     next
   end
   throughput = lambda do |url, *headers|
+    Open3.capture2("wrk", "-t1", "-c3", "-d2s", *headers.flat_map { |h| ["-H", h] }, url) # warm-up
     Array.new(3) do
       out, = Open3.capture2("wrk", "-t1", "-c3", "-d4s", *headers.flat_map { |h| ["-H", h] }, url)
       out[%r{Requests/sec:\s+([\d.]+)}, 1].to_f.round
@@ -398,6 +424,35 @@ section "after_action" do
     end
   end
   say
+  say "With no gate, the same writes race the headers being sent. Each cell is how many of 600 responses " \
+      "carried them: 3 clients at once, 200 requests each, against Puma's 3 threads."
+  say
+  say "| configuration | what writes | response | header arrived | cookie arrived |"
+  say "| --- | --- | --- | --- | --- |"
+  racing = {
+    "prototype, Live on every action" => { "SPIKE_MODE" => "live" },
+    "prototype, no Live (lazy body)" => { "SPIKE_MODE" => "body" }
+  }
+  burst = lambda do |base, path, accept|
+    Array.new(3) { Thread.new { Array.new(200) { http(base, path, headers: { "Accept" => accept }) } } }.flat_map(&:value)
+  end
+  cookie = ->(responses, name) { responses.count { |r| r.get_fields("set-cookie").to_a.any? { |c| c.start_with?("#{name}=") } } }
+  racing.each do |label, env|
+    with_server(env) do |base|
+      %w[text/html text/x-component].each do |accept|
+        kind = accept == "text/html" ? "document" : "flight"
+        responses = burst.call(base, "/plain", accept)
+        say "| #{label} | an `after_action`, page with no Suspense | #{kind} | " \
+            "#{responses.count { |r| r['x-after-action'] }} / 600 | #{cookie.call(responses, 'after_action')} / 600 |"
+
+        open_gate(base, "a")
+        responses = burst.call(base, "/late_cookie", accept)
+        say "| #{label} | a `<Suspense>` block that does not wait | #{kind} | — | #{cookie.call(responses, 'late')} / 600 |"
+        reset(base)
+      end
+    end
+  end
+  say
 end
 
 section "unchanged" do
@@ -423,15 +478,35 @@ section "unchanged" do
 end
 
 section "middleware_state" do
-  say "## What a middleware set on the thread (`/mw`: a middleware wraps the request in `I18n.with_locale(:pt)` and sets a thread variable)"
+  say "## What a middleware scoped around the request (`/mw`)"
   say
-  %w[baseline live body].each do |mode|
+  say "The middleware wraps the app in `I18n.with_locale(:pt)` and in " \
+      "`ActiveRecord::Base.connected_to(role: :writing, prevent_writes: true)`. The block waits at a gate, " \
+      "which opens only after the client has the response's headers: the middleware has returned by then."
+  say
+  read = ->(body, id) { body[/"id":"#{id}","children":"(.*?)"\}/, 1] }
+  probe = lambda do |base, released|
+    reset(base)
+    client = Curl.new(base, "/mw", flight: true)
+    wait_for("gate a") { state(base)["waiting"] == { "a" => 1 } }
+    # 0.0.19 sends nothing before the block has run: there the block is
+    # evaluated while the middleware is still waiting for the action.
+    wait_for("headers") { client.headers.include?("\r\n\r\n") } if released
+    open_gate(base, "a")
+    body = client.finish
+    "shell: locale `#{read.call(body, 'shell-locale')}`, writes #{read.call(body, 'shell-writes')}; " \
+      "block: locale `#{read.call(body, 'block-locale')}`, writes #{read.call(body, 'block-writes')}"
+  end
+  locale_of = ->(base) { read.call(http(base, "/locale", headers: { "Accept" => "text/x-component" }).body, "shell-locale") }
+
+  { "0.0.19 with Live (today)" => "baseline", "prototype, Live" => "live", "prototype, lazy body" => "body" }.each do |label, mode|
     with_server("SPIKE_MODE" => mode) do |base|
-      body = http(base, "/mw", headers: { "Accept" => "text/x-component" }).body.force_encoding("UTF-8")
-      read = ->(id) { body[/"id":"#{id}","children":"(.*?)"}/, 1].delete("\\") }
-      label = mode == "baseline" ? "0.0.19 with Live (today)" : "prototype, #{mode}"
-      say "- **#{label}**: shell sees locale `#{read.call('shell-locale')}`, thread variable `#{read.call('shell-variable')}`; " \
-          "the Suspense content sees locale `#{read.call('block-locale')}`, thread variable `#{read.call('block-variable')}`"
+      say "- **#{label}**, `/mw` as the server's first request — #{probe.call(base, mode != 'baseline')}. " \
+          "A page with no such middleware, right after: locale `#{locale_of.call(base)}`"
+    end
+    with_server("SPIKE_MODE" => mode) do |base|
+      before = locale_of.call(base)
+      say "- **#{label}**, `/mw` after another page (locale `#{before}`) has run — #{probe.call(base, mode != 'baseline')}"
     end
   end
   say

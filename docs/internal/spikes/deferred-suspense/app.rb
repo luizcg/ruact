@@ -40,11 +40,15 @@ class ThreadMarker
     env["spike.thread"] = Thread.current.object_id
     Thread.current[:spike_fiber_local] = "set"
     Thread.current.thread_variable_set(:spike_thread_variable, "set")
-    # A middleware that picks the locale for the request (rack-contrib's
-    # Rack::Locale and others do this), for one path.
-    return I18n.with_locale(:pt) { @app.call(env) } if env["PATH_INFO"] == "/mw"
+    # For one path, a middleware that scopes the request: a locale (rack-contrib's
+    # Rack::Locale and others do this) and a database role.
+    return @app.call(env) unless env["PATH_INFO"] == "/mw"
 
-    @app.call(env)
+    # What Rails' own DatabaseSelector does around a request: a scope on a
+    # stack the request's threads share, undone when the app returns.
+    I18n.with_locale(:pt) do
+      ActiveRecord::Base.connected_to(role: :writing, prevent_writes: true) { @app.call(env) }
+    end
   end
 end
 
@@ -122,6 +126,13 @@ end
 
 Rails.application.initialize!
 
+# What the app's error reporting (Sentry and the like) would be told.
+Rails.error.subscribe(Class.new do
+  def report(error, source: nil, **)
+    Spike::Events.add("reported:#{error.class}:#{source}")
+  end
+end.new)
+
 ActiveRecord::Schema.verbose = false
 ActiveRecord::Schema.define do
   create_table(:items, force: true) { |t| t.string :name }
@@ -185,6 +196,7 @@ class PagesController < ApplicationController
   def error; end
   def late_cookie; end
   def mw; end
+  def locale; end
   def same; end
   def timeout; end
 
@@ -240,7 +252,7 @@ class ProbeController < ActionController::API
   end
 
   def session_probe
-    render json: { late: request.session[:late], cookies: request.cookies.keys.sort }
+    render json: { early: request.session[:early], late: request.session[:late], cookies: request.cookies.keys.sort }
   end
 
   def up
@@ -250,7 +262,7 @@ end
 
 Rails.application.routes.draw do
   root "pages#home"
-  %w[plain slow two nested error context db db_async late_cookie timeout mw same].each do |page|
+  %w[plain slow two nested error context db db_async late_cookie timeout mw locale same].each do |page|
     get page, to: "pages##{page}"
   end
   post "__gate/reset", to: "probe#reset"

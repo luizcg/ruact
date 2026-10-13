@@ -3,7 +3,7 @@
 // the browser, on a first load and on a navigation, because the whole template
 // (the content of <Suspense> included) is evaluated before the first byte.
 import { test, expect } from "@playwright/test";
-import { waitingAt, open, reset, state, fallback } from "./support.mjs";
+import { waitingAt, open, reset, fallback } from "./support.mjs";
 
 test.beforeEach(async ({ request }) => reset(request));
 
@@ -31,7 +31,6 @@ test("navigation: the old page stays, with no fallback, while the gate is closed
   await expect(page.locator("#home")).toBeVisible();
   await expect(page.locator("#shell")).toHaveCount(0);
   await expect(fallback(page, "A")).toHaveCount(0);
-  expect((await state(request)).events).toEqual([]);
 
   await open(request, "a");
   await expect(page.locator("#a")).toHaveText("open:a");

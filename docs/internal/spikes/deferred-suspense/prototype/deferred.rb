@@ -29,8 +29,6 @@ module Spike
     Pending = Struct.new(:view, :block, :virtual_path, :current_template)
     Ref = Struct.new(:index)
 
-    class SuspenseTimeout < StandardError; end
-
     # 2a. Where the blocks wait.
     module RenderContextExt
       def deferred_blocks
@@ -168,7 +166,10 @@ module Spike
         limit = Ruact.config.suspense_timeout
         return yield unless limit&.positive?
 
-        Timeout.timeout(limit, SuspenseTimeout, &)
+        # No exception class: Timeout then unwinds the block with one that is not a
+        # StandardError, so a `rescue` in a view (or Active Record, wrapping what a
+        # query raised) cannot take it, and raises Timeout::Error out here.
+        Timeout.timeout(limit, &)
       end
 
       def new_rows
@@ -188,10 +189,9 @@ module Spike
         payload
       end
 
-      # Raised inside a query, the timeout arrives wrapped (ActiveRecord::StatementInvalid).
       def timed_out?(error)
         while error
-          return true if error.is_a?(SuspenseTimeout)
+          return true if error.is_a?(Timeout::Error)
 
           error = error.cause
         end
@@ -287,7 +287,8 @@ module Spike
       socket = request.env["puma.socket"]
       return false if socket.nil? || !socket.wait_readable(0)
 
-      socket.recv_nonblock(1, Socket::MSG_PEEK).empty?
+      # End of file reads as nil or as an empty string, depending on how the peer closed.
+      socket.recv_nonblock(1, Socket::MSG_PEEK).to_s.empty?
     rescue IO::WaitReadable
       false
     rescue SystemCallError, IOError
@@ -298,8 +299,10 @@ module Spike
     # thread of its own. The filters around the action are still on the stack.
     def deliver_live(run, produce)
       produce.call(->(chunk) { response.stream.write(chunk) })
-    rescue ActionController::Live::ClientDisconnected
-      Events.add("disconnected:skipped=#{run.skipped}")
+    rescue ActionController::Live::ClientDisconnected, IOError, SystemCallError => e
+      # Which of these a write to a client that left raises depends on how far
+      # the server got in noticing.
+      Events.add("disconnected:skipped=#{run.skipped}:#{e.class}")
     ensure
       response.stream.close
     end

@@ -2,6 +2,7 @@
 <Clicker label={"shell"} />
 <Suspense fallback="Loading A…">
   <p id="a"><%= Gate.wait("a") %></p>
+  <p id="escaped"><%= "<i>markup</i> & text" %></p>
   <Clicker label={"in-a"} />
 </Suspense>
 <p id="after">after the boundary</p>

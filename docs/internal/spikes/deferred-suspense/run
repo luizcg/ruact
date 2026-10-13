@@ -6,7 +6,8 @@
 #   ./run measure         only the HTTP measurements (writes results/http.md)
 #   ./run react 19.2.8    the browser proof with the app's own react-server-dom-webpack
 #
-# Needs Ruby (bundler), Node and curl; `ab` for one measurement. Uses ports 4190 and 5199.
+# Needs Ruby (bundler), Node and curl; `wrk` for one measurement (skipped without it).
+# Uses ports 4190 and 5199.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -35,6 +36,10 @@ browser() {
       exit 1
     fi
     grep -E "✘|failed" tmp/baseline-proof.log
+    # Both scenarios, each at the assertion about what the browser shows.
+    grep -q "2 failed" tmp/baseline-proof.log
+    grep -q "locator('#shell')" tmp/baseline-proof.log
+    grep -q "toHaveURL" tmp/baseline-proof.log
     echo "== the streamed document read by the bootstrap 0.0.19 ships, $env"
     SPIKE_OLD_CLIENT=1 SPIKE_MODE=live RAILS_ENV=$env npx playwright test
   done

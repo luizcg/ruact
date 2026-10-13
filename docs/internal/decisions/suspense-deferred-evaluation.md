@@ -5,8 +5,8 @@
 | Date | 2026-10-13 |
 | Status | Proposed. D1 has Luiz's direction (2026-10-13); **D6 and the scope of the next story are his to decide** (see [Open](#open-for-luiz)) |
 | Story | 19-0 — deferred evaluation: architecture and proof |
-| Measured against | ruact 0.0.19; Rails 8.1.4, Rack 3.2.7, Puma 8.0.2, Ruby 3.4.5, SQLite (sqlite3 2.9.6); React 19.3.0 with the Flight client vendored in the gem, and React 19.2.8 with the app's own `react-server-dom-webpack`; Vite 6.4.4; Chromium through Playwright 1.64; macOS |
-| Experiment | [`docs/internal/spikes/deferred-suspense/`](../spikes/deferred-suspense/) — every statement marked *measured* comes from its scripts; `./run` reproduces all of them |
+| Measured against | ruact 0.0.19; Rails 8.1.4 (i18n 1.15.2), Rack 3.2.7, Puma 8.0.2, Ruby 3.4.5, SQLite (sqlite3 2.9.6); React 19.3.0 with the Flight client vendored in the gem, and React 19.2.8 with the app's own `react-server-dom-webpack`; Vite 6.4.4; Chromium through Playwright 1.64; macOS |
+| Experiment | [`docs/internal/spikes/deferred-suspense/`](../spikes/deferred-suspense/). Every statement marked *measured* comes from its scripts: `./run`, and `./run react 19.2.8` for the second client build |
 | Production code changed | None |
 
 ## Question
@@ -52,15 +52,18 @@ response in two ways, so the two could be compared on the same pages:
 Slow work is `Gate.wait("a")`: it returns when the test opens gate `a` with a
 request of its own. No scenario waits by time. The test reads from the server
 that a block is waiting at the gate, looks at the page, and opens the gate.
+Where a result is the absence of something (nothing arrived, a block did not
+start), it is read for a bounded time, and the results file says so.
 
 1. **Browser.** Chromium, in development (Vite dev server) and against a
    production build: 10 scenarios per mechanism (9 in production, where the
    error overlay does not exist), plus the two that describe 0.0.19.
 2. **The proof must fail without the prototype.** The same two proof scenarios
-   run against 0.0.19 and fail.
+   run against 0.0.19; the runner checks that both fail, each at the assertion
+   about what the browser shows.
 3. **HTTP.** Buffering, a client that goes away, a timeout, `load_async`, what
-   `Live` costs, what an `after_action` can still do, what a middleware left on
-   the thread.
+   `Live` costs, what is written after the first write, what a middleware
+   scoped around the request.
 4. **Both client builds.** The browser scenarios again with React 19.2.8 and
    the app's own `react-server-dom-webpack`.
 5. **The new document with the old JavaScript.**
@@ -104,8 +107,8 @@ written as it is today. (b) The app marks a value as deferred
   `@comments = Comment.where(…)` in the controller is deferred: one connection
   is busy while it runs and is back in the pool afterwards.
 - Components, partials, a nested `<Suspense>` and `t(".lazy")` work inside the
-  block. `t(".lazy")` needs the template path restored first; without that it
-  raises.
+  block, and what the block prints is escaped as in any template. `t(".lazy")`
+  needs the template path restored first; without that it raises.
 - **`load_async`, with the executor configured**: two queries started in the
   controller run at once (two connections busy), the shell is at the client
   before either finishes, and each block waits only for what is left of its
@@ -126,6 +129,9 @@ application setting, not something ruact turns on.
   log, naming the setting (Luiz, 2026-10-13). `ruact:doctor` reports the
   setting too. The warning belongs on the `load_async` call rather than on
   every `<Suspense>`: an app that never calls it has nothing to fix.
+- By Rails' source, and not measured here, `load_async` is also synchronous
+  inside a transaction, and runs on the caller when its pool's queue is full.
+  The guide should say both.
 - A `<Suspense>` with nothing slow costs one extra row, written right after
   the shell.
 
@@ -157,16 +163,19 @@ Writing rows as their work finishes is possible later for blocks backed by
 
 **Timeout.** Each block runs under `suspense_timeout`. Past it, the boundary
 gets the error row with the digest `ruact:suspense-timeout`, the next block
-runs, and the connection the query held is back in the pool and usable
-(*measured*, SQLite). Two things the next story has to carry:
+runs, and a page that queries the same pool afterwards reads its rows
+(*measured*, SQLite). What the next story has to carry:
 
-- A timeout raised inside a query arrives wrapped in
-  `ActiveRecord::StatementInvalid`: it is recognised by walking the cause
-  chain, not by its class.
-- On one thread the only way to stop a block is `Timeout`, which interrupts
-  wherever the block happens to be. That is what `rack-timeout` does, with the
-  same caveat. The database's own statement timeout is the cleaner limit for
-  queries; the guide should say so.
+- The timeout must not be an exception the block can rescue. Raised as an
+  ordinary one, it came back from a query wrapped in
+  `ActiveRecord::StatementInvalid` and was not recognised (*measured*, first
+  version of the prototype), and a `rescue` in a view would have swallowed it.
+  `Timeout.timeout` with no exception class unwinds the block with one that is
+  not a `StandardError`.
+- It is still a limit by interruption, on the one thread there is: it lands
+  wherever the block happens to be, as `rack-timeout` does, and an `ensure`
+  that blocks delays it. For queries the database's own statement timeout is
+  the cleaner limit, and the guide should say so.
 
 Today `suspense_timeout` compares against the declared `delay`. It becomes a
 limit on real time.
@@ -174,73 +183,122 @@ limit on real time.
 ### D3 — What the block still has of the request
 
 The block runs in the view it was written in: same instance variables, locals
-and helpers. What it sees beyond that depends on the mechanism (*measured*;
+and helpers. What it sees beyond that depends on the mechanism (*measured*,
+with the block waiting at a gate so that the order is certain;
 `results/context-*.json`, `results/http.md`):
 
 | What the request set up | Live | Lazy body |
 | --- | --- | --- |
 | `around_action`: `I18n.with_locale`, `Time.use_zone`, a tenant | **kept** | **gone** (default locale, UTC, no tenant) |
-| A middleware that wraps the request (`I18n.with_locale` around the app) | **kept** | **gone** |
 | `CurrentAttributes` | kept | kept |
 | `t(".lazy")`, once the template path is restored | resolves in the request's locale | resolves in the default locale |
-| A thread variable a middleware set | not visible, in the shell either | visible |
 | `after_action` | runs after the last block | runs before the first |
+| A middleware that scopes the request around the app (`connected_to(role:, prevent_writes:)`) | **gone** once the response has started | **gone** |
+| A locale a middleware set | not what the action sees, in the shell either (below) | the shell sees it, the block does not |
+| A thread variable a middleware set | not visible, in the shell either | visible |
 
 **Choice: the block runs while the action is still running** — Live's model.
-The lazy body's failure is the dangerous one: a query in a deferred block runs
-outside the tenant, the locale or the database role the request chose, and
-nothing reports it.
+What the controller scoped is then still in force, and that is where an app
+puts its tenant, its locale and its time zone.
 
-The thread-variable row is how `ActionController::Live` already behaves in
-0.0.19: it copies fiber-locals and shares Rails' execution state with the
-action's thread, and thread variables are neither.
+**What neither mechanism can keep** is what a middleware scopes around the
+app. A response starts by the middleware returning; the blocks run after that.
+That is how a streamed response works in Rack, not something of ruact's. For a
+page that streams, a scope the
+deferred content depends on has to be set in the controller. This needs a line
+in the guide, and it is a case for 19-2 with Rails' `DatabaseSelector`.
+
+**Two things about `ActionController::Live` itself**, true in 0.0.19 for any
+controller that includes it, deferred content or not (*measured*):
+
+- The action runs on a thread from a pool, and i18n keeps the locale with the
+  thread it was set on. A locale set by a middleware does not reach the action; and the
+  thread created during such a request kept `pt` for the next request, to a
+  page with no such middleware.
+- Thread variables set outside the action are not visible in it. Live copies
+  fiber-locals and shares Rails' execution state, and thread variables are
+  neither.
 
 ### D4 — Releasing what a block holds
 
-Rails leases a connection per query, so a block holds one only while a query
-is running. The lifecycle table below says what returns it in each case. Two
-facts shape the design (*measured*):
+On Rails 7.2 and later a connection is leased per query, so a block holds one
+only while a query is running. Two facts shape the design (*measured*):
 
 - **The server does not learn that the client left while a block is waiting.**
-  The block keeps its connection until it ends or times out.
+  The block keeps its connection until it ends or times out. With the client
+  gone and the gate never opened, the timeout ended the block and the
+  connection was back in the pool.
 - **A write to a client that left does not fail.** After the client
   disconnected, the row of the first block was written without error and the
   second block started, in both mechanisms. Asking the socket before each
   block (`puma.socket`, a non-blocking peek that reads end-of-file) stops
   that: the second block did not start.
 
-**Choice.** Before each block, ask whether the client is still there, where the
-server offers a way; never start a block for a client that is gone. A block
-already running is bounded by `suspense_timeout`. Nothing is cancelled from
-outside. React, Next.js and Waku cancel nothing either: they stop writing and
-drop the result when it arrives (read in their sources: React's
-`ReactFlightServer.js` at `b91823e`, Next.js at `f3f56ece`, Waku at `8e9f542`). There a pending promise holds nothing, and
-here the block holds a thread and maybe a connection, which is why the timeout
-is part of the design and not an option.
+**Options.** (a) Do nothing: a block for a client that left runs to its end.
+(b) Ask before each block, and bound a running one with the timeout. (c) Watch
+the socket from another thread and interrupt the block.
+
+**Choice: (b).** Before each block, ask whether the client is still there,
+where the server offers a way; never start a block for a client that is gone.
+A block already running is bounded by `suspense_timeout`. Nothing is cancelled
+from outside.
+
+**Rejected.** (a) leaves every later block of an abandoned page running. (c)
+is a thread per streaming response to save, at most, one `suspense_timeout`.
+
+React, Next.js and Waku cancel nothing either: they stop writing and drop the
+result when it arrives (read in their sources: React's `ReactFlightServer.js`
+at `b91823e`, Next.js at `f3f56ece`, Waku at `8e9f542`). There a pending
+promise holds nothing, and here the block holds a thread and maybe a
+connection, which is why the timeout is part of the design and not an option.
+
+A client that half-closes its connection and keeps reading would read as gone.
+Browsers and proxies do not do that to a page; it is noted, not handled.
 
 ### D5 — How the response is sent
 
-**The document.** The layout renders with the shell's rows inline, as today.
+**Options for the first load.** (a) Stream the document: send it up to
+`</body>`, then each later batch of rows as a script, then the end. (b) Send
+the document complete, with the shell only, and have the browser fetch the
+rest. (c) Leave the first load as it is and stream only navigations.
+
+**Choice: (a).** The layout renders with the shell's rows inline, as today.
 The document is sent up to `</body>`; each later batch of rows is a
-`<script>self.__FLIGHT_DATA.push("…")</script>`; then `</body></html>`.
+`<script>self.__FLIGHT_DATA.push("…")</script>`; then `</body></html>`. A
+navigation gets the same rows over `text/x-component`, as the Live path writes
+them today.
 
-**A navigation.** The same rows over `text/x-component`, as the Live path
-writes them today.
+**Rejected.** (b) runs the action twice, or needs a place to keep a
+half-rendered page between two requests. (c) is the scope question below.
 
-**The point of no return is the first write.** Status, headers, cookies,
-session and flash are what they were then (*measured*: a cookie and a session
-value written inside a block do not reach the browser). So, inside a
-`<Suspense>`:
+**The response starts at the first write.** What is written to it later —
+status, a header, a cookie, the session, the flash — races with the headers
+being sent, and has lost once anything waited (*measured*):
+
+| Written after the first write | Live | Lazy body |
+| --- | --- | --- |
+| A cookie and a session value, by a block that waited at a gate | lost | lost |
+| A cookie, by a block that did not wait (600 responses) | 600 arrived | 0 arrived |
+| A header and a cookie, by an `after_action` that waited at a gate | lost | arrive (the filter runs before the response starts) |
+
+So, inside a `<Suspense>`:
 
 - An exception is not a 500. The response is already 200; the boundary gets an
-  error row, keeps its fallback, and the blocks after it still run
-  (*measured*). The server reports it through `Rails.error` and the log.
+  error row, keeps its fallback, and the blocks after it still run. The
+  exception goes to `Rails.error` (*measured*) and to the log.
 - A record that is not found is not a 404, for the same reason.
 - There is no redirect. Next.js emits a client-side one for this case; ruact
   does not copy that.
+- A cookie, the session and the flash are not to be written.
 
 What decides status and redirects is the controller, before rendering, as in
 any Rails action. Rails' own streaming has the same rule, and so does Next.js.
+
+**An exception that escapes while the response is open.** By its source, Live
+then appends `<script>window.location = "/500.html"</script>` to an HTML
+response that is still open. The prototype rescues every block's error and
+closes the stream in an `ensure`, so nothing escaped with the stream open; the
+implementation has to guarantee that, and it is a case for 19-2.
 
 **Errors in development** (Luiz, 2026-10-13). The browser can put the error
 over the page: the experiment draws an overlay with the exception's class and
@@ -274,20 +332,25 @@ own and gives it a response whose body is a queue. "Does this page have a
 turns Live on. What can: the action's name, which the route has already
 decided. The experiment did that — Live for some actions of a controller and
 not for others — and the action left out ran on the request's thread with its
-usual response (*measured*).
+usual response (*measured*). It did so by overriding two methods Rails marks
+as internal (`process`, `make_response!`); including Live in a whole
+controller is the public way.
 
-What Live does to an action that uses it (*measured*, a page with no
-`<Suspense>`, production):
+What Live does to an action that uses it, **on a page with no `<Suspense>`**
+(*measured*):
 
 | | With Live | Without |
 | --- | --- | --- |
-| An `after_action` that sets a header or a cookie | **lost**: the headers are sent before the filter finishes | arrives |
 | `ETag` | none (`cache-control: no-cache`) | sent; a Flight request with `If-None-Match` gets a 304 |
+| A locale set by a middleware | not what the action sees; can carry over from an earlier request (D3) | seen |
 | Thread variables set by a middleware | not visible | visible |
-| Requests per second, trivial page | about 13% fewer | — |
+| An `after_action` that writes a header or a cookie | arrived in 600 of 600 when the filter did not wait; lost when it waited at a gate | arrives |
+| Requests per second, trivial page | no consistent difference: the spread between runs is as large as the gap | — |
 
-The first row is the one that matters. It is not about slow pages: with Live,
-any page's headers leave when its body is first written.
+By Rails' source, not measured here: in an app's controller tests
+(`ActionController::TestCase`) Live runs the action inline, so those tests do
+not see any of this; and in development a code reload waits for a streaming
+action to finish.
 
 **Options.**
 
@@ -297,9 +360,9 @@ any page's headers leave when its body is first written.
   by an action that does not stream evaluates in place, as in 0.0.19, and says
   so in development, naming the controller and the line to add.
 - **(B) ruact turns Live on for every page action.** The app writes nothing.
-  Every ruact page takes the four rows above, with or without a `<Suspense>`.
+  Every ruact page takes the rows above, with or without a `<Suspense>`.
 - **(C) No Live: the lazy body.** Decided at render time, nothing to declare,
-  no cost for other pages. Rejected by D3.
+  no cost for other pages. Rejected by D3: what the controller scoped is gone.
 - **(D) ruact learns which actions stream** from their first render.
   Rejected: the first response of each action differs from the rest, per
   process, which is hard to explain and to test.
@@ -307,24 +370,23 @@ any page's headers leave when its body is first written.
 **Recommendation: (A).** An existing app keeps the behaviour it has. The
 failure it leaves — a `<Suspense>` in an action that does not stream — is
 detected with certainty at render time, so it can be loud. (B) is the better
-experience when it works, and its cost is silent: an app that sets a CSRF
-cookie or a cache header in an `after_action` loses it on every ruact page.
-An app that wants (B) gets it with the same line in `ApplicationController`.
+experience when it works, and what it costs is silent and lands on pages that
+have nothing to stream: no `ETag`, and an app that picks its locale in a
+middleware gets the wrong one. An app that wants (B) gets it with the same
+line in `ApplicationController`.
 
 **This one is Luiz's.**
 
 ## Lifecycle
 
-What happens to each part, per event. *Measured* unless marked.
-
-| Event | The response | The database connection | The request's state | The log |
-| --- | --- | --- | --- | --- |
-| A block raises | Stays 200. An `E` row for that boundary (`ruact:suspense-error`): in development the class, message and backtrace; in production the digest only. The fallback stays; later blocks run | Not held past the failing query (*not measured separately: same path as the timeout*) | Unchanged for later blocks | The exception, through `Rails.error` and the logger |
-| A block passes `suspense_timeout` | An `E` row with `ruact:suspense-timeout`; later blocks run | Back in the pool and usable (SQLite) | Unchanged | The timeout |
-| The client leaves while a block waits | Nothing is written; the server does not notice | Held until the block ends or times out, then returned | — | Nothing until then |
-| The client left, the next block is due | With the socket check: not started, the response ends. Without it: started | None taken with the check | — | Nothing in the prototype; 19-1 decides what a cut-short response logs |
-| A navigation is superseded | *Specified, not measured:* the router aborts its fetch; the server sees a client that left | as above | — | — |
-| An exception after the first write, outside a block | *Specified, not measured:* the response ends there; the browser's transport labels the rows still pending (`ruact:connection-closed`) and their boundaries keep the fallback | — | — | The exception |
+| Event | The response | The database connection | Reported |
+| --- | --- | --- | --- |
+| A block raises | *Measured:* stays 200. An `E` row for that boundary (`ruact:suspense-error`): in development the class, message and backtrace; in production a digest and a fixed message. The fallback stays; later blocks run | *Not measured separately* | *Measured:* `Rails.error`, source `ruact.suspense` |
+| A block passes `suspense_timeout` | *Measured:* an `E` row with `ruact:suspense-timeout`; later blocks run | *Measured (SQLite):* back in the pool; a later page reads its rows | *Measured:* `Rails.error` |
+| The client leaves while a block waits | *Measured:* nothing is written; the server does not notice | *Measured:* held until the block ends or times out, then returned | Nothing until then |
+| The client left, the next block is due | *Measured:* with the socket check, not started and the response ends; without it, started | — | Nothing in the prototype; 19-1 decides what a response cut short logs |
+| A navigation is superseded | *Specified:* the router aborts its fetch; the server sees a client that left | as above | — |
+| An exception after the first write, outside a block | *Specified:* the gem closes the stream; the browser's transport labels the rows still pending (`ruact:connection-closed`) and their boundaries keep the fallback | — | The exception |
 
 ## Buffering
 
@@ -342,15 +404,22 @@ as it arrives), and with the prototype's own headers removed.
 The headers the gem sets on a streamed response stay as the Live path has them
 today: `Cache-Control: no-cache` and `X-Accel-Buffering: no`.
 
-**Not measured.**
+## Not measured
 
-- Rack 2.2, whose `ETag` buffers any body unless it sees
+- **Rails before 8.1.** The gem's test matrix runs Rails 7.0 to 8.0. Before
+  7.2 a thread keeps its connection for the whole request, so D4's "only while
+  a query runs" does not hold there.
+- **Rack 2.2**, whose `ETag` buffers any body unless it sees
   `Cache-Control: no-cache` or `Last-Modified`.
-- A reverse proxy. By its documentation nginx buffers a proxied response by
+- **A reverse proxy.** By its documentation nginx buffers a proxied response by
   default (`proxy_buffering on`) and honours `X-Accel-Buffering: no`, which the
   gem sends; a proxy that compresses, or that ignores that header, has to be
   configured not to buffer. The guide has to say this with the header names.
-- Servers other than Puma; Puma terminating TLS itself; HTTP/2.
+- **Other servers**; Puma terminating TLS itself (the socket check reads a
+  plain socket); HTTP/2.
+- **PostgreSQL and MySQL**: a connection after a query was interrupted by the
+  timeout.
+- **The writes that race**, on a machine under real load.
 
 ## The wire and the two clients
 
@@ -368,7 +437,7 @@ changes under D5 are in ruact's bootstrap and entry tag, not in React's client.
   a block, converting its HTML and deciding when to write are the
   orchestrator's.
 - Rails' escaping and ruact's serialization rules apply inside a block: it is
-  the same template code, captured by the same view.
+  the same template code, captured by the same view (*measured* for escaping).
 - An action that does not stream answers as it does today. For a page with no
   `<Suspense>` the prototype's Flight response, and the payload inlined in its
   document, are byte for byte what 0.0.19 sends (*measured*). The document's
@@ -378,7 +447,8 @@ changes under D5 are in ruact's bootstrap and entry tag, not in React's client.
 
 - The content of `<Suspense>` runs after the shell is sent, in an action that
   streams. Code that relied on it running before a later part of the template
-  (setting an instance variable the rest of the page reads) no longer can.
+  (setting an instance variable the rest of the page reads, `content_for`) no
+  longer can.
 - A `<Suspense>` with no `delay=` waits for nothing. Today it waits 1.5 s on a
   streamed navigation. `delay=` stays as an explicit wait, for seeing a
   fallback in development.
@@ -405,33 +475,41 @@ changes under D5 are in ruact's bootstrap and entry tag, not in React's client.
    deferred script tolerated that) still has to mount.
 3. Blocks run one at a time, in page order, in the view and with the template
    path they were written with, while the action is still running.
-4. Each block runs under `suspense_timeout`; a wrapped timeout is recognised;
-   the default `delay` is gone.
+4. Each block runs under `suspense_timeout`, with a timeout the block cannot
+   rescue; the default `delay` is gone.
 5. A block that raises becomes an error row, is reported through `Rails.error`,
-   and in development is shown over the page; production sends the digest only.
+   and in development is shown over the page; production sends no detail. No
+   exception leaves the action while the stream is open.
 6. Before each block the gem asks whether the client is still there, where the
    server allows it, and starts no block for one that is gone.
 7. D6 as decided. If (A): the `ruact_streaming` declaration, and the
    development message for a `<Suspense>` in an action that does not stream.
 8. In development, a `load_async` that cannot be asynchronous is logged, and
    `ruact:doctor` reports the setting.
-9. Guide and changelog: what runs later and what does not; no status, cookie
-   or redirect inside a `<Suspense>`; `load_async` and its setting; proxies.
+9. The test matrix (Rails 7.0 to 8.0) passes; what differs before 7.2 is
+   measured and written down.
+10. Guide and changelog: what runs later and what does not; no status, cookie
+    or redirect inside a `<Suspense>`; scopes belong in the controller, not in
+    a middleware; `load_async` and its setting; proxies.
 
 ### 19-2 — cases
 
 - A navigation superseded while a block waits; a second navigation to the same
   page.
 - An exception after the first write, outside a block (the layout's tail, the
-  serializer).
+  serializer), on a document and on a navigation.
 - The client leaving mid-block, with PostgreSQL: the connection, and a
   statement timeout as the limit.
 - A block inside a transaction, and a controller that pins a connection.
+- Rails' `DatabaseSelector`, and a tenant chosen by a middleware.
 - A `<Suspense>` inside a component's children, inside a loop, inside a
-  partial; a block that renders nothing.
+  partial, around a cached fragment; a block that renders nothing;
+  `content_for` inside a block.
 - `revalidate()` on a page with a pending boundary.
-- A form posted to a page whose re-render has a `<Suspense>` (the 422 path).
+- A form posted to a page whose re-render has a `<Suspense>` (the 422 path),
+  and `ruact_errors` read inside a block.
 - A click on a link while the document is still open.
+- Requests waiting at slow blocks against Puma's thread count.
 - Behind nginx with its defaults, and with compression at the proxy.
 - The development overlay with more than one failure, and its backtrace
   positions (the frames name the right files; line numbers were not checked).

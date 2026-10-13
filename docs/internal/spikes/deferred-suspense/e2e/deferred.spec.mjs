@@ -31,6 +31,10 @@ test("first load: shell and fallback while the gate is closed, the content when 
   await expect(fallback(page, "A")).toHaveCount(0);
   await loaded;
 
+  // Rails escaped what the block printed, and it is text in the page.
+  await expect(page.locator("#escaped")).toHaveText("<i>markup</i> & text");
+  await expect(page.locator("#escaped i")).toHaveCount(0);
+
   // Same document, and the island kept its state; the one that arrived works.
   expect(await documentOf(page)).toBe(doc);
   await expect(clicker(page, "shell")).toHaveText("shell: 1");

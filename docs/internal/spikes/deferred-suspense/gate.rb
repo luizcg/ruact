@@ -11,15 +11,22 @@ module Gate
   @cond = ConditionVariable.new
   @open = {}
   @waiting = Hash.new(0)
+  @generation = 0
 
   class NeverOpened < StandardError; end
+  class Reset < StandardError; end
 
   def self.wait(name)
     deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + LIMIT
     @mutex.synchronize do
+      generation = @generation
       @waiting[name] += 1
       begin
         until @open[name]
+          # A scenario that ended with a request still waiting must not leave
+          # it for the next one to count.
+          raise Reset, "gate #{name} was reset while waiting" if generation != @generation
+
           remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
           raise NeverOpened, "gate #{name} was never opened" if remaining <= 0
 
@@ -42,6 +49,7 @@ module Gate
   def self.reset
     @mutex.synchronize do
       @open.clear
+      @generation += 1
       @cond.broadcast
     end
   end
