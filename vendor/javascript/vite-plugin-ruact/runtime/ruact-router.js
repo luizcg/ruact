@@ -10,9 +10,8 @@
  * Also handles popstate for browser back/forward.
  */
 
-import { createFromReadableStream } from "virtual:ruact/flight-client";
 import { setBoundaryErrorHandler } from "./suspense-boundary.js";
-import { labelledStream } from "./transport.js";
+import { openPage } from "./page-stream.js";
 
 // Errors already reported once (by a Suspense boundary) that navigate() must
 // not report again on their way out to a revalidate() caller.
@@ -570,15 +569,11 @@ async function _processFlightResponse(response, {
     ? (() => { const u = new URL(response.url); return u.pathname + u.search + u.hash; })()
     : targetUrl;
 
-  // Two readers of one body: React's client, and a drain that settles when the
-  // last row is in — `revalidate()` resolves then, as it always has.
-  const [forClient, forEnd] = response.body.tee();
-  const streamEnd = _drain(forEnd);
-  streamEnd.catch(() => {}); // awaited below; an abort must not be "unhandled" first
-
   // Resolves when row 0 arrives; deferred Suspense rows keep streaming into it.
-  // A stream that ends without a root rejects (runtime/transport.js labels it).
-  const root = await createFromReadableStream(labelledStream(forClient));
+  // `page.end` settles when the last row is in — `revalidate()` resolves then,
+  // as it always has.
+  const page = openPage(response.body);
+  const root = await page.root;
 
   // A newer navigation started while this one was in flight: it owns the page.
   if (signal?.aborted) return;
@@ -599,16 +594,11 @@ async function _processFlightResponse(response, {
   if (scroll) window.scrollTo(0, 0);
 
   try {
-    await streamEnd;
+    await page.end;
   } catch (err) {
     // The page is on screen. A row that never arrived was reported by its
     // Suspense boundary; a revalidate() caller still learns it failed.
     if (err?.name !== "AbortError") _alreadyReported.add(err);
     throw err;
   }
-}
-
-async function _drain(stream) {
-  const reader = stream.getReader();
-  while (!(await reader.read()).done) { /* the client has its own copy */ }
 }
