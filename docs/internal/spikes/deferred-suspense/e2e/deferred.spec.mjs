@@ -54,9 +54,12 @@ test("navigation: shell and fallback while the gate is closed, the content when 
   await expect(page.locator("#shell")).toHaveText("Slow");
   await expect(fallback(page, "A")).toBeVisible();
   await expect(page.locator("#a")).toHaveCount(0);
+  await clicker(page, "shell").click();
+  await expect(clicker(page, "shell")).toHaveText("shell: 1");
 
   await open(request, "a");
   await expect(page.locator("#a")).toHaveText("open:a");
   await expect(fallback(page, "A")).toHaveCount(0);
   expect(await documentOf(page)).toBe(doc);
+  await expect(clicker(page, "shell")).toHaveText("shell: 1");
 });

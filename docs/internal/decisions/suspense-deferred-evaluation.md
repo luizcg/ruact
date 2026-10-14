@@ -6,7 +6,7 @@
 | Status | Proposed. D1 has Luiz's direction (2026-10-13); **D6 and the scope of the next story are his to decide** (see [Open](#open-for-luiz)) |
 | Story | 19-0 — deferred evaluation: architecture and proof |
 | Measured against | ruact 0.0.19; Rails 8.1.4 (i18n 1.15.2), Rack 3.2.7, Puma 8.0.2, Ruby 3.4.5, SQLite (sqlite3 2.9.6); React 19.3.0 with the Flight client vendored in the gem, and React 19.2.8 with the app's own `react-server-dom-webpack`; Vite 6.4.4; Chromium through Playwright 1.64; macOS |
-| Experiment | [`docs/internal/spikes/deferred-suspense/`](../spikes/deferred-suspense/). Every statement marked *measured* comes from its scripts: `./run`, and `./run react 19.2.8` for the second client build |
+| Experiment | [`docs/internal/spikes/deferred-suspense/`](../spikes/deferred-suspense/). Every statement marked *measured* comes from its scripts — `./run`, and `./run react 19.2.8` for the second client build — and has its line in `results/` (`browser.md`, `http.md`, `context-*.json`) |
 | Production code changed | None |
 
 ## Question
@@ -50,8 +50,10 @@ response in two ways, so the two could be compared on the same pages:
   and the blocks, after the action and the middleware have returned.
 
 Slow work is `Gate.wait("a")`: it returns when the test opens gate `a` with a
-request of its own. No scenario waits by time. The test reads from the server
-that a block is waiting at the gate, looks at the page, and opens the gate.
+request of its own. No scenario waits by time, with two exceptions that are
+about time itself: the timeout, and one query that really takes seconds. The
+test reads from the server that a block is waiting at the gate, looks at the
+page, and opens the gate.
 Where a result is the absence of something (nothing arrived, a block did not
 start), it is read for a bounded time, and the results file says so.
 
@@ -74,7 +76,7 @@ With the gate closed, the browser shows the shell and the fallback; an island
 in the shell takes clicks; opening the gate replaces the fallback with the
 content, in the same document, and the island keeps its state. This holds on a
 first load and on a navigation, with both mechanisms, in development and in
-production, with both client builds (*measured*).
+production, with both client builds (*measured*: `results/browser.md`).
 
 The prototype changes four things in the gem's pipeline, and the serializer is
 not one of them:
@@ -112,7 +114,9 @@ written as it is today. (b) The app marks a value as deferred
 - **`load_async`, with the executor configured**: two queries started in the
   controller run at once (two connections busy), the shell is at the client
   before either finishes, and each block waits only for what is left of its
-  query.
+  query. The queries here wait in Ruby, at a gate; a query that computes
+  inside SQLite holds Ruby's lock while it runs (see the timeout, D2), so how
+  far real queries overlap is a question for PostgreSQL, not answered here.
 - **`load_async`, without it** (the default of a generated app:
   `config.active_record.async_query_executor` is `nil`): the call loads the
   relation right there, in the controller. The first query blocks the
@@ -161,10 +165,20 @@ not. The total time is the same; what is lost is seeing the faster part first.
 Writing rows as their work finishes is possible later for blocks backed by
 `load_async`, and nothing here prevents it.
 
-**Timeout.** Each block runs under `suspense_timeout`. Past it, the boundary
-gets the error row with the digest `ruact:suspense-timeout`, the next block
+**Timeout.** Each block runs under `suspense_timeout`. For work that waits in
+Ruby — the gate, here inside a SQL function — the boundary gets the error row
+with the digest `ruact:suspense-timeout` once the limit passes, the next block
 runs, and a page that queries the same pool afterwards reads its rows
-(*measured*, SQLite). What the next story has to carry:
+(*measured*).
+
+**It does not bound a query that runs inside SQLite** (*measured*): with a
+1 s limit, a query that took about 4 s ran to its end and the boundary got
+its content. Ruby's `Timeout` interrupts a thread only where Ruby can run,
+and the SQLite driver keeps Ruby's lock for the whole query. A driver that
+waits on the network without that lock, as PostgreSQL's does, is expected to
+be interruptible there; that was not measured.
+
+What the next story has to carry:
 
 - The timeout must not be an exception the block can rescue. Raised as an
   ordinary one, it came back from a query wrapped in
@@ -173,13 +187,15 @@ runs, and a page that queries the same pool afterwards reads its rows
   view would have swallowed it.
   `Timeout.timeout` with no exception class unwinds the block with one that is
   not a `StandardError`.
-- It is still a limit by interruption, on the one thread there is: it lands
-  wherever the block happens to be, as `rack-timeout` does, and an `ensure`
-  that blocks delays it. For queries the database's own statement timeout is
-  the cleaner limit, and the guide should say so.
+- It is a limit by interruption, on the one thread there is: it lands
+  wherever the block happens to be, as `rack-timeout` does; an `ensure` that
+  blocks delays it; and native code that does not yield is not interrupted at
+  all. **`suspense_timeout` is a backstop, not a guarantee.** The limit that
+  holds for a query is the database's own statement timeout, and the guide
+  has to say so.
 
 Today `suspense_timeout` compares against the declared `delay`. It becomes a
-limit on real time.
+limit on real time, as far as the block can be interrupted.
 
 ### D3 — What the block still has of the request
 
@@ -194,7 +210,7 @@ with the block waiting at a gate so that the order is certain;
 | `CurrentAttributes` | kept | kept |
 | `t(".lazy")`, once the template path is restored | resolves in the request's locale | resolves in the default locale |
 | `after_action` | runs after the last block | runs before the first |
-| A middleware that scopes the request around the app (`connected_to(role:, prevent_writes:)`) | **gone** once the response has started | **gone** |
+| A middleware that scopes the request around the app (`connected_to(…, prevent_writes: true)`) | **gone** once the response has started | **gone** |
 | A locale a middleware set | the action sees its pool thread's locale, which may be another request's (below) | the shell sees it, the block does not |
 | A thread variable a middleware set | not visible, in the shell either | visible |
 
@@ -232,7 +248,7 @@ only while a query is running. Two facts shape the design (*measured*):
   The block keeps its connection until it ends or times out. With the client
   gone and the gate never opened, the timeout ended the block and the
   connection was back in the pool.
-- **A write to a client that left does not fail.** After the client
+- **The first write to a client that left does not fail.** After the client
   disconnected, the row of the first block was written without error and the
   second block started, in both mechanisms. Asking the socket before each
   block (`puma.socket`, a non-blocking peek that reads end-of-file) stops
@@ -244,8 +260,8 @@ the socket from another thread and interrupt the block.
 
 **Choice: (b).** Before each block, ask whether the client is still there,
 where the server offers a way; never start a block for a client that is gone.
-A block already running is bounded by `suspense_timeout`. Nothing is cancelled
-from outside.
+A block already running ends by itself or at `suspense_timeout`, with the
+limits D2 gives for that. Nothing is cancelled from outside.
 
 **Rejected.** (a) leaves every later block of an abandoned page running. (c)
 is a thread per streaming response to save, at most, one `suspense_timeout`.
@@ -304,7 +320,7 @@ What decides status and redirects is the controller, before rendering, as in
 any Rails action. Rails' own streaming has the same rule, and so does Next.js.
 
 **An exception that escapes while the response is open.** By its source, Live
-then appends `<script>window.location = "/500.html"</script>` to an HTML
+then appends a script that sends the browser to `/500.html` to an HTML
 response that is still open. The prototype rescues every block's error and
 closes the stream in an `ensure`, so nothing escaped with the stream open; the
 implementation has to guarantee that, and it is a case for 19-2.
@@ -350,20 +366,20 @@ What Live does to an action that uses it, **on a page with no `<Suspense>`**
 
 | | With Live | Without |
 | --- | --- | --- |
-| `ETag` | none (`cache-control: no-cache`) | sent; a Flight request with `If-None-Match` gets a 304 |
+| `ETag` | none (`cache-control: no-cache`) | sent; a Flight request with `If-None-Match` gets a 304 (not checked for the document) |
 | A locale set by a middleware | the pool thread's: this request's or an earlier one's (D3) | seen |
 | Thread variables set by a middleware | not visible | visible |
 | An `after_action` that writes a header or a cookie | arrived in 600 of 600 when the filter did nothing that lets another thread run; lost when it waited at a gate | arrives |
-| Requests per second, trivial page | about 5% fewer in the results committed here; other runs on the same machine gave between nothing and 15% | — |
+| Requests per second, trivial page | a few percent fewer in `results/http.md`, where the two configurations without Live also differ from each other | — |
 
 By Rails' source, not measured here:
 
 - Rails' test support replaces Live's thread with an inline call, for the
   whole process, once it is loaded. Controller tests, request specs and system
   tests that run the server in the test's own process then run the action to
-  its end before anything is sent: **they cannot see a fallback, or anything
-  in this table.** Streaming can only be tested against a server started on
-  its own, as this experiment does.
+  its end before anything is sent: **they cannot see a fallback, nor the
+  thread and the ordering the rows above come from.** Streaming can only be
+  tested against a server started on its own, as this experiment does.
 - In development a code reload waits for a streaming action to finish.
 
 **Options.**
@@ -381,7 +397,8 @@ By Rails' source, not measured here:
   Rejected: the first response of each action differs from the rest, per
   process, which is hard to explain and to test.
 
-**Recommendation: (A).** An existing app keeps the behaviour it has. The
+**Recommendation: (A).** A controller that does not include Live today keeps
+the behaviour it has. The
 failure it leaves — a `<Suspense>` in an action that does not stream — is
 detected with certainty at render time, so it can be loud. (B) is the better
 experience when it works, and what it costs is silent and lands on pages that
@@ -389,15 +406,19 @@ have nothing to stream: no `ETag`, and an app that picks its locale in a
 middleware can get another request's. An app that wants (B) gets it with the same
 line in `ApplicationController`.
 
+(A)'s own path for a `<Suspense>` in an action that does not stream —
+evaluated in place, with a development message — was not prototyped: it is
+what 0.0.19 does, plus the message.
+
 **This one is Luiz's.**
 
 ## Lifecycle
 
 | Event | The response | The database connection | The request's state | Reported |
 | --- | --- | --- | --- | --- |
-| A block raises | *Measured:* stays 200. An `E` row for that boundary (`ruact:suspense-error`): in development the class, message and backtrace; in production a digest and a fixed message. The fallback stays; later blocks run | *Not measured separately* | *Specified:* later blocks run in the same view, with what the controller scoped still in force | *Measured:* `Rails.error`, source `ruact.suspense` |
-| A block passes `suspense_timeout` | *Measured:* an `E` row with `ruact:suspense-timeout`; later blocks run | *Measured (SQLite):* back in the pool; a later page reads its rows | *Specified:* as above | *Measured:* `Rails.error` |
-| The client leaves while a block waits | *Measured:* nothing is written; the server does not notice | *Measured:* held until the block ends or times out, then returned | Unchanged: the action is still running | Nothing until then |
+| A block raises | *Measured:* stays 200; the fallback stays; later blocks run; development shows the class, the message and a backtrace that names the template, and production shows none of them. The row's digest (`ruact:suspense-error`) is the prototype's, read from its code | *Not measured separately* | *Specified:* later blocks run in the same view, with what the controller scoped still in force | *Measured:* `Rails.error`, source `ruact.suspense` |
+| A block passes `suspense_timeout` | *Measured, for work that waits in Ruby:* an `E` row with `ruact:suspense-timeout`; later blocks run. *Measured:* a query running inside SQLite is not interrupted | *Measured:* back in the pool; a later page reads its rows | *Specified:* as above | *Measured:* `Rails.error` |
+| The client leaves while a block waits | *Measured:* nothing is written; the server does not notice | *Measured:* held until the block ends or times out, then returned | *Specified:* unchanged, the action is still running | *Measured:* nothing until then; the timeout, if it comes to that |
 | The client left, the next block is due | *Measured:* with the socket check, not started and the response ends; without it, started | — | *Specified:* the action's `after_action` filters still run | Nothing in the prototype; 19-1 decides what a response cut short logs |
 | A navigation is superseded | *Specified:* the router aborts its fetch; the server sees a client that left | as above | as above | — |
 | An exception after the first write, outside a block | *Specified:* the gem closes the stream; the browser's transport labels the rows still pending (`ruact:connection-closed`) and their boundaries keep the fallback | — | — | The exception |
@@ -434,8 +455,9 @@ today: `Cache-Control: no-cache` and `X-Accel-Buffering: no`.
   configured not to buffer. The guide has to say this with the header names.
 - **Other servers**; Puma terminating TLS itself (the socket check reads a
   plain socket); HTTP/2.
-- **PostgreSQL and MySQL**: a connection after a query was interrupted by the
-  timeout.
+- **PostgreSQL and MySQL**: whether the timeout interrupts a running query
+  there, the connection after it did, and how far `load_async` queries
+  overlap.
 - **The writes that race**, on a machine under real load.
 
 ## The wire and the two clients
@@ -471,7 +493,7 @@ changes under D5 are in ruact's bootstrap and entry tag, not in React's client.
   runs, for seeing a fallback in development; it counts against
   `suspense_timeout`, so a delay longer than the timeout still ends in the
   timeout row, as today.
-- `suspense_timeout` limits real time.
+- `suspense_timeout` limits real time, where the block can be interrupted (D2).
 - An error inside a `<Suspense>` no longer makes the response a 500.
 - The first load streams too.
 - If (A) is chosen: a controller that includes `ActionController::Live` keeps
@@ -495,12 +517,13 @@ changes under D5 are in ruact's bootstrap and entry tag, not in React's client.
 3. Blocks run one at a time, in page order, in the view and with the template
    path they were written with, while the action is still running.
 4. Each block runs under `suspense_timeout`, with a timeout the block cannot
-   rescue; the default `delay` is gone.
+   rescue; the default `delay` is gone. What the timeout does and does not
+   interrupt is measured with PostgreSQL and written in the guide.
 5. A block that raises becomes an error row, is reported through `Rails.error`,
    and in development is shown over the page; production sends no detail. No
    exception leaves the action while the stream is open. In development, a
-   write to cookies, session or flash once the response has started is an
-   error.
+   write to cookies, session, flash or the response's headers once the
+   response has started is an error.
 6. Before each block the gem asks whether the client is still there, where the
    server allows it, and starts no block for one that is gone; a response cut
    short is logged as one.
@@ -516,8 +539,12 @@ changes under D5 are in ruact's bootstrap and entry tag, not in React's client.
    server started on its own: Rails' test support runs Live inline.
 10. Guide and changelog: what runs later and what does not; no status, cookie
     or redirect inside a `<Suspense>`; scopes belong in the controller, not in
-    a middleware; `load_async` and its setting; proxies; that an app's own
-    request and system tests do not stream.
+    a middleware; what an action that streams gives up (no `ETag`, an
+    `after_action` cannot write to the response, thread variables);
+    `load_async`, its setting, and where it is not asynchronous (in a
+    transaction, with its queue full); the database's statement timeout as the
+    limit for a query; proxies; that an app's own request and system tests do
+    not stream.
 
 ### 19-2 — cases
 
@@ -525,8 +552,9 @@ changes under D5 are in ruact's bootstrap and entry tag, not in React's client.
   page.
 - An exception after the first write, outside a block (the layout's tail, the
   serializer), on a document and on a navigation.
-- The client leaving mid-block, with PostgreSQL: the connection, and a
-  statement timeout as the limit.
+- With PostgreSQL: the client leaving mid-block and the connection; the
+  timeout against a running query; a statement timeout as the limit; two
+  `load_async` queries that really overlap.
 - A block inside a transaction, and a controller that pins a connection.
 - Rails' `DatabaseSelector`, a tenant chosen by a middleware, and a locale
   chosen by one (the pool thread's locale, with i18n before and from 1.15).
@@ -552,4 +580,5 @@ changes under D5 are in ruact's bootstrap and entry tag, not in React's client.
    navigation first. Recommended: together. The server side is the same code
    for both, and the navigation alone would leave the first load, the one every
    visitor gets, as it is.
-3. **`suspense_timeout`** stays at 5 s once it limits real time?
+3. **`suspense_timeout`** stays at 5 s once it limits real time? It is a
+   backstop: it does not stop a query the driver cannot interrupt.

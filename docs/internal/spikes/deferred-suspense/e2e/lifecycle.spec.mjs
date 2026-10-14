@@ -77,6 +77,8 @@ test("a block that raises: its boundary keeps the fallback, the next block still
     await expect(overlay).toBeVisible();
     await expect(overlay.locator("[data-overlay-message]")).toContainText("NoMethodError");
     await expect(overlay.locator("[data-overlay-message]")).toContainText("total");
+    // The Ruby backtrace, rebuilt by React's development client: the template is in it.
+    await expect(overlay.locator("[data-overlay-stack]")).toContainText("error_html_erb");
     await page.screenshot({ path: `results/overlay-${MODE}.png` });
     await overlay.click();
     await expect(overlay).toHaveCount(0);

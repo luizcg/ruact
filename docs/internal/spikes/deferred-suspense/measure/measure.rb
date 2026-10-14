@@ -292,6 +292,14 @@ section "timeout" do
           "pool = busy #{after['pool']['busy']} / idle #{after['pool']['idle']} / dead #{after['pool']['dead']}; " \
           "a page that queries the same pool afterwards = #{query.code}, rows read = #{query.body.scan('"li"').length}"
 
+      # The same limit on a query that runs inside the database instead of waiting in Ruby.
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      body = http(base, "/timeout_real", headers: { "Accept" => "text/x-component" }).body
+      took = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+      outcome = body.include?("ruact:suspense-timeout") ? "the timeout row" : "its content"
+      say "- **#{mode}**, a query that runs inside SQLite (`/timeout_real`): the response took #{format('%.1f', took)} s " \
+          "against the 1 s limit, and the boundary got **#{outcome}**"
+
       # The client leaves and the gate is never opened: only the timeout can end the block.
       reset(base)
       client = Curl.new(base, "/db")
