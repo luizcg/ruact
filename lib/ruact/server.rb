@@ -458,11 +458,7 @@ module Ruact
     # The Flight deciding signal, faithful to how the request announced itself:
     # the `Accept: text/x-component` header, or the `Ruact-Request: 1` header.
     def __ruact_flight_signal
-      if request.headers["Accept"].to_s.include?("text/x-component")
-        "Accept: text/x-component"
-      else
-        "Ruact-Request: 1"
-      end
+      RequestKind.flight_signal(request)
     end
 
     # @return [Boolean] true only in a real Rails development environment

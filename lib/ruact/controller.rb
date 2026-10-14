@@ -171,7 +171,7 @@ module Ruact
       pipeline  = RenderPipeline.new(ruact_manifest,
                                      controller_path: controller_path, logger: logger,
                                      development: Flight::Renderer.development_default)
-      streaming = ruact_request? && self.class.ancestors.include?(ActionController::Live)
+      streaming = ruact_request? && self.class.ruact_streaming?
 
       # Allocate a per-render context and expose it to the view via a normal
       # (non-`@_`-prefixed) instance variable on the controller. Rails 8's
@@ -231,7 +231,7 @@ module Ruact
 
       if ruact_request? && streaming
         enumerator = pipeline.render({ html: html, render_context: render_context }, mode: :stream)
-        response.headers["Content-Type"]      = "text/x-component; charset=utf-8"
+        response.headers["Content-Type"]      = "#{RequestKind::FLIGHT_MIME}; charset=utf-8"
         response.headers["Cache-Control"]     = "no-cache"
         response.headers["X-Accel-Buffering"] = "no"
         begin
@@ -242,7 +242,7 @@ module Ruact
       else
         payload = pipeline.render({ html: html, render_context: render_context }, mode: :string)
         if ruact_request?
-          render plain: payload, content_type: "text/x-component"
+          render plain: payload, content_type: RequestKind::FLIGHT_MIME
         else
           render_ruact_document(payload)
         end
@@ -292,12 +292,11 @@ module Ruact
       @__ruact_negotiated_page = :flight_redirect
 
       render plain: "0:#{JSON.generate({ 'redirectUrl' => redirect_url, 'redirectType' => 'push' })}\n",
-             content_type: "text/x-component"
+             content_type: RequestKind::FLIGHT_MIME
     end
 
     def ruact_request?
-      request.headers["Accept"]&.include?("text/x-component") ||
-        request.headers["Ruact-Request"] == "1"
+      RequestKind.flight?(request)
     end
 
     # Rails keeps `redirect_to` PUBLIC, and this module's body is private from

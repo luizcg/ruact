@@ -82,20 +82,24 @@ module Ruact
           expect(renderer.pending?).to be(true)
         end
 
-        it "gives each boundary its own rows, an import before the row that uses it, a nested boundary after" do
+        it "gives a boundary its own rows: the import it brings, its text row, then its row" do
           renderer = described_class.new(tree, manifest_with_button)
           renderer.shell
 
           outer = renderer.next_boundary(streaming: false)
-          # The import, the text row of the long string, then the boundary's own row.
           expect(outer.length).to eq(3)
           expect(outer[0]).to include(":I[").and include("Button-abc")
           expect(outer[1]).to match(/\A\h+:T/)
           expect(outer[2]).to include('"label":"in"')
-          expect(renderer.pending?).to be(true)
+        end
 
-          inner = renderer.next_boundary(streaming: false)
-          expect(inner.last).to include('"children":"inner"')
+        it "finds a boundary inside a boundary when the outer one is rendered, and renders it next" do
+          renderer = described_class.new(tree, manifest_with_button)
+          renderer.shell
+          renderer.next_boundary(streaming: false)
+
+          expect(renderer.pending?).to be(true)
+          expect(renderer.next_boundary(streaming: false).last).to include('"children":"inner"')
           expect(renderer.pending?).to be(false)
         end
 

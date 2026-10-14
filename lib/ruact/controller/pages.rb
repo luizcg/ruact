@@ -69,6 +69,15 @@ module Ruact
           !declared[:except].include?(action.to_s)
         end
 
+        # Whether this controller's ruact pages are written as they render
+        # (Flight rows sent as each is ready) instead of all at once: today,
+        # whether the controller includes `ActionController::Live`.
+        #
+        # @return [Boolean]
+        def ruact_streaming?
+          include?(ActionController::Live)
+        end
+
         # Listed in `ruact_pages only:` by THIS controller, as a method of it — a
         # page by declaration, template or not (the method renders another one).
         # Everything else needs the template in the controller's own folder,
