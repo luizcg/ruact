@@ -81,9 +81,9 @@ test("a block that raises: its boundary keeps the fallback, the next block still
     await overlay.click();
     await expect(overlay).toHaveCount(0);
   } else {
-    await expect(page.locator("#ruact-dev-overlay")).toHaveCount(0);
     // Production says that it failed, and nothing about why.
     await expect.poll(() => errors.join("\n")).toContain("[ruact] Server error");
+    await expect(page.locator("#ruact-dev-overlay")).toHaveCount(0);
     expect(errors.join("\n")).not.toContain("NoMethodError");
   }
 

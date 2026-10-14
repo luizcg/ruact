@@ -299,9 +299,13 @@ section "timeout" do
       wait_for("shell") { client.received.include?("Loading A") }
       busy = state(base)["pool"]["busy"]
       client.disconnect
+      # The order this line is about: the client was gone while the block still waited.
+      raise "the timeout fired before the client had left" unless state(base)["waiting"] == { "a" => 1 }
+
       wait_for("the timeout") { state(base)["waiting"].empty? }
       wait_for("the pool") { state(base)["pool"]["busy"].zero? }
-      say "- **#{mode}**, the client leaves and the gate never opens: busy while waiting = #{busy}; " \
+      say "- **#{mode}**, the client leaves and the gate never opens: busy while waiting = #{busy}, " \
+          "and the block was still waiting once the client had left; " \
           "after the timeout, waiting = #{state(base)['waiting']} and busy = #{state(base)['pool']['busy']}; " \
           "events = `#{state(base)['events'].join(' → ')}`"
     end
@@ -494,7 +498,8 @@ section "middleware_state" do
     wait_for("headers") { client.headers.include?("\r\n\r\n") } if released
     open_gate(base, "a")
     body = client.finish
-    "shell: locale `#{read.call(body, 'shell-locale')}`, writes #{read.call(body, 'shell-writes')}; " \
+    "shell: locale `#{read.call(body, 'shell-locale')}`, writes #{read.call(body, 'shell-writes')}, " \
+      "the middleware's thread variable `#{read.call(body, 'shell-variable')}`; " \
       "block: locale `#{read.call(body, 'block-locale')}`, writes #{read.call(body, 'block-writes')}"
   end
   locale_of = ->(base) { read.call(http(base, "/locale", headers: { "Accept" => "text/x-component" }).body, "shell-locale") }

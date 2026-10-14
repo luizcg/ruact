@@ -1,5 +1,6 @@
 <h1 id="shell">Middleware state</h1>
 <p id="shell-locale"><%= I18n.locale %></p>
+<p id="shell-variable"><%= Thread.current.thread_variable_get(:spike_thread_variable) || "none" %></p>
 <p id="shell-writes"><%= ActiveRecord::Base.current_preventing_writes ? "prevented" : "allowed" %></p>
 <Suspense fallback="Loading A…">
   <% Gate.wait("a") %>
