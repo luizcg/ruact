@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A `<Suspense>` written as text inside ERB code stays as written.** `<%= "<Suspense>" %>` printed ruact's internal `<ruact-suspense …>` markup instead of the text. Tags inside `<% %>` and `<%= %>` are now left alone, as component tags already were.
+
+### Changed
+
+- **The render path was reorganised, with no change to what a page sends.** What a template leaves for the converter, how a render hands out its rows (the shell first, then each Suspense boundary), how a response is written, and how the browser opens a page's Flight stream each live in one place now; the Flight bytes are the same, checked against the wire fixtures and in a browser. Internal classes changed shape (`Ruact::RenderContext`, `Ruact::Flight::Request`, `Ruact::Flight::Renderer`, `Ruact::RenderPipeline`); none of them is public API.
+
 ## [0.0.19] - 2026-10-08
 
 ### Fixed
