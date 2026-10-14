@@ -2,6 +2,7 @@
 // block sees of the request, what the response can no longer carry, the
 // connection pool, a client that leaves.
 import fs from "node:fs";
+import net from "node:net";
 import { test, expect } from "@playwright/test";
 import { ENV, state, events, waitingAt, open, reset, fallback, clicker } from "./support.mjs";
 
@@ -182,11 +183,18 @@ test("an action left out of ruact_streaming keeps the request's thread", async (
 });
 
 // ADR D4: the server does not notice on its own; ruact asks before each block.
-test("a client that leaves: the next block does not start", async ({ context, request }) => {
-  const tab = await context.newPage();
-  await tab.goto("/two", { waitUntil: "commit" });
+// The client is a plain socket closed while the first block waits: a closed
+// tab is not a closed connection everywhere (headless Chromium on Linux kept
+// it open), and this is about what the server does once the connection is gone.
+test("a client that leaves: the next block does not start", async ({ request }) => {
+  const socket = net.connect({ host: "localhost", port: Number(process.env.PORT ?? 4190) });
+  await new Promise((resolve, reject) => {
+    socket.once("connect", resolve);
+    socket.once("error", reject);
+  });
+  socket.write("GET /two HTTP/1.1\r\nHost: localhost\r\nAccept: text/html\r\n\r\n");
   await waitingAt(request, { a: 1 });
-  await tab.close(); // the user closes the tab while the first block waits
+  socket.destroy();
 
   await open(request, "a");
   await expect
