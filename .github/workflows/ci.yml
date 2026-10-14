@@ -86,18 +86,20 @@ jobs:
           echo "::notice::No residual rsc_* API references found."
 
   rspec:
-    # Required status check — all 8 matrix combinations must pass to merge.
+    # Required status check — every matrix combination must pass to merge.
+    # The supported Rails range is 7.2 through 8.1 (decided 2026-10-14). Until
+    # then the cells said 7.0 and 7.1 and ran 7.2.3: `~> 7.0` admits any 7.x.
     name: RSpec (Ruby ${{ matrix.ruby }} / Rails ${{ matrix.rails }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         ruby: ["3.2", "3.3"]
-        rails: ["7.0", "7.1", "7.2", "8.0"]
+        rails: ["7.2", "8.0", "8.1"]
     env:
       RAILS_VERSION: ${{ matrix.rails }}
-      # The Gemfile injects `gem "rails", "~> #{ENV['RAILS_VERSION']}"` for
-      # matrix testing, but Gemfile.lock cannot pin all four Rails versions
+      # The Gemfile injects `gem "rails", "~> #{ENV['RAILS_VERSION']}.0"` for
+      # matrix testing, but Gemfile.lock cannot pin all three Rails versions
       # at once. `bundler-cache: true` defaults to deployment/frozen mode
       # which rejects any Gemfile change vs lockfile, so disable that here
       # while keeping the gem cache for everything else.
@@ -109,6 +111,11 @@ jobs:
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
+      - name: The cell runs the Rails it names
+        # `~> 7.0` once resolved to 7.2.3, and two cells tested a version they
+        # did not name for months. Fails the cell instead.
+        run: |
+          bundle exec ruby -e 'require "rails"; v = Rails.gem_version.segments.first(2).join("."); abort "This cell is Rails #{ENV["RAILS_VERSION"]} but loaded #{Rails.gem_version}" unless v == ENV["RAILS_VERSION"]; puts "Rails #{Rails.gem_version}"'
       - name: Run RSpec
         run: bundle exec rspec --format progress
       - name: Upload coverage to Codecov

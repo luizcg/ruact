@@ -9,11 +9,13 @@ gem "irb"
 gem "rake", "~> 13.0"
 
 # Pin Rails version for CI matrix testing (RAILS_VERSION env var sets the version).
-# When RAILS_VERSION is unset, default to Rails 8.0 so the Story 7.9 controller-request
+# `~> X.Y.0`, not `~> X.Y`: the latter admits every later X.* minor, and the
+# 7.0/7.1 cells ran 7.2.3 for months because of it.
+# When RAILS_VERSION is unset, default to Rails 8.1 (the lockfile) so the Story 7.9 controller-request
 # spec (Rails-8 view_context plumbing) can boot. Most other specs continue to use the
 # minimal stub in spec/support/rails_stub.rb and never load Rails.
-rails_version = ENV.fetch("RAILS_VERSION", "8.0")
-gem "rails", "~> #{rails_version}"
+rails_version = ENV.fetch("RAILS_VERSION", "8.1")
+gem "rails", "~> #{rails_version}.0"
 
 # Testing
 gem "rspec", "~> 3.13"
