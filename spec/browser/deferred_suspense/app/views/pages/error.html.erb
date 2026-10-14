@@ -1,0 +1,8 @@
+<h1 id="shell">Error</h1>
+<Suspense fallback="Loading A…">
+  <% Gate.wait("a") %>
+  <p id="a"><%= nil.total %></p>
+</Suspense>
+<Suspense fallback="Loading B…">
+  <p id="b"><%= Gate.wait("b") %></p>
+</Suspense>

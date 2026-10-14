@@ -38,7 +38,12 @@ module Ruact
     #     raise Ruact::SerializationError. Defaults to false in development, true in production.
     #
     # @!attribute [r] suspense_timeout
-    #   @return [Float] Seconds before a deferred Suspense chunk times out. Default: 5.0.
+    #   @return [Float] Seconds of real time a `<Suspense>`'s content may run in an
+    #     action that streams (`ruact_streaming`) before its boundary gets the
+    #     timeout error and the next one runs; an explicit `delay` counts inside
+    #     it. A backstop, not a limit on the database: a query the driver is
+    #     running keeps running (measured with PostgreSQL in Story 19-1) — the
+    #     database's statement timeout is what stops it. Default: 5.0.
     #
     # @!attribute [r] vite_dev_server
     #   @return [String] Base URL of the Vite dev server. Default: "http://localhost:5173".

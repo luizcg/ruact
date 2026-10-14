@@ -1,0 +1,11 @@
+<ul id="<%= where %>">
+  <li data-k="locale"><%= I18n.locale %></li>
+  <li data-k="t"><%= t("greeting") %></li>
+  <li data-k="lazy"><%= t(".lazy") rescue "ERROR: #{$!.class}" %></li>
+  <li data-k="zone"><%= Time.zone.name %></li>
+  <li data-k="tenant"><%= Tenant.current %></li>
+  <li data-k="current"><%= Current.user.inspect %></li>
+  <li data-k="fiber_local"><%= Thread.current[:harness_fiber_local].inspect %></li>
+  <li data-k="thread_variable"><%= Thread.current.thread_variable_get(:harness_thread_variable).inspect %></li>
+  <li data-k="thread"><%= Thread.current.object_id == request.env["harness.thread"] ? "request thread" : "other thread" %></li>
+</ul>

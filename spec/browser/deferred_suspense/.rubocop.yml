@@ -1,0 +1,19 @@
+# A one-file Rails app the browser tests run against, not library code: the
+# cops that keep `lib/` in shape do not describe it.
+inherit_from: ../../../.rubocop.yml
+
+Ruact/NoSharedState:
+  Enabled: false
+Style/OneClassPerFile:
+  Enabled: false
+Metrics/BlockLength:
+  Enabled: false
+Metrics/AbcSize:
+  Enabled: false
+Metrics/MethodLength:
+  Enabled: false
+Layout/LineLength:
+  Max: 160
+# measure/ prints what it measured; it is a script, not an example group.
+RSpec/Output:
+  Enabled: false

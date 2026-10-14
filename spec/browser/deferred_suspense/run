@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# Story 19-1 — the browser proof of deferred <Suspense>, against the gem:
+#
+#   ./run                 install, build, the scenarios in development and production,
+#                         and the perturbation that must fail (writes results/browser.md)
+#   ./run react 19.2.8    the same scenarios with the app's own react-server-dom-webpack
+#                         (appends to results/browser.md)
+#   ./run postgres        what suspense_timeout does to a query running in PostgreSQL
+#                         (writes results/postgres.md; needs initdb and pg_ctl)
+#
+# Needs Ruby (bundler) and Node. Uses ports 4190 and 5199. Runs from a
+# `git archive` of the repository in an empty directory, too.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+BROWSER=results/browser.md
+
+setup() {
+  for port in 4190 5199; do
+    if lsof -ti "tcp:$port" >/dev/null 2>&1; then echo "port $port is in use" >&2; exit 1; fi
+  done
+  mkdir -p tmp log results
+  bundle install --quiet
+  npm ci --silent
+  npx playwright install chromium >/dev/null
+}
+
+build() {
+  npx vite build >tmp/build.log
+  grep -o "Flight client: .*" tmp/build.log
+}
+
+# One Playwright run, its outcome a row of results/browser.md. A failing run
+# stops the script (pipefail).
+row() {
+  local what=$1 env=$2 log=$3
+  local outcome
+  outcome=$(grep -E "^ +[0-9]+ (passed|failed|skipped)" "$log" | sed -E 's/^ +//; s/ \([0-9.]+m?s\)//' | paste -sd, - | sed 's/,/, /g')
+  echo "| $what | $env | $outcome |" >>"$BROWSER"
+}
+
+scenarios() {
+  local what=$1 env=$2
+  shift 2
+  echo "== $what, $env"
+  env "$@" RAILS_ENV="$env" npx playwright test 2>&1 | tee tmp/playwright.log
+  row "$what" "$env" tmp/playwright.log
+}
+
+table() {
+  {
+    echo
+    echo "## $1"
+    echo
+    echo "| what ran | environment | outcome |"
+    echo "| --- | --- | --- |"
+  } >>"$BROWSER"
+}
+
+# With every <Suspense> rendered in place (what 0.0.19 did), the proof must
+# fail — both scenarios, each at what the browser shows.
+perturbation() {
+  local env=$1
+  echo "== in place: the proof must FAIL, $env"
+  if HARNESS_IN_PLACE=1 RAILS_ENV=$env npx playwright test deferred.spec.mjs >tmp/in-place.log 2>&1; then
+    echo "the proof passed with every <Suspense> rendered in place: it proves nothing" >&2
+    exit 1
+  fi
+  grep -E "✘|failed" tmp/in-place.log
+  grep -q "2 failed" tmp/in-place.log
+  grep -q "locator('#shell')" tmp/in-place.log
+  grep -q "toHaveURL" tmp/in-place.log
+  echo "| every \`<Suspense>\` in place: \`deferred.spec.mjs\` | $env | 2 failed, as it must: at the shell's text and at the URL |" >>"$BROWSER"
+}
+
+browser() {
+  echo "# Story 19-1 — browser runs" >"$BROWSER"
+  echo >>"$BROWSER"
+  echo "Written by \`./run\`: one row per Playwright run, Chromium, one worker, against the gem in this checkout." >>"$BROWSER"
+  table "React $(node -p "require('react/package.json').version") — $(build)"
+  for env in development production; do
+    scenarios "the scenarios" "$env"
+    perturbation "$env"
+  done
+}
+
+# The plugin uses the app's react-server-dom-webpack when package.json declares it.
+other_react() {
+  local version=$1
+  cp package.json tmp/package.json.keep
+  cp package-lock.json tmp/package-lock.json.keep
+  restore() {
+    cp tmp/package.json.keep package.json
+    cp tmp/package-lock.json.keep package-lock.json
+    npm ci --silent
+  }
+  trap restore EXIT
+  npm install --silent "react@$version" "react-dom@$version" "react-server-dom-webpack@$version"
+  table "React $(node -p "require('react/package.json').version") — $(build)"
+  for env in development production; do
+    scenarios "the scenarios" "$env"
+  done
+}
+
+# AC5.4 — what suspense_timeout does to a query running in PostgreSQL, on a
+# throwaway server of its own (needs initdb and pg_ctl on the PATH).
+postgres() {
+  bundle install --quiet
+  mkdir -p results
+  PG_DIR=$(mktemp -d)
+  initdb -D "$PG_DIR/data" --auth=trust >/dev/null
+  pg_ctl -D "$PG_DIR/data" -o "-p 5498 -k $PG_DIR -c listen_addresses=''" -l "$PG_DIR/log" -w start >/dev/null
+  trap 'pg_ctl -D "$PG_DIR/data" -m immediate stop >/dev/null; rm -rf "$PG_DIR"' EXIT
+  bundle exec ruby measure/postgres.rb "$PG_DIR" 5498
+}
+
+case "${1:-all}" in
+  all)      setup; browser ;;
+  react)    setup; other_react "${2:?version}" ;;
+  postgres) postgres ;;
+  *)        echo "usage: ./run [react VERSION | postgres]" >&2; exit 1 ;;
+esac

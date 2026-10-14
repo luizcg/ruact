@@ -1,0 +1,11 @@
+<h1 id="shell">Two</h1>
+<Suspense fallback="Loading A…">
+  <% Harness::Events.add("block_start:a") %>
+  <p id="a"><%= Gate.wait("a") %></p>
+  <% Harness::Events.add("block_end:a") %>
+</Suspense>
+<Suspense fallback="Loading B…">
+  <% Harness::Events.add("block_start:b") %>
+  <p id="b"><%= Gate.wait("b") %></p>
+  <% Harness::Events.add("block_end:b") %>
+</Suspense>

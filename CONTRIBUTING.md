@@ -62,12 +62,13 @@ every pull request. Running them locally first is the difference between one rou
 
 | CI job | What it checks |
 |---|---|
-| `rspec` | the Ruby suite, on Ruby 3.2/3.3 × Rails 7.0/7.1/7.2/8.0 — eight cells |
+| `rspec` | the Ruby suite, on Ruby 3.2/3.3 × Rails 7.2/8.0/8.1 — six cells, each checking it loaded the Rails it names |
 | `rubocop` | style, plus the three custom cops below |
 | `yard` | every public method carries YARD documentation |
 | `js` | the Vite plugin's vitest suite, including its Ruby↔JS byte-parity cases, and a type-level test over the generated accessors |
 | `benchmark` | render-pipeline allocations against a recorded baseline |
 | `name-propagation` | greps the tree for names retired before v0.1.0 |
+| `browser` | the browser proof of a page that streams (`spec/browser/deferred_suspense/run`): a Rails app on Puma with the gem by path, in Chromium, in development and production, and the perturbation that must fail |
 | `gate` | that `CHANGELOG.md` gained something if this branch changed what the published gem contains, and that a version bump is one legal semver step to a version nothing has released |
 
 <!-- ci-jobs:end -->
@@ -95,8 +96,14 @@ npm test
 npm run typecheck
 ```
 
-To reproduce one matrix cell other than the default — `RAILS_VERSION` is what the eight `rspec` cells vary,
-and unset means 8.0:
+and, for the `browser` job (Node and Chromium; ports 4190 and 5199):
+
+```bash
+spec/browser/deferred_suspense/run
+```
+
+To reproduce one matrix cell other than the default — `RAILS_VERSION` is what the six `rspec` cells vary,
+and unset means 8.1:
 
 ```bash
 RAILS_VERSION=7.2 bundle install && bundle exec rspec

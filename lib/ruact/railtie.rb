@@ -46,6 +46,18 @@ module Ruact
       app.config.middleware.use Ruact::NavigationBoundary::Middleware
     end
 
+    # Story 19-1 (ADR D1) — in development, a `load_async` that cannot run in
+    # the background says so (Ruact::LoadAsyncNote). Nothing in production, and
+    # nothing at all without Active Record.
+    initializer "ruact.load_async_note" do
+      next unless Rails.env.development?
+
+      ActiveSupport.on_load(:active_record) do
+        require_relative "load_async_note"
+        ActiveRecord::Relation.prepend(Ruact::LoadAsyncNote::Relation)
+      end
+    end
+
     rake_tasks { load File.expand_path("../tasks/ruact.rake", __dir__) }
 
     # Load the client manifest at boot (and on each code reload in development).

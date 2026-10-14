@@ -1,5 +1,7 @@
 # Spike 19-0 — evaluating the content of `<Suspense>` after the shell is sent
 
+> **Runs against the gem of `v0.0.19`**, the tree it was written for: its prototype patches APIs the 19-0r refactor removed. It is the record of 19-0. The proof against the gem as it is now is `spec/browser/deferred_suspense/` (Story 19-1).
+
 Experiment behind
 [`../../decisions/suspense-deferred-evaluation.md`](../../decisions/suspense-deferred-evaluation.md).
 Nothing here is loaded by the gem or shipped in it.
