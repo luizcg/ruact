@@ -10,7 +10,7 @@ RSpec.describe Ruact::InlineScript do
   end
 
   it "reads a binary-tagged UTF-8 payload as UTF-8" do
-    literal = described_class.string_literal(+"ação".force_encoding(Encoding::BINARY))
+    literal = described_class.string_literal((+"ação").force_encoding(Encoding::BINARY))
     expect(JSON.parse(literal)).to eq("ação")
   end
 end
