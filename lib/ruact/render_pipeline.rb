@@ -55,6 +55,8 @@ module Ruact
     #   - `:erb` or `:html` is not a `String`,
     #   - `input` contains extra keys beyond the documented shapes,
     #   - `mode` is not in {VALID_MODES}.
+    #   - (`:erb` input) the template holds a `<Suspense>`: its content is a block only ActionView
+    #     renders. Raised when the Enumerator is consumed.
     #   All `ArgumentError` messages name the offending input and reference
     #   `RenderPipeline#render` for the canonical contract.
     #
@@ -131,11 +133,6 @@ module Ruact
         raise ArgumentError,
               "ruact: render input :erb must be a String; got #{erb.class} (#{DOCSTRING_REF})"
       end
-      if erb.match?(ErbPreprocessor::SUSPENSE_OPEN_RE)
-        raise ArgumentError,
-              "ruact: render input :erb cannot hold a <Suspense>: its content is a block, which only " \
-              "ActionView's `capture` can render. Render the template through ActionView (#{DOCSTRING_REF})"
-      end
       unless input.key?(:binding)
         raise ArgumentError,
               "ruact: render input { erb: ... } requires sibling :binding (Binding) (#{DOCSTRING_REF})"
@@ -145,6 +142,16 @@ module Ruact
 
       raise ArgumentError,
             "ruact: render input :binding must be a Binding; got #{bnd.class} (#{DOCSTRING_REF})"
+    end
+
+    # A `<Suspense>`'s content is the body of a helper block, and only
+    # ActionView's `capture` renders one.
+    def refuse_suspense!(transformed)
+      return unless transformed.include?("__ruact_suspense__(")
+
+      raise ArgumentError,
+            "ruact: render input :erb cannot hold a <Suspense>: its content is a block, which only " \
+            "ActionView's `capture` can render. Render the template through ActionView (#{DOCSTRING_REF})"
     end
 
     def validate_html_shape!(input)
@@ -184,6 +191,7 @@ module Ruact
         # so passing nil is byte-for-byte equivalent while avoiding any dev HTTP
         # fetch / test-double dispatch inside callers that measure this path.
         transformed    = ErbPreprocessor.transform(erb_source, registry: nil)
+        refuse_suspense!(transformed)
         receiver       = binding_context.eval("self")
         prev_ctx       = receiver.instance_variable_get(:@__ruact_render_context__)
         inject_helper!(binding_context, render_context)

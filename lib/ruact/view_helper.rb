@@ -43,12 +43,20 @@ module Ruact
       Markers.component_open(ctx.register(name, props)).html_safe
     end
 
-    # The content of a `<Suspense>`: the ERB between its tags, which the
-    # preprocessor makes this block's body. Evaluated here, in place, so the
-    # page renders as one piece; the block is the seam where it could be
-    # evaluated later instead.
-    def __ruact_suspense__(&)
-      capture(&)
+    # A `<Suspense>`: the preprocessor makes the ERB between its tags this
+    # block's body, and passes the `fallback` and `delay` attributes as the
+    # template wrote them. Writes the Suspense marker ({Markers}) around the
+    # content, evaluated here, in place, so the page renders as one piece; the
+    # block is the seam where it could be evaluated later instead.
+    #
+    # Only what the block writes is the content: a value it ends on is not
+    # (`capture` would print a block's value when it writes nothing).
+    def __ruact_suspense__(fallback, delay = nil)
+      content = capture do
+        yield
+        nil
+      end
+      "#{Markers.suspense_open(fallback, delay)}#{content}#{Markers::SUSPENSE_CLOSE}".html_safe
     end
 
     # Story 17.0i — a client component in a template Rails is rendering on its

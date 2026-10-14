@@ -145,30 +145,59 @@ module Ruact
     # Bugfix (Sprint Change Proposal 2026-06-16 §4.5): `<Suspense delay="2.5">`
     # used to be ignored — the preprocessor never carried the attribute, so the
     # SuspenseElement always took its default delay. It now forwards an optional
-    # `delay` as `data-ruact-delay` on the emitted <ruact-suspense> element.
+    # `delay`, with the `fallback`, to the helper that writes the Suspense marker.
     describe "Suspense delay attribute" do
-      it "forwards delay to the ruact-suspense element as data-ruact-delay" do
+      it "forwards delay and fallback to the Suspense helper, whose block is the content" do
         result = transform.call(%(<Suspense fallback="loading" delay="2.5"><Spinner /></Suspense>))
-        expect(result).to include(%(data-ruact-delay="2.5"))
-        expect(result).to include(%(data-ruact-fallback="loading"))
-        expect(result).to include("</ruact-suspense>")
+        expect(result).to start_with(%(<%= __ruact_suspense__("loading", "2.5") do %>))
+        expect(result).to end_with("<% end %>")
       end
 
-      it "omits data-ruact-delay when no delay attribute is present" do
+      it "passes no delay when no delay attribute is present" do
         result = transform.call(%(<Suspense fallback="loading"><Spinner /></Suspense>))
-        expect(result).to include(%(data-ruact-fallback="loading"))
-        expect(result).not_to include("data-ruact-delay")
+        expect(result).to start_with(%(<%= __ruact_suspense__("loading", nil) do %>))
       end
 
       it "extracts delay regardless of attribute order" do
         result = transform.call(%(<Suspense delay="0.75" fallback="wait"><X /></Suspense>))
-        expect(result).to include(%(data-ruact-delay="0.75"))
-        expect(result).to include(%(data-ruact-fallback="wait"))
+        expect(result).to start_with(%(<%= __ruact_suspense__("wait", "0.75") do %>))
       end
 
       it "accepts a single-quoted delay attribute" do
         result = transform.call(%(<Suspense fallback='loading' delay='1.5'><X /></Suspense>))
-        expect(result).to include(%(data-ruact-delay="1.5"))
+        expect(result).to start_with(%(<%= __ruact_suspense__("loading", "1.5") do %>))
+      end
+
+      it "passes the fallback as Ruby text: an interpolation in it stays text" do
+        result = transform.call(%(<Suspense fallback="\#{boom}"><X /></Suspense>))
+        expect(result).to start_with(%(<%= __ruact_suspense__("\\\#{boom}", nil) do %>))
+      end
+    end
+
+    describe "Suspense tags must pair (as component tags do)" do
+      it "names an unclosed <Suspense> with its line" do
+        expect { transform.call(%(<p>a</p>\n<Suspense fallback="x">\n<p>b</p>)) }
+          .to raise_error(Ruact::ComponentTagError, /<Suspense> at line 2 is never closed/)
+      end
+
+      it "names a stray </Suspense> with its line" do
+        expect { transform.call(%(<p>a</p>\n</Suspense>)) }
+          .to raise_error(Ruact::ComponentTagError, %r{</Suspense> at line 2 closes nothing})
+      end
+
+      it "takes <Suspense ... /> as a pair with nothing in it" do
+        expect(transform.call(%(<Suspense fallback="x" />))).to eq(%(<%= __ruact_suspense__("x", nil) do %><% end %>))
+      end
+
+      it "reads a Suspense after a literal `<%%` as a tag" do
+        expect(transform.call(%(<p><%% x</p><Suspense fallback="x"><p>y</p></Suspense>)))
+          .to eq(%(<p><%% x</p><%= __ruact_suspense__("x", nil) do %><p>y</p><% end %>))
+      end
+
+      it "transforms its own output to itself" do
+        source = %(<Card><Suspense fallback="x"><LikeButton n={1} /></Suspense></Card><Suspense fallback="y" />)
+        once = transform.call(source)
+        expect(transform.call(once)).to eq(once)
       end
     end
 
@@ -204,9 +233,8 @@ module Ruact
       it "works around and inside Suspense" do
         out = run(%(<Card><Suspense fallback="…"><Card>late</Card></Suspense></Card>))
         expect(out).to eq(
-          [%(<%= __ruact_component_open__("Card", {}) %><ruact-suspense data-ruact-fallback="…">),
-           %(<%= __ruact_suspense__ do %><%= __ruact_component_open__("Card", {}) %>late</ruact-component>),
-           %(<% end %></ruact-suspense></ruact-component>)].join
+          [%(<%= __ruact_component_open__("Card", {}) %><%= __ruact_suspense__("…", nil) do %>),
+           %(<%= __ruact_component_open__("Card", {}) %>late</ruact-component><% end %></ruact-component>)].join
         )
       end
 
@@ -268,8 +296,7 @@ module Ruact
 
         it "takes `<X/>` (no space) as self-closing on the paired path too" do
           expect(run(%(<Suspense fallback="…"><LikeButton/></Suspense>))).to eq(
-            [%(<ruact-suspense data-ruact-fallback="…"><%= __ruact_suspense__ do %>),
-             %(<%= __ruact_component__("LikeButton", {}) %><% end %></ruact-suspense>)].join
+            %(<%= __ruact_suspense__("…", nil) do %><%= __ruact_component__("LikeButton", {}) %><% end %>)
           )
         end
 
@@ -293,7 +320,7 @@ module Ruact
         end
 
         it "takes `</Suspense >` and a stray `</X/>`" do
-          expect(run(%(<Suspense fallback="x"><B /></Suspense >))).to end_with("</ruact-suspense>")
+          expect(run(%(<Suspense fallback="x"><B /></Suspense >))).to end_with("<% end %>")
           expect { run("<p>x</p></LikeButton/>") }.to raise_error(Ruact::ComponentTagError, /closes nothing/)
         end
 

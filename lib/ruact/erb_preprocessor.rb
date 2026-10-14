@@ -34,6 +34,10 @@ module Ruact
     SUSPENSE_OPEN_RE  = /<Suspense\b([^>]*?)>/m
     SUSPENSE_CLOSE_RE = %r{</Suspense\s*>}
 
+    # Any Suspense tag: capture 1 is the slash of a closing tag, capture 2 the
+    # attributes, capture 3 the slash of a self-closing one.
+    SUSPENSE_TAG_RE = %r{<(/)?Suspense\b([^>]*?)(/)?>}m
+
     # Matches ANY PascalCase component tag: opening (`<Card>`), self-closing
     # (`<Card />`), or closing (`</Card>`). Capture 1 is the leading slash
     # (present only on a closing tag); capture 2 is the name. The pairing scan
@@ -48,19 +52,15 @@ module Ruact
     # Newline-preserving mask for ERB islands (`<% … %>`, `<%= … %>`, `<%# … %>`).
     # The pairing scan blanks these first so a `</Card>` that lives inside
     # Ruby/ERB string or comment text is never taken for a real closing tag.
-    ERB_ISLAND_RE = /<%.*?%>/m
+    # `<%%` is ERB's escape for a literal `<%`: text, not an island.
+    ERB_ISLAND_RE = /<%(?!%).*?%>/m
 
     # An ERB comment, which renders nothing.
     ERB_COMMENT_RE = /<%#.*?%>/m
 
-    # What a `<Suspense>` pair becomes around its content: the body of a
-    # {ViewHelper#__ruact_suspense__} block, inside the Suspense marker.
-    SUSPENSE_BLOCK_OPEN  = "<%= __ruact_suspense__ do %>"
-    SUSPENSE_BLOCK_CLOSE = "<% end %>#{Markers::SUSPENSE_CLOSE}".freeze
-
-    # The element a paired component's content is wrapped in until
-    # {HtmlConverter} turns it into the component's `children` ({Markers}).
-    WRAPPER_TAG = Markers::WRAPPER_TAG
+    # What ends a `<Suspense>`: the {ViewHelper#__ruact_suspense__} block its
+    # content is the body of.
+    SUSPENSE_BLOCK_CLOSE = "<% end %>"
 
     # What each helper the transformed template calls leaves in the HTML, by
     # its render-context token: a component, or the opening of one with
@@ -106,25 +106,69 @@ module Ruact
 
     private
 
-    # Step 2: `<Suspense>` pairs. The opening becomes the Suspense marker
-    # ({Markers}) followed by a {ViewHelper#__ruact_suspense__} block, the
-    # closing ends both: what sits between the tags is the block's body, so
-    # whoever calls the helper decides when it is evaluated. `delay="2.5"` is
-    # optional: the server-side wait (seconds) before the deferred chunk
-    # streams, forwarded to SuspenseElement#delay. A tag inside an ERB island
-    # (Ruby text that mentions `<Suspense>`) is left alone: a block opened
-    # there would end the island.
+    # Step 2: `<Suspense>` pairs. Each pair becomes a
+    # {ViewHelper#__ruact_suspense__} call whose block is what sits between the
+    # tags; the helper writes the Suspense marker around it ({Markers}), and
+    # decides when the block is evaluated. `delay="2.5"` is optional: the
+    # server-side wait (seconds) before the deferred chunk streams, forwarded to
+    # SuspenseElement#delay. `<Suspense ... />` is a pair with nothing in it.
+    #
+    # Every tag has to pair, like a component's (Story 18-2): an unclosed
+    # `<Suspense>` or a stray `</Suspense>` raises {ComponentTagError} with the
+    # line. A tag inside an ERB island is Ruby text and is left alone.
     def rewrite_suspense(source)
-      opened = source.gsub(SUSPENSE_OPEN_RE) do |tag|
-        next tag if inside_erb?(source, ::Regexp.last_match.begin(0))
+      return source unless source.include?("Suspense")
 
-        attrs = ::Regexp.last_match(1)
-        Markers.suspense_open(extract_string_attr(attrs, "fallback") || "", extract_string_attr(attrs, "delay")) +
-          SUSPENSE_BLOCK_OPEN
+      tags = suspense_tags(source)
+      check_suspense_pairs!(source, tags)
+
+      out = +""
+      cursor = 0
+      tags.each do |tag|
+        out << source[cursor...tag[:from]]
+        out << rewrite_suspense_tag(tag)
+        cursor = tag[:to]
       end
-      opened.gsub(SUSPENSE_CLOSE_RE) do |tag|
-        inside_erb?(opened, ::Regexp.last_match.begin(0)) ? tag : SUSPENSE_BLOCK_CLOSE
+      out << source[cursor..]
+    end
+
+    # Every Suspense tag outside an ERB island, in order.
+    def suspense_tags(source)
+      tags = []
+      mask_erb(source).scan(SUSPENSE_TAG_RE) do
+        m = ::Regexp.last_match
+        kind = if m[1] then :close
+               elsif m[3] then :empty
+               else :open
+               end
+        tags << { kind: kind, from: m.begin(0), to: m.end(0), attrs: source[m.begin(2)...m.end(2)] }
       end
+      tags
+    end
+
+    def check_suspense_pairs!(source, tags)
+      open = []
+      tags.each do |tag|
+        case tag[:kind]
+        when :open then open << tag
+        when :close
+          raise_stray("Suspense", line_at(source, tag[:from])) if open.pop.nil?
+        end
+      end
+      return if open.empty?
+
+      raise ComponentTagError,
+            "ruact: <Suspense> at #{location(line_at(source, open.first[:from]))} is never closed — close it with " \
+            "`</Suspense>`."
+    end
+
+    def rewrite_suspense_tag(tag)
+      return SUSPENSE_BLOCK_CLOSE if tag[:kind] == :close
+
+      fallback = extract_string_attr(tag[:attrs], "fallback") || ""
+      delay    = extract_string_attr(tag[:attrs], "delay")
+      opening  = %(<%= __ruact_suspense__(#{fallback.inspect}, #{delay.inspect}) do %>)
+      tag[:kind] == :empty ? opening + SUSPENSE_BLOCK_CLOSE : opening
     end
 
     # The common path: no PascalCase closing tag anywhere, so every component
@@ -262,6 +306,8 @@ module Ruact
     # allocation.
     def inside_erb?(source, offset)
       opened = source.rindex("<%", offset)
+      # `<%%` is a literal `<%`, not an island: look further back.
+      opened = opened.positive? ? source.rindex("<%", opened - 1) : nil while opened && source[opened + 2] == "%"
       return false unless opened
 
       closed = source.index("%>", opened + 2)

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "document_rendering"
+
 module Ruact
   module Controller
     # How a rendered ruact page reaches the client: as a Flight body — written
@@ -21,6 +23,17 @@ module Ruact
         "Cache-Control" => "no-cache",
         "X-Accel-Buffering" => "no"
       }.freeze
+
+      class_methods do
+        # Whether this controller's ruact pages are written as they render
+        # (Flight rows sent as each is ready) instead of all at once: today,
+        # whether the controller includes `ActionController::Live`.
+        #
+        # @return [Boolean]
+        def ruact_streaming?
+          include?(ActionController::Live)
+        end
+      end
 
       private
 

@@ -103,6 +103,15 @@ module Ruact
           expect(renderer.pending?).to be(false)
         end
 
+        it "refuses a boundary before the shell, past the last one, and a second shell" do
+          renderer = described_class.new(tree, manifest_with_button)
+          expect { renderer.next_boundary(streaming: false) }.to raise_error(Ruact::Error, /before #shell/)
+          renderer.shell
+          expect { renderer.shell }.to raise_error(Ruact::Error, /already taken/)
+          renderer.next_boundary(streaming: false) while renderer.pending?
+          expect { renderer.next_boundary(streaming: false) }.to raise_error(Ruact::Error, /no boundary pending/)
+        end
+
         it "adds up to what .render writes" do
           renderer = described_class.new(tree, manifest_with_button)
           rows = renderer.shell

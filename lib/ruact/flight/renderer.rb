@@ -56,6 +56,9 @@ module Ruact
       # The shell's rows: the imports and model rows the tree references, then
       # the root row (id 0). Call once, before {#next_boundary}.
       def shell
+        raise Ruact::Error, "ruact: Renderer#shell was already taken" if @shell_taken
+
+        @shell_taken = true
         root_id = @request.allocate_id # => 0
         root_json = JSON.generate(@serializer.serialize_model(@request.root_model))
         @request.take_rows << RowEmitter.model(root_id, root_json)
@@ -71,6 +74,9 @@ module Ruact
       # `delay` waits it first — or, when the delay exceeds `suspense_timeout`,
       # gets an error row instead.
       def next_boundary(streaming:)
+        raise Ruact::Error, "ruact: Renderer#next_boundary before #shell" unless @shell_taken
+        raise Ruact::Error, "ruact: Renderer#next_boundary with no boundary pending" unless pending?
+
         deferred = @request.next_deferred
         if streaming && deferred[:delay]&.positive?
           timeout = Ruact.config.suspense_timeout

@@ -52,8 +52,9 @@ module Ruact
     end
 
     def initialize(component_registry)
-      # Indexed once by token: each marker in the HTML is one lookup.
-      @registry = component_registry.to_h { |entry| [entry[:token], entry] }
+      # Indexed once by token: each marker in the HTML is one lookup. Built
+      # without a pair array per entry (the render allocation guard counts them).
+      @registry = component_registry.each_with_object({}) { |entry, by_token| by_token[entry[:token]] = entry } # rubocop:disable Style/ReduceToHash
     end
 
     # Convert an HTML string into a ReactElement tree (instance form).

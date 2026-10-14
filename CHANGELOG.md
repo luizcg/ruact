@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every `<Suspense>` must close.** A `<Suspense>` with no `</Suspense>`, or a `</Suspense>` that closes nothing, raises `Ruact::ComponentTagError` naming the template's line, as a component tag already does. It used to render whatever the HTML parser made of it. `<Suspense fallback="…" />` is a boundary with nothing in it.
 - **The render path was reorganised, with no change to what a page sends.** What a template leaves for the converter, how a render hands out its rows (the shell first, then each Suspense boundary), how a response is written, and how the browser opens a page's Flight stream each live in one place now; the Flight bytes are the same, checked against the wire fixtures and in a browser. Internal classes changed shape (`Ruact::RenderContext`, `Ruact::Flight::Request`, `Ruact::Flight::Renderer`, `Ruact::RenderPipeline`); none of them is public API.
 
 ## [0.0.19] - 2026-10-08
