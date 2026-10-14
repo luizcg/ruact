@@ -58,8 +58,9 @@ describe("virtual:ruact/bootstrap — load (Story 14.2)", () => {
     expect(src).toMatch(/from '\/.*\/runtime\/flight-modules\.js'/);
     expect(src).toMatch(/import '\/.*\/runtime\/suspense-boundary\.js'/);
     expect(src).toMatch(/from '\/.*\/runtime\/ruact-router\.js'/);
-    // Story 18-1 — React's Flight client, through the plugin's virtual id.
-    expect(src).toContain("from 'virtual:ruact/flight-client'");
+    // The page is opened through page-stream.js, which reads React's Flight
+    // client through the plugin's virtual id (Story 18-1).
+    expect(src).toMatch(/from '\/.*\/runtime\/page-stream\.js'/);
     // No `\0virtual:`-unresolvable relative import survives.
     expect(src).not.toMatch(/(from|import)\s+['"]\.\/[\w.-]+\.js['"]/);
     expect(src).not.toMatch(/from\s+['"]\.\/ruact-router\.js['"]/);

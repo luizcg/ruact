@@ -28,8 +28,7 @@ module Ruact
       ctx = @ruact_render_context
       raise Ruact::Error, __ruact_outside_render_message(name) if ctx.nil?
 
-      token = ctx.register(name, props)
-      "<!-- #{token} -->".html_safe
+      Markers.component(ctx.register(name, props)).html_safe
     end
 
     # Story 18-2 — the opening of a component with children. Registers it like
@@ -41,8 +40,23 @@ module Ruact
       ctx = @ruact_render_context
       raise Ruact::Error, __ruact_outside_render_message(name) if ctx.nil?
 
-      token = ctx.register(name, props)
-      %(<ruact-component data-ruact-token="#{token}">).html_safe
+      Markers.component_open(ctx.register(name, props)).html_safe
+    end
+
+    # A `<Suspense>`: the preprocessor makes the ERB between its tags this
+    # block's body, and passes the `fallback` and `delay` attributes as the
+    # template wrote them. Writes the Suspense marker ({Markers}) around the
+    # content, evaluated here, in place, so the page renders as one piece; the
+    # block is the seam where it could be evaluated later instead.
+    #
+    # Only what the block writes is the content: a value it ends on is not
+    # (`capture` would print a block's value when it writes nothing).
+    def __ruact_suspense__(fallback, delay = nil)
+      content = capture do
+        yield
+        nil
+      end
+      "#{Markers.suspense_open(fallback, delay)}#{content}#{Markers::SUSPENSE_CLOSE}".html_safe
     end
 
     # Story 17.0i — a client component in a template Rails is rendering on its
@@ -228,31 +242,15 @@ module Ruact
 
     # The `__FLIGHT_DATA` inline bootstrap `<script>` — pushes the per-render
     # Flight payload onto the global queue the bootstrap entry drains on boot.
-    #
-    # The payload carries application data (props, record content), so it is
-    # embedded as a JSON string literal with `<`, `>`, `&`, U+2028 and U+2029
-    # escaped as `\uXXXX`. No byte of the payload can then close the `<script>`
-    # — `</SCRIPT>`, `</script >` and `<!--` included — and every character
-    # reaches JavaScript intact (a Ruby `String#inspect` literal did neither:
-    # it escaped only a lowercase `</script>`, and its `\e`-style escapes mean
-    # something else in JS).
-    SCRIPT_UNSAFE = /[<>&\u2028\u2029]/
-    private_constant :SCRIPT_UNSAFE
-
-    # A JSON string literal that is also safe inside a `<script>` element.
-    # The payload is UTF-8 by construction (the serializer normalizes every
-    # string); a binary-tagged buffer is retagged, not transcoded.
-    def __ruact_script_safe_json(string)
-      utf8 = string.encoding == Encoding::UTF_8 ? string : string.dup.force_encoding(Encoding::UTF_8)
-      JSON.generate(utf8).gsub(SCRIPT_UNSAFE) { |char| format("\\u%04x", char.ord) }
-    end
-
+    # The payload is written as {InlineScript.string_literal} writes it (a
+    # Ruby `String#inspect` literal, used before, escaped only a lowercase
+    # `</script>`, and its `\e`-style escapes mean something else in JS).
     def ruact_flight_data_script(flight_payload)
       <<~HTML.strip
         <script>
           (function() {
             var d = (self.__FLIGHT_DATA = self.__FLIGHT_DATA || []);
-            d.push(#{__ruact_script_safe_json(flight_payload)});
+            d.push(#{InlineScript.string_literal(flight_payload)});
           })();
         </script>
       HTML

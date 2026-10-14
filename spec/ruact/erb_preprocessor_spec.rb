@@ -145,30 +145,134 @@ module Ruact
     # Bugfix (Sprint Change Proposal 2026-06-16 §4.5): `<Suspense delay="2.5">`
     # used to be ignored — the preprocessor never carried the attribute, so the
     # SuspenseElement always took its default delay. It now forwards an optional
-    # `delay` as `data-ruact-delay` on the emitted <ruact-suspense> element.
+    # `delay`, with the `fallback`, to the helper that writes the Suspense marker.
     describe "Suspense delay attribute" do
-      it "forwards delay to the ruact-suspense element as data-ruact-delay" do
+      it "forwards delay and fallback to the Suspense helper, whose block is the content" do
         result = transform.call(%(<Suspense fallback="loading" delay="2.5"><Spinner /></Suspense>))
-        expect(result).to include(%(data-ruact-delay="2.5"))
-        expect(result).to include(%(data-ruact-fallback="loading"))
-        expect(result).to include("</ruact-suspense>")
+        expect(result).to start_with(%(<%= __ruact_suspense__("loading", "2.5") do %>))
+        expect(result).to end_with(%(<% end %><%= "" %>))
       end
 
-      it "omits data-ruact-delay when no delay attribute is present" do
+      it "passes no delay when no delay attribute is present" do
         result = transform.call(%(<Suspense fallback="loading"><Spinner /></Suspense>))
-        expect(result).to include(%(data-ruact-fallback="loading"))
-        expect(result).not_to include("data-ruact-delay")
+        expect(result).to start_with(%(<%= __ruact_suspense__("loading", nil) do %>))
       end
 
       it "extracts delay regardless of attribute order" do
         result = transform.call(%(<Suspense delay="0.75" fallback="wait"><X /></Suspense>))
-        expect(result).to include(%(data-ruact-delay="0.75"))
-        expect(result).to include(%(data-ruact-fallback="wait"))
+        expect(result).to start_with(%(<%= __ruact_suspense__("wait", "0.75") do %>))
       end
 
       it "accepts a single-quoted delay attribute" do
         result = transform.call(%(<Suspense fallback='loading' delay='1.5'><X /></Suspense>))
-        expect(result).to include(%(data-ruact-delay="1.5"))
+        expect(result).to start_with(%(<%= __ruact_suspense__("loading", "1.5") do %>))
+      end
+
+      it "passes the fallback as Ruby text: an interpolation in it stays text" do
+        result = transform.call(%(<Suspense fallback="\#{boom}"><X /></Suspense>))
+        expect(result).to start_with(%(<%= __ruact_suspense__("\\\#{boom}", nil) do %>))
+      end
+    end
+
+    describe "Suspense tags must pair (as component tags do)" do
+      it "names an unclosed <Suspense> with its line" do
+        expect { transform.call(%(<p>a</p>\n<Suspense fallback="x">\n<p>b</p>)) }
+          .to raise_error(Ruact::ComponentTagError, /<Suspense> at line 2 is never closed/)
+      end
+
+      it "names a stray </Suspense> with its line" do
+        expect { transform.call(%(<p>a</p>\n</Suspense>)) }
+          .to raise_error(Ruact::ComponentTagError, %r{</Suspense> at line 2 closes nothing})
+      end
+
+      it "takes <Suspense ... /> as a pair with nothing in it" do
+        expect(transform.call(%(<Suspense fallback="x" />)))
+          .to eq(%(<%= __ruact_suspense__("x", nil) do %><% end %><%= "" %>))
+      end
+
+      it "reads a Suspense after a literal `<%%` as a tag" do
+        expect(transform.call(%(<p><%% x</p><Suspense fallback="x"><p>y</p></Suspense>)))
+          .to eq(%(<p><%% x</p><%= __ruact_suspense__("x", nil) do %><p>y</p><% end %><%= "" %>))
+      end
+
+      it "refuses a pair split across ERB blocks, which would hand the pair's `end` to the template's block" do
+        [%(<% if @c %><Suspense fallback="a"><% end %><p>in</p><% if @c %></Suspense><% end %>),
+         %(<% if @c %><Suspense fallback="a"><% end %><p>in</p></Suspense>),
+         %(<% if @c %><Suspense fallback="a"><% else %><div><% end %><p>in</p></Suspense>)].each do |source|
+          expect { transform.call(source) }
+            .to raise_error(Ruact::ComponentTagError, %r{<Suspense> at line 1 and its </Suspense> .*same ERB block})
+        end
+      end
+
+      it "takes blocks, loops and conditionals that open and close inside the pair" do
+        source = %(<Suspense fallback="a"><%= form_with do |f| %><% if @x %>y<% end %><% end %>) +
+                 %(<%- @items.each do |i| -%><%= i %><% end %><%# a comment: end %></Suspense>)
+        expect { transform.call(source) }.not_to raise_error
+      end
+
+      it "refuses ERB in a fallback or a delay, with the line" do
+        expect { transform.call(%(<p>a</p>\n<Suspense fallback="<%= t('x') %>"></Suspense>)) }
+          .to raise_error(Ruact::PreprocessorError, /<Suspense> at line 2 — `fallback` and `delay` take literal text/)
+      end
+
+      it "names the template's own line after a component tag written over several lines" do
+        source = %(<Card\n  a={1}\n  b={2}\n/>\n<p>x</p>\n<Suspense fallback="z">\n<p>y</p>)
+        expect do
+          transform.call(source)
+        end.to raise_error(Ruact::ComponentTagError, /<Suspense> at line 6 is never closed/)
+      end
+
+      it "keeps the line count of a Suspense tag written over several lines" do
+        source = %(<Suspense\n  fallback="a"\n  delay="1">\n<p>x</p>\n</Suspense\n>\n<B />)
+        expect(transform.call(source).count("\n")).to eq(source.count("\n"))
+      end
+
+      it "refuses `break`, `next`, `return`, `it` and `_1` at the content's own level" do
+        { "it" => %(<% @items.each do %><Suspense fallback="L"><%= it %></Suspense><% end %>),
+          "_1" => %(<% @items.each { %><Suspense fallback="L"><%= _1 %></Suspense><% } %>),
+          "break" => %(<% @items.each do |i| %><Suspense fallback="L"><% break if i %></Suspense><% end %>) }
+          .each do |word, source|
+            expect { transform.call(source) }
+              .to raise_error(Ruact::ComponentTagError, /`#{word}` between its tags would apply to the Suspense/)
+          end
+      end
+
+      it "takes them inside a loop or block of the content's own" do
+        source = %(<Suspense fallback="L"><% @items.each do |i| %><% next if i %><%= i %><% end %>) +
+                 %(<% @items.each do %><%= it %><% end %><% it = 3 %><%= it %></Suspense>)
+        expect { transform.call(source) }.not_to raise_error
+      end
+
+      it "refuses `it` and `_1` inside a loop of the content's own: they still name the outer block's parameter" do
+        [%(<% [5].each do %><Suspense fallback="L"><% while true %><%= it %><% break %><% end %></Suspense><% end %>),
+         %(<% [5].each { %><Suspense fallback="L"><% for x in [1] %><%= _1 %><% end %></Suspense><% } %>)]
+          .each do |source|
+            expect { transform.call(source) }.to raise_error(Ruact::ComponentTagError, /between its tags would apply/)
+          end
+      end
+
+      it "takes `break` and `next` inside a loop of the content's own, and refuses `redo` at its level" do
+        expect { transform.call(%(<Suspense fallback="L"><% while true %><% break %><% end %></Suspense>)) }
+          .not_to raise_error
+        expect { transform.call(%(<% [1].each do |x| %><Suspense fallback="L"><% redo if x %></Suspense><% end %>)) }
+          .to raise_error(Ruact::ComponentTagError, /`redo` between its tags/)
+      end
+
+      it "takes `it` that the template made a local: a block parameter or an assignment before the tag" do
+        [%(<% [5].each do |it| %><Suspense fallback="L"><%= it %></Suspense><% end %>),
+         %(<% it = "x" %><Suspense fallback="L"><%= it %></Suspense>)].each do |source|
+          expect { transform.call(source) }.not_to raise_error
+        end
+      end
+
+      it "leaves a template whose Ruby does not parse to Rails, which names the real line" do
+        expect { transform.call('<Suspense fallback="L"><%= link_to("x", "/y" %></Suspense>') }.not_to raise_error
+      end
+
+      it "transforms its own output to itself" do
+        source = %(<Card><Suspense fallback="x"><LikeButton n={1} /></Suspense></Card><Suspense fallback="y" />)
+        once = transform.call(source)
+        expect(transform.call(once)).to eq(once)
       end
     end
 
@@ -204,8 +308,15 @@ module Ruact
       it "works around and inside Suspense" do
         out = run(%(<Card><Suspense fallback="…"><Card>late</Card></Suspense></Card>))
         expect(out).to eq(
-          %(<%= __ruact_component_open__("Card", {}) %><ruact-suspense data-ruact-fallback="…">) +
-          %(<%= __ruact_component_open__("Card", {}) %>late</ruact-component></ruact-suspense></ruact-component>)
+          [%(<%= __ruact_component_open__("Card", {}) %><%= __ruact_suspense__("…", nil) do %>),
+           %(<%= __ruact_component_open__("Card", {}) %>late</ruact-component>),
+           %(<% end %><%= "" %></ruact-component>)].join
+        )
+      end
+
+      it "leaves a Suspense tag that is Ruby text inside ERB alone" do
+        expect(run(%(<%= "<Suspense>" %><p>x</p><%= "</Suspense>" %>))).to eq(
+          %(<%= "<Suspense>" %><p>x</p><%= "</Suspense>" %>)
         )
       end
 
@@ -261,7 +372,7 @@ module Ruact
 
         it "takes `<X/>` (no space) as self-closing on the paired path too" do
           expect(run(%(<Suspense fallback="…"><LikeButton/></Suspense>))).to eq(
-            %(<ruact-suspense data-ruact-fallback="…"><%= __ruact_component__("LikeButton", {}) %></ruact-suspense>)
+            %(<%= __ruact_suspense__("…", nil) do %><%= __ruact_component__("LikeButton", {}) %><% end %><%= "" %>)
           )
         end
 
@@ -285,7 +396,7 @@ module Ruact
         end
 
         it "takes `</Suspense >` and a stray `</X/>`" do
-          expect(run(%(<Suspense fallback="x"><B /></Suspense >))).to end_with("</ruact-suspense>")
+          expect(run(%(<Suspense fallback="x"><B /></Suspense >))).to end_with(%(<% end %><%= "" %>))
           expect { run("<p>x</p></LikeButton/>") }.to raise_error(Ruact::ComponentTagError, /closes nothing/)
         end
 

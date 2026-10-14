@@ -2,21 +2,17 @@
 
 module Ruact
   module Flight
-    # Central state for a single Flight render.
-    # Owns the ID allocator, chunk queues, and dedup tracker.
+    # Central state for a single Flight render: the id allocator, the rows the
+    # serializer has written and not yet handed out, the deferred boundaries
+    # still to render, and the client-reference de-duplication table.
+    #
+    # The serializer writes rows here ({#add_import}, {#add_row}) and defers
+    # Suspense content ({#defer}); {Renderer} takes them in the order the
+    # client must read them ({#take_rows}, {#next_deferred}).
     class Request
-      # I rows — flushed first
-      attr_reader :completed_import_chunks
-      # model rows
-      attr_reader :completed_regular_chunks
-      # E rows — flushed last
-      attr_reader :completed_error_chunks
-      # { id:, element:, delay: } — emitted after root row
-      attr_reader :deferred_chunks
       # object_id => "$L<hex>" reference (dedup)
       attr_reader :written_objects
-      attr_reader :next_chunk_id, :pending_chunks, :bundler_config, :root_model,
-                  :strict_serialization, :on_as_json_warning, :development
+      attr_reader :bundler_config, :root_model, :strict_serialization, :on_as_json_warning, :development
 
       def initialize(model, bundler_config, strict_serialization: false, on_as_json_warning: nil,
                      development: false)
@@ -26,13 +22,12 @@ module Ruact
         @suspense_symbol_ref  = nil
         @boundary_ref         = nil
         @next_chunk_id = 0
-        @pending_chunks = 0
         @bundler_config = bundler_config
 
-        @completed_import_chunks  = []
-        @completed_regular_chunks = []
-        @completed_error_chunks   = []
-        @deferred_chunks          = []
+        @imports  = [] # I rows
+        @rows     = [] # model and text rows other than the root
+        @deferred = [] # { id:, element:, delay: }, in the order they were met
+        @next_deferred = 0
 
         @written_objects = {}.compare_by_identity
 
@@ -46,12 +41,52 @@ module Ruact
         id
       end
 
+      # An import row. Imports are handed out before any model row taken with them.
+      def add_import(row)
+        @imports << row
+      end
+
+      # A model or text row that a later row references.
+      def add_row(row)
+        @rows << row
+      end
+
+      # The rows written since the last call: imports first, then the rest, in
+      # the order they were written. Whatever references them comes after.
+      def take_rows
+        taken = @imports + @rows
+        @imports.clear
+        @rows.clear
+        taken
+      end
+
+      # Defers Suspense content: its row is rendered by {Renderer} after the
+      # shell. Returns the id the row will have.
+      def defer(element, delay)
+        id = allocate_id
+        @deferred << { id: id, element: element, delay: delay }
+        id
+      end
+
+      # Whether deferred content is still to be rendered (content deferred while
+      # rendering a deferred row counts too).
+      def deferred?
+        @next_deferred < @deferred.length
+      end
+
+      # The next deferred content, in the order it was met.
+      def next_deferred
+        deferred = @deferred[@next_deferred]
+        @next_deferred += 1
+        deferred
+      end
+
       # The `"$<hex>"` reference to this response's `"$Sreact.suspense"` symbol
       # row, emitted once, before the first row that uses it.
       def suspense_symbol_ref
         @suspense_symbol_ref ||= begin
           id = allocate_id
-          @completed_regular_chunks << RowEmitter.model(id, JSON.generate("$Sreact.suspense"))
+          add_row(RowEmitter.model(id, JSON.generate("$Sreact.suspense")))
           "$#{id.to_s(16)}"
         end
       end
@@ -66,17 +101,9 @@ module Ruact
       def boundary_ref
         @boundary_ref ||= begin
           id = allocate_id
-          @completed_import_chunks << RowEmitter.import(id, JSON.generate(BOUNDARY_METADATA))
+          add_import(RowEmitter.import(id, JSON.generate(BOUNDARY_METADATA)))
           "$L#{id.to_s(16)}"
         end
-      end
-
-      def increment_pending
-        @pending_chunks += 1
-      end
-
-      def decrement_pending
-        @pending_chunks -= 1
       end
     end
   end
