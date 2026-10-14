@@ -61,8 +61,15 @@ module Ruact
     ERB_COMMENT_RE = /<%#.*?%>/m
 
     # What ends a `<Suspense>`: the {ViewHelper#__ruact_suspense__} block its
-    # content is the body of.
-    SUSPENSE_BLOCK_CLOSE = "<% end %>"
+    # content is the body of. The empty output tag after it keeps Rails' ERB
+    # from trimming a `</Suspense>` that sits alone on its line, which would eat
+    # the line break after it (text the page shows).
+    SUSPENSE_BLOCK_CLOSE = %(<% end %><%= "" %>)
+
+    # Ripper node types inside which `break`, `next`, `return`, `it` and `_1`
+    # belong to a block or a loop of their own, not to the Suspense's block.
+    OWN_SCOPE_NODES = %i[brace_block do_block while until while_mod until_mod for lambda def defs class module
+                         sclass].freeze
 
     # One ERB tag's flag (`=`, `==`, `-`, or `#` for a comment) and its Ruby code.
     ERB_CODE_RE = /<%(?!%)(==|=|-|#)?(.*?)-?%>/m
@@ -176,18 +183,71 @@ module Ruact
     # The Ruby of the ERB tags between a pair has to stand on its own: an `if`
     # or a block opened or closed between them would take the pair's `end`.
     # Parsed inside parentheses, which no `end` in it can close, within a
-    # method and a block, where `yield`, `next` and `return` are Ruby.
+    # method and a block, where `yield`, `next` and `return` are Ruby. When the
+    # template's Ruby does not parse at all, Rails reports that, with its line.
+    #
+    # The content is then the body of a block, so `break`, `next`, `return`,
+    # `it` and `_1` written at its own level would apply to that block, not to
+    # the loop or block around the Suspense: refused, with what to do instead.
     def check_same_block!(source, opening, closing)
-      code = source[opening[:to]...closing[:from]].to_enum(:scan, ERB_CODE_RE).filter_map do
+      tree = parse_erb_code(source[opening[:to]...closing[:from]])
+      if tree.nil?
+        return if parse_erb_code(source).nil?
+
+        raise ComponentTagError,
+              "ruact: <Suspense> at #{location(line_at(source, opening[:from]))} and its </Suspense> at line " \
+              "#{line_at(source, closing[:from])} are not in the same ERB block — an `if`, a loop or a block opens " \
+              "or closes between them. Put both tags inside that block, or both outside it."
+      end
+
+      word = escaping_word(first_node(tree, :paren))
+      return unless word
+
+      advice = %w[break next return].include?(word) ? "Move it outside the Suspense." : "Name the block's parameter."
+      raise ComponentTagError,
+            "ruact: <Suspense> at #{location(line_at(source, opening[:from]))} — `#{word}` between its tags would " \
+            "apply to the Suspense's own block, not to the loop or block around it. #{advice}"
+    end
+
+    # The Ripper tree of the Ruby in +erb+'s tags (comments left out), as the
+    # body of a block in a method, in parentheses; nil when it does not parse.
+    def parse_erb_code(erb)
+      code = erb.to_enum(:scan, ERB_CODE_RE).filter_map do
         m = ::Regexp.last_match
         m[2] unless m[1] == "#"
       end
-      return if Ripper.sexp("def __ruact_check\nproc do\n(\n#{code.join("\n")}\n)\nend\nend")
+      Ripper.sexp("def __ruact_check\nproc do\n(\n#{code.join("\n")}\n)\nend\nend")
+    end
 
-      raise ComponentTagError,
-            "ruact: <Suspense> at #{location(line_at(source, opening[:from]))} and its </Suspense> at line " \
-            "#{line_at(source, closing[:from])} are not in the same ERB block — an `if`, a loop or a block opens " \
-            "or closes between them. Put both tags inside that block, or both outside it."
+    # The first node of +type+ in +tree+, depth first: for {#parse_erb_code}'s
+    # tree, the parentheses the template's code sits in.
+    def first_node(tree, type)
+      return nil unless tree.is_a?(Array)
+      return tree if tree.first == type
+
+      tree.each do |child|
+        found = first_node(child, type)
+        return found if found
+      end
+      nil
+    end
+
+    # The first `break`, `next`, `return`, implicit `it` or numbered parameter
+    # at the parsed code's own level, if any.
+    def escaping_word(node)
+      return nil unless node.is_a?(Array)
+      return nil if OWN_SCOPE_NODES.include?(node.first)
+
+      case node.first
+      when :break, :next, :return, :return0 then return node.first == :return0 ? "return" : node.first.to_s
+      when :vcall then return "it" if node.dig(1, 1) == "it"
+      when :var_ref then return node.dig(1, 1) if node.dig(1, 1).to_s.match?(/\A_[1-9]\z/)
+      end
+      node.each do |child|
+        found = escaping_word(child)
+        return found if found
+      end
+      nil
     end
 
     def check_literal_attributes!(source, tag)
@@ -200,7 +260,7 @@ module Ruact
 
     def rewrite_suspense_tag(tag, line_breaks)
       breaks = "\n" * line_breaks
-      return "<% end #{breaks}%>" if tag[:kind] == :close
+      return %(<% end #{breaks}%><%= "" %>) if tag[:kind] == :close
 
       fallback = extract_string_attr(tag[:attrs], "fallback") || ""
       delay    = extract_string_attr(tag[:attrs], "delay")
