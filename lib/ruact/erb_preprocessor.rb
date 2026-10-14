@@ -66,10 +66,13 @@ module Ruact
     # the line break after it (text the page shows).
     SUSPENSE_BLOCK_CLOSE = %(<% end %><%= "" %>)
 
-    # Ripper node types inside which `break`, `next`, `return`, `it` and `_1`
-    # belong to a block or a loop of their own, not to the Suspense's block.
-    OWN_SCOPE_NODES = %i[brace_block do_block while until while_mod until_mod for lambda def defs class module
-                         sclass].freeze
+    # Ripper node types inside which `break`, `next`, `redo`, `return`, `it`
+    # and `_1` belong to a block of their own, not to the Suspense's block.
+    OWN_BLOCK_NODES = %i[brace_block do_block lambda def defs class module sclass].freeze
+    # Loops give `break`, `next` and `redo` a scope of their own, but not `it`
+    # or `_1`, which still name the enclosing block's parameter.
+    LOOP_NODES = %i[while until while_mod until_mod for].freeze
+    LOOP_WORDS = %w[break next redo].freeze
 
     # One ERB tag's flag (`=`, `==`, `-`, or `#` for a comment) and its Ruby code.
     ERB_CODE_RE = /<%(?!%)(==|=|-|#)?(.*?)-?%>/m
@@ -202,8 +205,9 @@ module Ruact
 
       word = escaping_word(first_node(tree, :paren))
       return unless word
+      return if word == "it" && it_is_a_local?(source[0...opening[:from]])
 
-      advice = %w[break next return].include?(word) ? "Move it outside the Suspense." : "Name the block's parameter."
+      advice = word.start_with?("_") || word == "it" ? "Name the block's parameter." : "Move it outside the Suspense."
       raise ComponentTagError,
             "ruact: <Suspense> at #{location(line_at(source, opening[:from]))} — `#{word}` between its tags would " \
             "apply to the Suspense's own block, not to the loop or block around it. #{advice}"
@@ -232,22 +236,42 @@ module Ruact
       nil
     end
 
-    # The first `break`, `next`, `return`, implicit `it` or numbered parameter
-    # at the parsed code's own level, if any.
-    def escaping_word(node)
+    # The first `break`, `next`, `redo`, `return`, implicit `it` or numbered
+    # parameter that would apply to the Suspense's block, if any. +in_loop+:
+    # inside a loop of the content's own, where only `it` and `_1` still do.
+    def escaping_word(node, in_loop: false)
       return nil unless node.is_a?(Array)
-      return nil if OWN_SCOPE_NODES.include?(node.first)
+      return nil if OWN_BLOCK_NODES.include?(node.first)
 
-      case node.first
-      when :break, :next, :return, :return0 then return node.first == :return0 ? "return" : node.first.to_s
-      when :vcall then return "it" if node.dig(1, 1) == "it"
-      when :var_ref then return node.dig(1, 1) if node.dig(1, 1).to_s.match?(/\A_[1-9]\z/)
-      end
+      word = escaping_word_at(node)
+      return word if word && !(in_loop && LOOP_WORDS.include?(word))
+
+      in_loop ||= LOOP_NODES.include?(node.first)
       node.each do |child|
-        found = escaping_word(child)
+        found = escaping_word(child, in_loop: in_loop)
         return found if found
       end
       nil
+    end
+
+    def escaping_word_at(node)
+      case node.first
+      when :break, :next, :redo, :return then node.first.to_s
+      when :return0 then "return"
+      when :vcall then "it" if node.dig(1, 1) == "it"
+      when :var_ref then node.dig(1, 1) if node.dig(1, 1).to_s.match?(/\A_[1-9]\z/)
+      end
+    end
+
+    # Whether the template before a `<Suspense>` makes `it` a local variable —
+    # a block parameter (`|it|`) or an assignment — in which case `it` between
+    # the tags is that variable, as Ruby would read it. (A partial's local
+    # named `it` is not seen here.)
+    def it_is_a_local?(before)
+      before.to_enum(:scan, ERB_CODE_RE).any? do
+        code = ::Regexp.last_match(2)
+        code.match?(/\|[^|]*\bit\b[^|]*\|/) || code.match?(/\bit\s*(?:=(?![=~>])|\|\|=|&&=)/)
+      end
     end
 
     def check_literal_attributes!(source, tag)

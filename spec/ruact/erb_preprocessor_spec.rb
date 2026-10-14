@@ -243,6 +243,28 @@ module Ruact
         expect { transform.call(source) }.not_to raise_error
       end
 
+      it "refuses `it` and `_1` inside a loop of the content's own: they still name the outer block's parameter" do
+        [%(<% [5].each do %><Suspense fallback="L"><% while true %><%= it %><% break %><% end %></Suspense><% end %>),
+         %(<% [5].each { %><Suspense fallback="L"><% for x in [1] %><%= _1 %><% end %></Suspense><% } %>)]
+          .each do |source|
+            expect { transform.call(source) }.to raise_error(Ruact::ComponentTagError, /between its tags would apply/)
+          end
+      end
+
+      it "takes `break` and `next` inside a loop of the content's own, and refuses `redo` at its level" do
+        expect { transform.call(%(<Suspense fallback="L"><% while true %><% break %><% end %></Suspense>)) }
+          .not_to raise_error
+        expect { transform.call(%(<% [1].each do |x| %><Suspense fallback="L"><% redo if x %></Suspense><% end %>)) }
+          .to raise_error(Ruact::ComponentTagError, /`redo` between its tags/)
+      end
+
+      it "takes `it` that the template made a local: a block parameter or an assignment before the tag" do
+        [%(<% [5].each do |it| %><Suspense fallback="L"><%= it %></Suspense><% end %>),
+         %(<% it = "x" %><Suspense fallback="L"><%= it %></Suspense>)].each do |source|
+          expect { transform.call(source) }.not_to raise_error
+        end
+      end
+
       it "leaves a template whose Ruby does not parse to Rails, which names the real line" do
         expect { transform.call('<Suspense fallback="L"><%= link_to("x", "/y" %></Suspense>') }.not_to raise_error
       end
