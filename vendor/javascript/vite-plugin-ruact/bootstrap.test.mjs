@@ -56,7 +56,7 @@ describe("virtual:ruact/bootstrap — load (Story 14.2)", () => {
 
   it("imports the runtime modules via ABSOLUTE fs specifiers, not relative", () => {
     expect(src).toMatch(/from '\/.*\/runtime\/flight-modules\.js'/);
-    expect(src).toMatch(/import '\/.*\/runtime\/suspense-boundary\.js'/);
+    expect(src).toMatch(/from '\/.*\/runtime\/suspense-boundary\.js'/);
     expect(src).toMatch(/from '\/.*\/runtime\/ruact-router\.js'/);
     // The page is opened through page-stream.js, which reads React's Flight
     // client through the plugin's virtual id (Story 18-1).
@@ -64,6 +64,18 @@ describe("virtual:ruact/bootstrap — load (Story 14.2)", () => {
     // No `\0virtual:`-unresolvable relative import survives.
     expect(src).not.toMatch(/(from|import)\s+['"]\.\/[\w.-]+\.js['"]/);
     expect(src).not.toMatch(/from\s+['"]\.\/ruact-router\.js['"]/);
+  });
+
+  // Story 19-1 — the boundary handler is in place before the first render: a
+  // row that is already an error when the page mounts is caught during that
+  // first commit, before the router's effect runs.
+  it("installs the boundary error handler before it mounts, and mounts into the root once it exists", () => {
+    expect(src).toMatch(/from '\/.*\/runtime\/dev-overlay\.js'/);
+    expect(src.indexOf("setBoundaryErrorHandler((error)")).toBeGreaterThan(-1);
+    expect(src.indexOf("setBoundaryErrorHandler((error)")).toBeLessThan(src.indexOf("createRoot(container"));
+    expect(src).toContain("Promise.all([initialTree, whenRoot()])");
+    expect(src).toContain("openPage(documentRows(flightData))");
+    expect(src).toContain("setupRouter({ onNavigate: setCurrent, onBoundaryError })");
   });
 
   it("contains no JSX syntax (loads via the default loader like the registry)", () => {

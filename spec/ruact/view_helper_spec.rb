@@ -289,6 +289,13 @@ module Ruact
           html = asset_helper.ruact_js_assets(payload)
           expect(html).to include("__vite_plugin_react_preamble_installed__")
           expect(html).to include("http://localhost:5173/@vite/client")
+          # Story 19-1 — one async module: it runs before the document ends,
+          # and imports the client and the bootstrap after the preamble.
+          expect(html.scan("<script type=\"module\" async>").length).to eq(1)
+          expect(html).not_to include(" src=")
+          expect(html.index("__vite_plugin_react_preamble_installed__"))
+            .to be < html.index("await import('http://localhost:5173/@vite/client')")
+          expect(html.index("@vite/client")).to be < html.index("/@id/__x00__")
           # Targets the virtual entry at the dev server's /@id/__x00__ URL — NOT
           # a stale application.jsx path.
           expect(html).to include("/@id/__x00__#{Ruact.bootstrap_virtual_id}")
@@ -366,7 +373,7 @@ module Ruact
           allow(asset_helper).to receive(:vite_manifest_entry)
             .with(Ruact.bootstrap_virtual_id).and_return({ "file" => "bootstrap-abc123.js" })
           html = asset_helper.ruact_js_assets(payload)
-          expect(html).to include(%(src="/assets/bootstrap-abc123.js"))
+          expect(html).to include(%(<script type="module" async src="/assets/bootstrap-abc123.js"></script>))
           expect(html).to include("__FLIGHT_DATA")
         end
 
