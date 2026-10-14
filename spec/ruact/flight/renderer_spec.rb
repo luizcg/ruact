@@ -57,6 +57,52 @@ module Ruact
         end
       end
 
+      describe "a render in steps" do
+        let(:button) { ClientReference.new(module_id: "/assets/Button-abc.js", export_name: "Button") }
+        let(:inner_suspense) do
+          SuspenseElement.new(fallback: ReactElement.new(type: "i"),
+                              children: ReactElement.new(type: "p", props: { "children" => "inner" }), delay: 0.0)
+        end
+        # The button exists only inside the outer boundary; a second boundary sits inside it.
+        let(:tree) do
+          content = [ReactElement.new(type: button, props: { "label" => "in" }), inner_suspense]
+          ReactElement.new(type: "main", props: {
+                             "children" => SuspenseElement.new(fallback: ReactElement.new(type: "span"),
+                                                               children: content, delay: 0.0)
+                           })
+        end
+
+        it "gives the shell first: what the page shows with its fallbacks, ending with the root row" do
+          renderer = described_class.new(tree, manifest_with_button)
+          shell = renderer.shell
+
+          expect(shell.last).to start_with("0:")
+          expect(shell.join).not_to include("Button-abc")
+          expect(renderer.pending?).to be(true)
+        end
+
+        it "gives each boundary its own rows, an import before the row that uses it, a nested boundary after" do
+          renderer = described_class.new(tree, manifest_with_button)
+          renderer.shell
+
+          outer = renderer.next_boundary(streaming: false)
+          expect(outer.first).to include(":I[").and include("Button-abc")
+          expect(outer.last).to include('"label":"in"')
+          expect(renderer.pending?).to be(true)
+
+          inner = renderer.next_boundary(streaming: false)
+          expect(inner.last).to include('"children":"inner"')
+          expect(renderer.pending?).to be(false)
+        end
+
+        it "adds up to what .render writes" do
+          renderer = described_class.new(tree, manifest_with_button)
+          rows = renderer.shell
+          rows += renderer.next_boundary(streaming: false) while renderer.pending?
+          expect(rows.join).to eq(described_class.render(tree, manifest_with_button))
+        end
+      end
+
       describe "suspense timeout (Story 3.5 AC #4)" do
         let(:fallback)  { ReactElement.new(type: "span") }
         let(:inner)     { ReactElement.new(type: "div") }

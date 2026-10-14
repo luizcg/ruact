@@ -4,10 +4,22 @@ require "json"
 
 module Ruact
   module Flight
-    # Renders a React element tree to a Flight wire format string.
+    # Renders a React element tree to Flight rows, in the order React's client
+    # must read them.
     #
-    # Usage:
-    #   output = Renderer.render(root_element, bundler_config)
+    # A render has two parts. The **shell** is every row the page needs to show
+    # with its Suspense fallbacks: the imports and model rows the tree
+    # references, then the root row. Each **deferred boundary** — the content of
+    # a `<Suspense>` — then gets its own rows, one boundary at a time, each
+    # preceded by the import and text rows it brings.
+    #
+    #   renderer = Renderer.new(root, manifest)
+    #   renderer.shell                                   # => ["1:I[...]\n", "0:[...]\n"]
+    #   renderer.next_boundary(streaming: true) while renderer.pending?
+    #
+    # {.each} and {.render} walk all of it:
+    #
+    #   Renderer.render(root_element, bundler_config)
     #   # => "1:I[...]\n0:[\"$\",\"div\",...]\n"
     class Renderer
       def self.render(model, bundler_config, **)
@@ -38,54 +50,48 @@ module Ruact
                                strict_serialization: strict_serialization,
                                on_as_json_warning: on_as_json_warning,
                                development: development)
+        @serializer = Serializer.new(@request)
       end
 
-      # Yields Flight rows one at a time.
-      # Flush order: imports → regular → root → deferred (with optional delay) → errors.
-      # When streaming: false (initial HTML shell), deferred delays are skipped.
-      def each(streaming: true, &block)
-        return enum_for(:each, streaming: streaming) unless block_given?
-
+      # The shell's rows: the imports and model rows the tree references, then
+      # the root row (id 0). Call once, before {#next_boundary}.
+      def shell
         root_id = @request.allocate_id # => 0
+        root_json = JSON.generate(@serializer.serialize_model(@request.root_model))
+        @request.take_rows << RowEmitter.model(root_id, root_json)
+      end
 
-        serializer = Serializer.new(@request)
-        root_value = serializer.serialize_model(@request.root_model)
-        root_json  = JSON.generate(root_value)
-        root_row   = RowEmitter.model(root_id, root_json)
+      # Whether a deferred boundary is still to be rendered.
+      def pending?
+        @request.deferred?
+      end
 
-        @request.completed_import_chunks.each(&block)
-        @request.completed_regular_chunks.each(&block)
-        yield root_row
-
-        # Deferred chunks: emitted after root, optionally delayed (Suspense streaming).
-        # When the chunk delay exceeds suspense_timeout, an E-type error row is emitted instead.
-        @request.deferred_chunks.each do |deferred|
-          if streaming && deferred[:delay]&.positive?
-            timeout = Ruact.config.suspense_timeout
-            if timeout&.positive? && deferred[:delay] > timeout
-              error = RowEmitter.error_payload("Suspense timeout exceeded", digest: "ruact:suspense-timeout")
-              yield RowEmitter.error(deferred[:id], JSON.generate(error))
-              next
-            end
-            sleep(deferred[:delay])
+      # The rows of the next deferred boundary: the import and text rows its
+      # content brings, then its model row. When +streaming+, a boundary with a
+      # `delay` waits it first — or, when the delay exceeds `suspense_timeout`,
+      # gets an error row instead.
+      def next_boundary(streaming:)
+        deferred = @request.next_deferred
+        if streaming && deferred[:delay]&.positive?
+          timeout = Ruact.config.suspense_timeout
+          if timeout&.positive? && deferred[:delay] > timeout
+            error = RowEmitter.error_payload("Suspense timeout exceeded", digest: "ruact:suspense-timeout")
+            return [RowEmitter.error(deferred[:id], JSON.generate(error))]
           end
-
-          # Serialize deferred content — may produce new import rows, and new
-          # regular rows (a string of 1024+ bytes becomes a `T` row the deferred
-          # model row references as `$<id>`).
-          import_count_before  = @request.completed_import_chunks.length
-          regular_count_before = @request.completed_regular_chunks.length
-          deferred_value = serializer.serialize_model(deferred[:element])
-
-          # Yield the rows discovered during deferred serialization BEFORE the
-          # row that references them.
-          @request.completed_import_chunks[import_count_before..].each(&block)
-          @request.completed_regular_chunks[regular_count_before..].each(&block)
-
-          yield RowEmitter.model(deferred[:id], JSON.generate(deferred_value))
+          sleep(deferred[:delay])
         end
 
-        @request.completed_error_chunks.each(&block)
+        value = @serializer.serialize_model(deferred[:element])
+        @request.take_rows << RowEmitter.model(deferred[:id], JSON.generate(value))
+      end
+
+      # Yields every row: the shell, then each deferred boundary.
+      # When +streaming+ is false (the initial HTML document), delays are skipped.
+      def each(streaming: true, &)
+        return enum_for(:each, streaming: streaming) unless block_given?
+
+        shell.each(&)
+        next_boundary(streaming: streaming).each(&) while pending?
       end
     end
   end

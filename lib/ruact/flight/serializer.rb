@@ -61,9 +61,7 @@ module Ruact
         # Large strings get their own T row
         if value.bytesize >= LARGE_TEXT_THRESHOLD
           id = @request.allocate_id
-          @request.increment_pending
-          row = RowEmitter.text(id, value)
-          @request.completed_regular_chunks << row
+          @request.add_row(RowEmitter.text(id, value))
           # A plain "$<hex>" reference: React reads "$T" as a temporary
           # reference (Story 18-1).
           return "$#{id.to_s(16)}"
@@ -149,8 +147,7 @@ module Ruact
 
       def serialize_suspense(element)
         # Allocate ID for the deferred content row (emitted after root row + delay)
-        deferred_id = @request.allocate_id
-        @request.deferred_chunks << { id: deferred_id, element: element.children, delay: element.delay }
+        deferred_id = @request.defer(element.children, element.delay)
 
         fallback_value = element.fallback ? serialize_model(element.fallback) : nil
 
@@ -221,11 +218,7 @@ module Ruact
         metadata = @request.bundler_config.resolve(ref.module_id, ref.export_name)
 
         id = @request.allocate_id
-        @request.increment_pending
-
-        json = JSON.generate(metadata)
-        row  = RowEmitter.import(id, json)
-        @request.completed_import_chunks << row
+        @request.add_import(RowEmitter.import(id, JSON.generate(metadata)))
 
         lazy_ref = "$L#{id.to_s(16)}"
         @request.written_objects[ref] = lazy_ref
