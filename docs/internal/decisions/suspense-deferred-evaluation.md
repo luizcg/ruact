@@ -3,7 +3,7 @@
 | Field | Value |
 | --- | --- |
 | Date | 2026-10-13 |
-| Status | Proposed. D1 has Luiz's direction (2026-10-13); **D6 and the scope of the next story are his to decide** (see [Open](#open-for-luiz)) |
+| Status | Accepted (Luiz, 2026-10-14). D1 and D5 have his direction of 2026-10-13; D6, the scope of 19-1 and `suspense_timeout` were decided on 2026-10-14 (see [Decided by Luiz](#decided-by-luiz)) |
 | Story | 19-0 — deferred evaluation: architecture and proof |
 | Measured against | ruact 0.0.19; Rails 8.1.4 (i18n 1.15.2), Rack 3.2.7, Puma 8.0.2, Ruby 3.4.5, SQLite (sqlite3 2.9.6); React 19.3.0 with the Flight client vendored in the gem, and React 19.2.8 with the app's own `react-server-dom-webpack`; Vite 6.4.4; Chromium through Playwright 1.64; macOS |
 | Experiment | [`docs/internal/spikes/deferred-suspense/`](../spikes/deferred-suspense/). Every statement marked *measured* comes from its scripts — `./run`, and `./run react 19.2.8` for the second client build — and has its line in `results/` (`browser.md`, `http.md`, `context-*.json`) |
@@ -428,7 +428,7 @@ line in `ApplicationController`.
 evaluated in place, with a development message — was not prototyped: it is
 what 0.0.19 does, plus the message.
 
-**This one is Luiz's.**
+**Decided (Luiz, 2026-10-14): (A).**
 
 ## Lifecycle
 
@@ -546,7 +546,7 @@ changes under D5 are in ruact's bootstrap and entry tag, not in React's client.
    server allows it, and starts no block for one that is gone; a response cut
    short is logged as one. When a streamed action ends, the connections its
    thread leased are back in the pool.
-7. D6 as decided. If (A): the `ruact_streaming` declaration, and the
+7. D6 (A): the `ruact_streaming` declaration, and the
    development message for a `<Suspense>` in an action that does not stream.
    Choosing Live per action has to hold for an endpoint built with
    `Controller.action(:name)`, where the route names no action, and has to
@@ -592,13 +592,17 @@ changes under D5 are in ruact's bootstrap and entry tag, not in React's client.
   positions (the frames name the right files; line numbers were not checked).
 - A real page in a maintained app, with a real slow query.
 
-## Open for Luiz
+## Decided by Luiz
 
-1. **D6**: (A) the app declares what streams, loudly reminded when it forgot,
-   or (B) every ruact page streams and takes Live's costs.
-2. **Scope of 19-1**: the first load and the navigation together, or the
-   navigation first. Recommended: together. The server side is the same code
-   for both, and the navigation alone would leave the first load, the one every
-   visitor gets, as it is.
-3. **`suspense_timeout`** stays at 5 s once it limits real time? It is a
-   backstop: it does not stop a query the driver cannot interrupt.
+On 2026-10-14:
+
+1. **D6: (A).** The app declares what streams, with `ruact_streaming`, and is
+   told loudly in development when a `<Suspense>` renders in an action that
+   does not.
+2. **Scope of 19-1: together.** The first load and the navigation stream in
+   the same story. The server side is the same code for both, and the
+   navigation alone would leave the first load, the one every visitor gets,
+   as it is.
+3. **`suspense_timeout` stays at 5 s** once it limits real time. It is a
+   backstop: it does not stop a query the driver cannot interrupt, and the
+   guide says so.
