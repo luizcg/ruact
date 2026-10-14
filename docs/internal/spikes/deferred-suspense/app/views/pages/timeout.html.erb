@@ -1,0 +1,7 @@
+<h1 id="shell">Timeout</h1>
+<Suspense fallback="Loading A…">
+  <p id="a"><%= Item.where("gate_wait('a') = 1").count %></p>
+</Suspense>
+<Suspense fallback="Loading B…">
+  <p id="b">b is quick</p>
+</Suspense>

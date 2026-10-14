@@ -1,0 +1,9 @@
+<h1 id="shell">Late cookie</h1>
+<% cookies[:early] = "1" %>
+<% session[:early] = "1" %>
+<Suspense fallback="Loading A…">
+  <% Gate.wait("a") %>
+  <% cookies[:late] = "1" %>
+  <% session[:late] = "1" %>
+  <p id="a">cookie written</p>
+</Suspense>

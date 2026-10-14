@@ -1,0 +1,8 @@
+<h1 id="shell">Context</h1>
+<p id="shell-lazy"><%= t(".lazy") %></p>
+<%= render "context", where: "in-shell" %>
+<Suspense fallback="Loading A…">
+  <% Gate.wait("a") %>
+  <p id="block-lazy"><%= t(".lazy") rescue "ERROR: #{$!.class}" %></p>
+  <%= render "context", where: "in-block" %>
+</Suspense>

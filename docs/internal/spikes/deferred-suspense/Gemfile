@@ -1,0 +1,10 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+gem "propshaft"
+gem "puma"
+gem "rails", "~> 8.1.0"
+gem "ruact", path: "../../../.."
+gem "sqlite3"
+gem "web-console", group: :development

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>19-0 spike</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <%= csrf_meta_tags %>
+    <%= ruact_head_assets %>
+  </head>
+  <body>
+    <div id="root"></div>
+    <% if SPIKE_MODE == "baseline" %>
+      <%= ruact_js_assets %>
+    <% elsif ENV["SPIKE_OLD_CLIENT"] == "1" %>
+      <%# The streamed document, read by the bootstrap 0.0.19 ships (a tab or a cache that still has it). %>
+      <%= ruact_flight_data_script(@ruact_flight_payload).html_safe %>
+      <%= ruact_vite_tags.html_safe %>
+    <% else %>
+      <%= ruact_flight_data_script(@ruact_flight_payload).html_safe %>
+      <%= spike_entry_tags %>
+    <% end %>
+  </body>
+</html>

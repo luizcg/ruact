@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# Story 19-0 — the whole experiment, from a clean checkout:
+#
+#   ./run                 install, build, browser runs (dev + production), HTTP measurements
+#   ./run browser         only the browser runs (writes results/browser.md)
+#   ./run measure         only the HTTP measurements (writes results/http.md)
+#   ./run react 19.2.8    the browser runs with the app's own react-server-dom-webpack
+#                         (appends to results/browser.md)
+#
+# Needs Ruby (bundler), Node and curl; `wrk` for one measurement (skipped without it).
+# Uses ports 4190 and 5199.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+BROWSER=results/browser.md
+
+setup() {
+  for port in 4190 5199; do
+    if lsof -ti "tcp:$port" >/dev/null 2>&1; then echo "port $port is in use" >&2; exit 1; fi
+  done
+  mkdir -p tmp log results
+  bundle install --quiet
+  npm ci --silent
+  npx playwright install chromium >/dev/null
+}
+
+build() {
+  npx vite build >tmp/build.log
+  grep -o "Flight client: .*" tmp/build.log
+}
+
+# One Playwright run, its output kept, its outcome a row of results/browser.md.
+# A failing run stops the script (pipefail), unless it is the one that must fail.
+row() {
+  local what=$1 env=$2 log=$3
+  local outcome
+  outcome=$(grep -E "^ +[0-9]+ (passed|failed|skipped)" "$log" | sed -E 's/^ +//; s/ \([0-9.]+m?s\)//' | paste -sd, - | sed 's/,/, /g')
+  echo "| $what | $env | $outcome |" >>"$BROWSER"
+}
+
+scenarios() {
+  local what=$1 env=$2
+  shift 2
+  echo "== $what, $env"
+  env "$@" RAILS_ENV="$env" npx playwright test 2>&1 | tee tmp/playwright.log
+  row "$what" "$env" tmp/playwright.log
+}
+
+table() {
+  {
+    echo
+    echo "## $1"
+    echo
+    echo "| what ran | environment | outcome |"
+    echo "| --- | --- | --- |"
+  } >>"$BROWSER"
+}
+
+browser() {
+  echo "# Story 19-0 — browser runs" >"$BROWSER"
+  echo >>"$BROWSER"
+  echo "Written by \`./run\`: one row per Playwright run, Chromium, one worker." >>"$BROWSER"
+  table "React $(node -p "require('react/package.json').version") — $(build)"
+  for env in development production; do
+    scenarios "prototype, Live" "$env" SPIKE_MODE=live
+    scenarios "prototype, lazy body" "$env" SPIKE_MODE=body
+
+    echo "== ruact 0.0.19: what it does today, $env"
+    SPIKE_MODE=baseline RAILS_ENV=$env npx playwright test baseline.spec.mjs 2>&1 | tee tmp/playwright.log
+    row "ruact 0.0.19: \`baseline.spec.mjs\`" "$env" tmp/playwright.log
+
+    echo "== ruact 0.0.19: the proof must FAIL, $env"
+    if SPIKE_MODE=baseline RAILS_ENV=$env npx playwright test deferred.spec.mjs >tmp/baseline-proof.log 2>&1; then
+      echo "the proof passed against the released gem: it proves nothing" >&2
+      exit 1
+    fi
+    grep -E "✘|failed" tmp/baseline-proof.log
+    # Both scenarios, each at the assertion about what the browser shows.
+    grep -q "2 failed" tmp/baseline-proof.log
+    grep -q "locator('#shell')" tmp/baseline-proof.log
+    grep -q "toHaveURL" tmp/baseline-proof.log
+    echo "| ruact 0.0.19: the proof, \`deferred.spec.mjs\` | $env | 2 failed, as it must: at the shell's text and at the URL |" >>"$BROWSER"
+
+    scenarios "the streamed document read by 0.0.19's bootstrap" "$env" SPIKE_OLD_CLIENT=1 SPIKE_MODE=live
+  done
+}
+
+# The plugin uses the app's react-server-dom-webpack when package.json declares it.
+other_react() {
+  local version=$1
+  cp package.json tmp/package.json.keep
+  cp package-lock.json tmp/package-lock.json.keep
+  restore() {
+    cp tmp/package.json.keep package.json
+    cp tmp/package-lock.json.keep package-lock.json
+    npm ci --silent
+  }
+  trap restore EXIT
+  npm install --silent "react@$version" "react-dom@$version" "react-server-dom-webpack@$version"
+  table "React $(node -p "require('react/package.json').version") — $(build)"
+  for env in development production; do
+    scenarios "prototype, Live" "$env" SPIKE_MODE=live
+    scenarios "prototype, lazy body" "$env" SPIKE_MODE=body
+  done
+}
+
+case "${1:-all}" in
+  all)     setup; browser; bundle exec ruby measure/measure.rb ;;
+  browser) setup; browser ;;
+  measure) setup; build; bundle exec ruby measure/measure.rb ;;
+  react)   setup; other_react "${2:?version}" ;;
+  *)       echo "usage: ./run [browser|measure|react VERSION]" >&2; exit 1 ;;
+esac
