@@ -218,19 +218,21 @@ module Ruact
                    Flight::ReactElement.new(type: "p", key: nil, props: { "children" => fallback_text })
                  end
 
-      child_nodes = convert_children(node)
-      children = child_nodes.length == 1 ? child_nodes.first : child_nodes
-
       # Optional `delay="2.5"` from the ERB → SuspenseElement#delay (the
-      # server-side wait, in seconds, before the deferred chunk streams). When
-      # absent or unusable, SuspenseElement falls back to its default.
+      # server-side wait, in seconds, before the deferred row streams); nil
+      # when absent or unusable.
       delay = Markers.suspense_delay(node)
+      Flight::SuspenseElement.new(fallback: fallback, children: suspense_children(node), delay: delay)
+    end
 
-      if delay
-        Flight::SuspenseElement.new(fallback: fallback, children: children, delay: delay)
-      else
-        Flight::SuspenseElement.new(fallback: fallback, children: children)
-      end
+    # The content of a Suspense wrapper: its converted children, or — when its
+    # block is rendered later — a reference to that block.
+    def suspense_children(node)
+      block = Markers.suspense_block(node)
+      return Flight::DeferredContent.new(block) if block
+
+      child_nodes = convert_children(node)
+      child_nodes.length == 1 ? child_nodes.first : child_nodes
     end
 
     def convert_children(node)

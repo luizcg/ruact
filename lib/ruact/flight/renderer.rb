@@ -17,6 +17,10 @@ module Ruact
     #   renderer.shell                                   # => ["1:I[...]\n", "0:[...]\n"]
     #   renderer.next_boundary(streaming: true) while renderer.pending?
     #
+    # A boundary whose content is not rendered yet ({DeferredContent}) is taken
+    # with {#take_boundary}, rendered by the caller, and handed back to
+    # {#boundary_rows} — or to {#error_rows} when rendering it failed.
+    #
     # {.each} and {.render} walk all of it:
     #
     #   Renderer.render(root_element, bundler_config)
@@ -69,26 +73,60 @@ module Ruact
         @request.deferred?
       end
 
+      # How many deferred boundaries are still to be rendered.
+      def pending_count
+        @request.deferred_left
+      end
+
       # The rows of the next deferred boundary: the import and text rows its
       # content brings, then its model row. When +streaming+, a boundary with a
       # `delay` waits it first — or, when the delay exceeds `suspense_timeout`,
-      # gets an error row instead.
+      # gets an error row instead. For content that is already an element tree;
+      # a {DeferredContent} needs {#take_boundary}.
       def next_boundary(streaming:)
+        boundary = take_boundary
+        if boundary[:element].is_a?(DeferredContent)
+          raise Ruact::Error, "ruact: Renderer#next_boundary cannot render a block; use #take_boundary"
+        end
+
+        if streaming && boundary[:delay]&.positive?
+          timeout = Ruact.config.suspense_timeout
+          if timeout&.positive? && boundary[:delay] > timeout
+            error = RowEmitter.error_payload("Suspense timeout exceeded", digest: "ruact:suspense-timeout")
+            return error_rows(boundary[:id], error)
+          end
+          sleep(boundary[:delay])
+        end
+
+        boundary_rows(boundary[:id], boundary[:element])
+      end
+
+      # Takes the next deferred boundary: `{ id:, element:, delay: }`, its
+      # content (`element`) still to be rendered. Hand it back, rendered, to
+      # {#boundary_rows}, or to {#error_rows}.
+      def take_boundary
         raise Ruact::Error, "ruact: Renderer#next_boundary before #shell" unless @shell_taken
         raise Ruact::Error, "ruact: Renderer#next_boundary with no boundary pending" unless pending?
 
-        deferred = @request.next_deferred
-        if streaming && deferred[:delay]&.positive?
-          timeout = Ruact.config.suspense_timeout
-          if timeout&.positive? && deferred[:delay] > timeout
-            error = RowEmitter.error_payload("Suspense timeout exceeded", digest: "ruact:suspense-timeout")
-            return [RowEmitter.error(deferred[:id], JSON.generate(error))]
-          end
-          sleep(deferred[:delay])
-        end
+        boundary = @request.next_deferred
+        boundary.merge(mark: @request.deferred_count)
+      end
 
-        value = @serializer.serialize_model(deferred[:element])
-        @request.take_rows << RowEmitter.model(deferred[:id], JSON.generate(value))
+      # The rows of a boundary taken with {#take_boundary}, whose content
+      # rendered to +element+.
+      def boundary_rows(id, element)
+        value = @serializer.serialize_model(element)
+        @request.take_rows << RowEmitter.model(id, JSON.generate(value))
+      end
+
+      # The row of a boundary taken with {#take_boundary} whose content failed
+      # to render: an error row with +payload+ ({RowEmitter.error_payload}).
+      # The boundaries its content deferred before it failed are dropped (no row
+      # references them); the rows it wrote before it failed still go out
+      # first, as they may be what a later row needs.
+      def error_rows(id, payload, boundary: nil)
+        @request.drop_deferred_since(boundary[:mark]) if boundary
+        @request.take_rows << RowEmitter.error(id, JSON.generate(payload))
       end
 
       # Yields every row: the shell, then each deferred boundary.

@@ -81,6 +81,23 @@ module Ruact
         deferred
       end
 
+      # How many deferred contents were met so far: a mark for
+      # {#drop_deferred_since}.
+      def deferred_count
+        @deferred.length
+      end
+
+      # Forgets the contents deferred since +mark+ — the Suspense boundaries
+      # inside a boundary whose row is an error, which no row references.
+      def drop_deferred_since(mark)
+        @deferred.slice!(mark..)
+      end
+
+      # How many deferred contents are still to be rendered.
+      def deferred_left
+        @deferred.length - @next_deferred
+      end
+
       # The `"$<hex>"` reference to this response's `"$Sreact.suspense"` symbol
       # row, emitted once, before the first row that uses it.
       def suspense_symbol_ref

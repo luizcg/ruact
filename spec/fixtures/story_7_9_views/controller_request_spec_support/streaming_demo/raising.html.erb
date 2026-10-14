@@ -1,0 +1,4 @@
+<main>
+  <Suspense fallback="first"><% raise ArgumentError, "boom in a block" %></Suspense>
+  <Suspense fallback="second"><p>after the failure</p></Suspense>
+</main>

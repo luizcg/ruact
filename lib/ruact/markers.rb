@@ -13,7 +13,9 @@ module Ruact
   #   children's HTML — `<ruact-component data-ruact-token="__RUACT_0__">…`;
   # - a Suspense boundary: an element wrapped around its content, carrying the
   #   fallback text and the optional delay —
-  #   `<ruact-suspense data-ruact-fallback="Loading…">…</ruact-suspense>`.
+  #   `<ruact-suspense data-ruact-fallback="Loading…">…</ruact-suspense>`. A
+  #   boundary whose content is rendered later is empty and carries the index
+  #   of its block in the {RenderContext} instead (`data-ruact-block="0"`).
   #
   # {ErbPreprocessor} writes the ERB that produces them, the view helpers
   # ({ViewHelper}, and {RenderPipeline} for a plain-ERB render) write the
@@ -31,6 +33,7 @@ module Ruact
     TOKEN_ATTR    = "data-ruact-token"
     FALLBACK_ATTR = "data-ruact-fallback"
     DELAY_ATTR    = "data-ruact-delay"
+    BLOCK_ATTR    = "data-ruact-block"
 
     # The marker for a client component, by its render-context token.
     def self.component(token)
@@ -46,9 +49,12 @@ module Ruact
     # attribute values as written in the template. Only `"` is escaped: the
     # rest of the text stays as the template wrote it (entities included, which
     # the HTML parser then decodes). The preprocessor refuses ERB in either.
-    def self.suspense_open(fallback, delay)
+    # +block+ is the index of the boundary's content in the render context,
+    # when that content is rendered later.
+    def self.suspense_open(fallback, delay, block: nil)
       delay_attr = delay ? %( #{DELAY_ATTR}="#{delay.gsub('"', '&quot;')}") : ""
-      %(<#{SUSPENSE_TAG} #{FALLBACK_ATTR}="#{fallback.gsub('"', '&quot;')}"#{delay_attr}>)
+      block_attr = block ? %( #{BLOCK_ATTR}="#{block}") : ""
+      %(<#{SUSPENSE_TAG} #{FALLBACK_ATTR}="#{fallback.gsub('"', '&quot;')}"#{delay_attr}#{block_attr}>)
     end
 
     # The token a component marker (an HTML comment node) carries.
@@ -64,6 +70,13 @@ module Ruact
     # The fallback text of a Suspense wrapper ("" when there is none).
     def self.suspense_fallback(node)
       node[FALLBACK_ATTR] || ""
+    end
+
+    # The index of the block a Suspense wrapper's content is rendered from
+    # later, or nil when the content is in the wrapper.
+    def self.suspense_block(node)
+      value = node[BLOCK_ATTR]
+      value && Integer(value, 10)
     end
 
     # The delay of a Suspense wrapper, in seconds, or nil when it is absent,

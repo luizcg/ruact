@@ -117,6 +117,13 @@ module ControllerRequestSpecSupport
       app_class.routes.append do
         get "/suspense-demo/show", to: "controller_request_spec_support/suspense_demo#show"
         get "/suspense-live-demo/show", to: "controller_request_spec_support/suspense_live_demo#show"
+        # Story 19-1 — `ruact_streaming`.
+        %w[show edit plain raising slow delayed late_write leased].each do |action|
+          get "/streaming-demo/#{action}", to: "controller_request_spec_support/streaming_demo##{action}"
+        end
+        # An endpoint whose route names no action.
+        get "/streaming-direct", to: ControllerRequestSpecSupport::StreamingDemoController.action(:show)
+        get "/streaming-direct-edit", to: ControllerRequestSpecSupport::StreamingDemoController.action(:edit)
       end
       app_class.instance.initialize!
       @booted = true
@@ -258,6 +265,46 @@ module ControllerRequestSpecSupport
     append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
 
     def show = ruact_render(template: "controller_request_spec_support/suspense_demo/show")
+  end
+
+  # Story 19-1 — what a template saw, and when: `record(:one, response.committed?)`
+  # in a block says whether the shell had been sent when the block ran.
+  def self.events
+    @events ||= []
+  end
+
+  def self.record(name, committed)
+    events << [name, committed]
+    nil
+  end
+
+  # Story 19-1 — `ruact_streaming`: the declared actions send their page as it
+  # renders; `edit` (the same template) does not.
+  class StreamingDemoController < ActionController::Base
+    include Ruact::Controller
+
+    ruact_streaming only: %i[show plain raising slow delayed late_write leased]
+
+    append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
+
+    def show = ruact_render
+
+    def edit
+      ControllerRequestSpecSupport.record(:thread, Thread.current)
+      ruact_render(template: "controller_request_spec_support/streaming_demo/show")
+    end
+
+    def plain = ruact_render
+    def raising = ruact_render
+    def slow = ruact_render
+    def delayed = ruact_render
+    def late_write = ruact_render
+
+    # A connection taken outside a block, as `Model.connection` takes one.
+    def leased
+      ::ActiveRecord::Base.lease_connection.select_value("SELECT 1")
+      ruact_render(template: "controller_request_spec_support/streaming_demo/plain")
+    end
   end
 
   # Story 10.0 — an implicit-`default_render` page controller: an EMPTY GET
@@ -603,6 +650,19 @@ module Ruact # rubocop:disable Style/OneClassPerFile
     let(:app_class) { ControllerRequestSpecSupport.app_class }
     let(:app)       { app_class.instance }
 
+    # Reads the whole body, then closes it, as a client does. Rack::Test
+    # closes a streamed body before reading it to the end, and under Live
+    # closing is "the client left": what the action writes later is dropped
+    # (Story 19-1 — a page that streams renders its blocks after the shell).
+    def read_streamed(path, headers = {})
+      status, response_headers, body = app.call(Rack::MockRequest.env_for(path, headers))
+      read = +""
+      body.each { |chunk| read << chunk }
+      Rack::MockResponse.new(status, response_headers, [read])
+    ensure
+      body.close if body.respond_to?(:close)
+    end
+
     # Boot lives inside a per-example `before` hook (not `before(:all)`) so
     # RSpec's per-test lifecycle for rspec-mocks is active when Rails
     # initializers fire. Boot is memoized so the cost is paid once across all
@@ -862,16 +922,272 @@ module Ruact # rubocop:disable Style/OneClassPerFile
       end
 
       it "writes the same page row by row through ActionController::Live", :aggregate_failures do
-        get "/suspense-live-demo/show", {}, { "HTTP_ACCEPT" => "text/x-component" }
-        expect(last_response.status).to eq(200), last_response.body[0, 400]
-        expect(last_response.headers["X-Accel-Buffering"]).to eq("no")
-        expect_suspense_page(last_response.body)
+        response = read_streamed("/suspense-live-demo/show", "HTTP_ACCEPT" => "text/x-component")
+        expect(response.status).to eq(200), response.body[0, 400]
+        expect(response.headers["X-Accel-Buffering"]).to eq("no")
+        expect_suspense_page(response.body)
       end
 
       it "renders the page on a plain browser load" do
         get "/suspense-demo/show"
         expect(last_response.status).to eq(200)
         expect(last_response.body).to include("__FLIGHT_DATA")
+      end
+    end
+
+    # Story 19-1 — in an action that streams, each `<Suspense>`'s content runs
+    # after the shell is sent. Rails' own test support would run Live inline;
+    # this app is driven through Rack, so the action runs in Live's thread and
+    # "after the shell is sent" is observable: the block sees a committed
+    # response. That the browser SHOWS the fallback first is proved against a
+    # server started on its own (spec/browser/deferred_suspense).
+    describe "ruact_streaming (Story 19-1)" do
+      let(:events) { ControllerRequestSpecSupport.events }
+      let(:controller_class) { ControllerRequestSpecSupport::StreamingDemoController }
+
+      before do
+        events.clear
+        I18n.backend.store_translations(
+          :en, controller_request_spec_support: { streaming_demo: { show: { lazy: "Lazy text" } } }
+        )
+      end
+
+      def flight(path, headers = {})
+        read_streamed(path, { "HTTP_ACCEPT" => "text/x-component" }.merge(headers))
+      end
+
+      def document(path)
+        read_streamed(path, { "HTTP_ACCEPT" => "text/html" })
+      end
+
+      def with_log
+        io = StringIO.new
+        previous = controller_class.logger
+        controller_class.logger = Logger.new(io)
+        yield
+        io.string
+      ensure
+        controller_class.logger = previous
+      end
+
+      # A `<Suspense>` inside a block is met when that block runs, and queued
+      # behind the ones the page already had.
+      it "runs each block after the shell is sent, one at a time, in page order", :aggregate_failures do
+        response = flight("/streaming-demo/show")
+        expect(response.status).to eq(200)
+        expect(events).to eq([[:shell, false], [:one, true], [:two, true], [:inner, true]])
+        expect(response.headers["X-Accel-Buffering"]).to eq("no")
+        body = response.body
+        expect(body).to include('"fallback":["$","p",null,{"children":"Loading one"}')
+        expect(body.index("Loading two")).to be < body.index("Lazy text")
+        expect(body).to include("Lazy text")
+        expect(body).to include("two \\u003cb\\u003eescaped\\u003c/b\\u003e").or include("two <b>escaped</b>")
+        expect(Ruact::Testing::ComponentQuery.new(body).props_for("DemoButton")).to eq([{ "n" => 1 }])
+      end
+
+      it "renders a block with the template path it was written in (t('.key'))" do
+        expect(flight("/streaming-demo/show").body).to include("Lazy text")
+      end
+
+      it "streams the first load: the document is sent, then each boundary's rows are pushed", :aggregate_failures do
+        response = document("/streaming-demo/show")
+        expect(response.status).to eq(200)
+        expect(events).to eq([[:shell, false], [:one, true], [:two, true], [:inner, true]])
+        expect(response.headers["Content-Type"]).to eq("text/html; charset=utf-8")
+        body = response.body
+        pushes = body.scan("<script>(self.__FLIGHT_DATA=self.__FLIGHT_DATA||[]).push(")
+        expect(pushes.length).to eq(3)
+        expect(body.index("Lazy text")).to be < body.rindex("</body>")
+        expect(body.index("Lazy text")).to be > body.index("__FLIGHT_DATA")
+        expect(body).not_to match(%r{</script(?!>)}i)
+      end
+
+      it "leaves an action it does not declare as it was: in place, buffered, with an ETag, on the request's thread",
+         :aggregate_failures do
+        response = flight("/streaming-demo/edit")
+        expect(response.status).to eq(200)
+        expect(events).to eq([[:thread, Thread.current],
+                              [:shell, false], [:one, false], [:inner, false], [:two, false]])
+        etag = response.headers["ETag"]
+        expect(etag).not_to be_nil
+        expect(flight("/streaming-demo/edit", "HTTP_IF_NONE_MATCH" => etag).status).to eq(304)
+      end
+
+      it "leaves an action it does not declare as it was when its endpoint is Controller.action(:name)",
+         :aggregate_failures do
+        response = flight("/streaming-direct-edit")
+        expect(response.status).to eq(200)
+        expect(response.headers["ETag"]).not_to be_nil
+        expect(events.first).to eq([:thread, Thread.current])
+      end
+
+      it "streams an endpoint built with Controller.action(:name), whose route names no action",
+         :aggregate_failures do
+        response = flight("/streaming-direct")
+        expect(response.status).to eq(200)
+        expect(response.headers["X-Accel-Buffering"]).to eq("no")
+        expect(events).to eq([[:shell, false], [:one, true], [:two, true], [:inner, true]])
+      end
+
+      it "answers a page that left nothing for later as one that does not stream", :aggregate_failures do
+        expect(flight("/streaming-demo/plain").body).to include("nothing deferred")
+        expect(document("/streaming-demo/plain").body)
+          .not_to include("(self.__FLIGHT_DATA=self.__FLIGHT_DATA||[]).push(")
+      end
+
+      it "turns a block that raises into an error row, reports it, and renders the next", :aggregate_failures do
+        allow(Rails.error).to receive(:report).and_call_original
+        allow(Rails.env).to receive(:development?).and_return(false)
+        response = nil
+        log = with_log { response = flight("/streaming-demo/raising") }
+        body = response.body
+        expect(response.status).to eq(200)
+        expect(body).to match(/^\h+:E\{"digest":"ruact:suspense-error"/)
+        expect(body).to include("An error occurred in a <Suspense>")
+        expect(body).not_to include("boom in a block")
+        expect(body).to include("after the failure")
+        expect(Rails.error).to have_received(:report)
+          .with(an_instance_of(ArgumentError), hash_including(handled: true, source: "ruact.suspense"))
+        expect(log).to include("<Suspense> content at ").and include("raising.html.erb").and include("boom in a block")
+      end
+
+      context "with a short suspense_timeout" do
+        before do
+          Ruact.configure do |c|
+            c.manifest_path    = ControllerRequestSpecSupport.manifest_path
+            c.suspense_timeout = 0.3
+          end
+        end
+
+        it "ends a block that runs past it, even one that rescues StandardError", :aggregate_failures do
+          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          body = flight("/streaming-demo/slow").body
+          elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+          expect(body).to match(/^\h+:E\{"digest":"ruact:suspense-timeout"/)
+          expect(body).not_to include("never")
+          expect(body).to include("after the timeout")
+          expect(elapsed).to be < 2
+        end
+
+        it "ends a delay longer than it at once, with the timeout row", :aggregate_failures do
+          started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          body = flight("/streaming-demo/delayed").body
+          expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 0.25
+          expect(body).to match(/^\h+:E\{"digest":"ruact:suspense-timeout"/)
+        end
+      end
+
+      it "does not wait without a delay" do
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        flight("/streaming-demo/show")
+        expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 1
+      end
+
+      context "when the app runs in development" do
+        before { allow(Rails.env).to receive(:development?).and_return(true) }
+
+        it "makes a block that writes a cookie an error of that block, saying where it goes", :aggregate_failures do
+          body = flight("/streaming-demo/late_write").body
+          expect(body).to match(/^\h+:E\{"digest":"ruact:suspense-error"/)
+          expect(body).to include("the cookie theme")
+          expect(body).to include("set in the controller, before the page renders")
+          expect(body).not_to include("wrote</p>")
+        end
+
+        it "names the line to add when an action that does not stream renders a <Suspense>, once",
+           :aggregate_failures do
+          log = with_log { flight("/streaming-demo/edit") }
+          expect(log.scan("does not stream").length).to eq(1)
+          expect(log).to include("ControllerRequestSpecSupport::StreamingDemoController#edit renders a <Suspense>")
+          expect(log).to include("streaming_demo/show.html.erb:4")
+          expect(log).to include("ruact_streaming only: :edit")
+        end
+      end
+
+      it "says nothing about an action that does not stream outside development" do
+        allow(Rails.env).to receive(:development?).and_return(false)
+        expect(with_log { flight("/streaming-demo/edit") }).not_to include("does not stream")
+      end
+
+      it "closes the stream when something fails once the response has started, without Rails' 500 script",
+         :aggregate_failures do
+        allow(Rails.error).to receive(:report).and_call_original
+        allow_any_instance_of(controller_class).to receive(:__ruact_flight_push).and_raise(RuntimeError, "the tail") # rubocop:disable RSpec/AnyInstance
+        response = nil
+        log = with_log { response = document("/streaming-demo/show") }
+        expect(response.status).to eq(200)
+        expect(response.body).not_to include("500.html")
+        expect(log).to include("raised while streaming").and include("the tail")
+        expect(Rails.error).to have_received(:report)
+          .with(an_instance_of(RuntimeError), hash_including(source: "ruact.stream"))
+      end
+
+      describe "the declaration" do
+        def controller(&)
+          Class.new(ActionController::Base) do
+            include Ruact::Controller
+
+            def self.name = "ControllerRequestSpecSupport::DeclarationDemoController"
+            def show; end
+            def feed; end
+            class_eval(&)
+          end
+        end
+
+        it "takes only: or except:, not both" do
+          expect { controller { ruact_streaming only: :show, except: :feed } }
+            .to raise_error(ArgumentError, /only: or except:, not both/)
+        end
+
+        it "fails loudly on a name that is not an action" do
+          klass = controller { ruact_streaming only: %i[show shwo] }
+          expect { klass.ruact_streaming?(:show) }
+            .to raise_error(Ruact::ConfigurationError, /shwo, which is not an action/)
+        end
+
+        it "streams exactly the actions in only:, and is inherited", :aggregate_failures do
+          klass = controller { ruact_streaming only: :show }
+          expect(klass.ruact_streaming?(:show)).to be(true)
+          expect(klass.ruact_streaming?(:feed)).to be(false)
+          expect(Class.new(klass).ruact_streaming?(:show)).to be(true)
+        end
+
+        it "leaves out the actions in except: and the actions that are not pages", :aggregate_failures do
+          klass = controller { ruact_streaming except: :feed }
+          allow(klass).to receive(:ruact_page?).and_call_original
+          allow(klass).to receive(:ruact_page?).with("show").and_return(true)
+          expect(klass.ruact_streaming?(:show)).to be(true)
+          expect(klass.ruact_streaming?(:feed)).to be(false)
+          allow(klass).to receive(:ruact_page?).with("index").and_return(false)
+          expect(klass.ruact_streaming?(:index)).to be(false)
+        end
+
+        it "streams every page of a controller that includes ActionController::Live and declares nothing" do
+          klass = Class.new(ActionController::Base) do
+            include ActionController::Live
+            include Ruact::Controller
+          end
+          expect(klass.ruact_streaming?(:anything)).to be(true)
+        end
+
+        it "streams nothing for a controller with neither" do
+          expect(Class.new(ActionController::Base) { include Ruact::Controller }.ruact_streaming?(:show)).to be(false)
+        end
+      end
+
+      describe "connections the action's thread took" do
+        before do
+          require "active_record"
+          ::ActiveRecord::Base.establish_connection(adapter: "sqlite3", database: ":memory:")
+        end
+
+        it "are back in the pool when a streamed action ends" do
+          pool = ::ActiveRecord::Base.connection_pool
+          3.times { expect(flight("/streaming-demo/leased").status).to eq(200) }
+          deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 3
+          sleep 0.02 while pool.stat[:busy].positive? && Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
+          expect(pool.stat[:busy]).to eq(0)
+        end
       end
     end
 

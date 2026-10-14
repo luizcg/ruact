@@ -59,6 +59,13 @@ module Ruact
       # committed: that is a configuration error, raised in development/test and
       # logged-and-degraded in production rather than served to real traffic.
       def render_ruact_document(payload)
+        render html: ruact_document_html(payload).html_safe, layout: false
+      end
+
+      # The document {#render_ruact_document} sends, as a String — what a page
+      # that streams sends up to its last `</body>` ({Delivery}). Every check
+      # above runs here, before a byte of the response is written.
+      def ruact_document_html(payload)
         __ruact_warn_turbo_form_submission if __ruact_local_env?
         # Set for EVERY branch, the shell included: besides carrying the payload
         # to a layout's zero-argument `ruact_js_assets`, it is how
@@ -67,11 +74,11 @@ module Ruact
         # through the same layout never inherits it.
         @ruact_flight_payload = payload
         layout = Ruact.config.layout
-        return render html: ruact_html_shell(payload).html_safe, layout: false if layout == false
+        return ruact_html_shell(payload) if layout == false
 
         unless ruact_layout_resolvable?(layout)
           __ruact_handle_unready_layout(layout, :missing)
-          return render html: ruact_html_shell(payload).html_safe, layout: false
+          return ruact_html_shell(payload)
         end
 
         # `@ruact_flight_payload` is copied to the view by Rails' `view_assigns`
@@ -79,13 +86,10 @@ module Ruact
         # that is how the layout's zero-argument `ruact_js_assets` reaches THIS
         # render's Flight payload.
         document = render_to_string(html: "".html_safe, layout: layout)
+        return document if ruact_document_mountable?(document)
 
-        if ruact_document_mountable?(document)
-          render html: document.html_safe, layout: false
-        else
-          __ruact_handle_unready_layout(layout, :unwired)
-          render html: ruact_html_shell(payload).html_safe, layout: false
-        end
+        __ruact_handle_unready_layout(layout, :unwired)
+        ruact_html_shell(payload)
       ensure
         remove_instance_variable(:@ruact_flight_payload) if instance_variable_defined?(:@ruact_flight_payload)
       end

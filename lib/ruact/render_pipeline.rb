@@ -74,6 +74,20 @@ module Ruact
       mode == :string ? enum.to_a.join : enum
     end
 
+    # What the render reads — for a {DeferredRender} built on it.
+    attr_reader :manifest, :controller_path, :logger, :development
+
+    # The warning for a value serialized through `as_json`, logged; nil without
+    # a logger.
+    def as_json_warning_callback
+      return nil if @logger.nil?
+
+      lambda do |class_name, attrs|
+        @logger.warn("[ruact] WARNING: #{class_name} serialized via as_json — ALL attributes exposed to client: " \
+                     "#{attrs}. Use `include Ruact::Serializable` with `ruact_props` for explicit control")
+      end
+    end
+
     private
 
     ALLOWED_INPUT_KEYS = %i[erb binding html render_context].freeze
@@ -229,18 +243,6 @@ module Ruact
                               on_as_json_warning: warning_cb,
                               streaming: streaming,
                               development: @development) { |row| y << row }
-      end
-    end
-
-    def as_json_warning_callback
-      return nil if @logger.nil?
-
-      lambda do |class_name, attrs|
-        @logger.warn(
-          "[ruact] WARNING: #{class_name} serialized via as_json — " \
-          "ALL attributes exposed to client: #{attrs}. " \
-          "Use `include Ruact::Serializable` with `ruact_props` for explicit control"
-        )
       end
     end
 
