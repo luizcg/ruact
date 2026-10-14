@@ -407,7 +407,7 @@ module Ruact
     # Classify the negotiated response shape from the request signals
     # (`__ruact_function_call?`, Accept, verb) and the ruact-owned outcome flags
     # (`@__ruact_function_redirect` set by the Bucket-2 {#redirect_to};
-    # `@__ruact_negotiated_page` set by {Ruact::Controller#emit_ruact_response} /
+    # `@__ruact_negotiated_page` set by {Ruact::Controller::Delivery#emit_ruact_response} /
     # its Flight `redirect_to`). Returns nil when ruact did not negotiate the
     # response, so the log stays silent on plain Rails actions.
     #
@@ -441,7 +441,7 @@ module Ruact
     end
 
     # The page-render (Bucket-1 / HTML-shell) shape, keyed on the flag
-    # {Ruact::Controller#emit_ruact_response} set when ruact rendered the page.
+    # {Ruact::Controller::Delivery#emit_ruact_response} set when ruact rendered the page.
     # nil for a plain Rails render (the flag was never set) → the log stays
     # silent on a non-negotiated response.
     def __ruact_page_shape_and_signal

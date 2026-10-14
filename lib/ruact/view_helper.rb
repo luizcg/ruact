@@ -226,31 +226,15 @@ module Ruact
 
     # The `__FLIGHT_DATA` inline bootstrap `<script>` — pushes the per-render
     # Flight payload onto the global queue the bootstrap entry drains on boot.
-    #
-    # The payload carries application data (props, record content), so it is
-    # embedded as a JSON string literal with `<`, `>`, `&`, U+2028 and U+2029
-    # escaped as `\uXXXX`. No byte of the payload can then close the `<script>`
-    # — `</SCRIPT>`, `</script >` and `<!--` included — and every character
-    # reaches JavaScript intact (a Ruby `String#inspect` literal did neither:
-    # it escaped only a lowercase `</script>`, and its `\e`-style escapes mean
-    # something else in JS).
-    SCRIPT_UNSAFE = /[<>&\u2028\u2029]/
-    private_constant :SCRIPT_UNSAFE
-
-    # A JSON string literal that is also safe inside a `<script>` element.
-    # The payload is UTF-8 by construction (the serializer normalizes every
-    # string); a binary-tagged buffer is retagged, not transcoded.
-    def __ruact_script_safe_json(string)
-      utf8 = string.encoding == Encoding::UTF_8 ? string : string.dup.force_encoding(Encoding::UTF_8)
-      JSON.generate(utf8).gsub(SCRIPT_UNSAFE) { |char| format("\\u%04x", char.ord) }
-    end
-
+    # The payload is written as {InlineScript.string_literal} writes it (a
+    # Ruby `String#inspect` literal, used before, escaped only a lowercase
+    # `</script>`, and its `\e`-style escapes mean something else in JS).
     def ruact_flight_data_script(flight_payload)
       <<~HTML.strip
         <script>
           (function() {
             var d = (self.__FLIGHT_DATA = self.__FLIGHT_DATA || []);
-            d.push(#{__ruact_script_safe_json(flight_payload)});
+            d.push(#{InlineScript.string_literal(flight_payload)});
           })();
         </script>
       HTML

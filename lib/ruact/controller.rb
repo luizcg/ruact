@@ -7,6 +7,7 @@ require_relative "redirect_path"
 require_relative "view_helper"
 require_relative "validation_errors_collector"
 require_relative "controller/document_rendering"
+require_relative "controller/delivery"
 require_relative "controller/pages"
 require_relative "controller/page_rendering"
 require_relative "controller/format_negotiation"
@@ -36,9 +37,10 @@ module Ruact
     # and so the shared `vite_dev_running?` / `vite_manifest_entry` helpers are
     # reachable here without duplication.
     include Ruact::ViewHelper
-    # Who owns the `<head>` — the host app's layout, with ruact's built-in shell
-    # as the un-migrated fallback. See Ruact::Controller::DocumentRendering.
-    include Ruact::Controller::DocumentRendering
+    # How a rendered page is written — a Flight body, all at once or row by
+    # row, or an HTML document whose `<head>` the app's layout owns. See
+    # Ruact::Controller::Delivery and Ruact::Controller::DocumentRendering.
+    include Ruact::Controller::Delivery
     # Which actions are ruact pages — the whole controller, or the ones it
     # declares with `ruact_pages` (Story 17.0g). See Ruact::Controller::Pages.
     include Ruact::Controller::Pages
@@ -217,38 +219,6 @@ module Ruact
       end
     end
 
-    # Build the wire output and write it to the response. Streaming responses
-    # only fire after `pipeline.render` returns without raising — that way a
-    # missing-component error can still surface as a normal 500 response
-    # (matching the legacy `#from_html` ordering) before any streaming
-    # response headers are mutated.
-    def emit_ruact_response(pipeline, html, render_context, streaming:)
-      # Story 15.5 (FR109) — record which page shape ruact rendered so the
-      # `Ruact::Server` dev log (`__ruact_log_response_shape!`) can name it and,
-      # crucially, stay SILENT on a plain Rails render (this flag is never set
-      # there). `@__`-prefixed → never leaks into `view_assigns`.
-      @__ruact_negotiated_page = ruact_request? ? :flight : :html_shell
-
-      if ruact_request? && streaming
-        enumerator = pipeline.render({ html: html, render_context: render_context }, mode: :stream)
-        response.headers["Content-Type"]      = "#{RequestKind::FLIGHT_MIME}; charset=utf-8"
-        response.headers["Cache-Control"]     = "no-cache"
-        response.headers["X-Accel-Buffering"] = "no"
-        begin
-          enumerator.each { |row| response.stream.write(row) }
-        ensure
-          response.stream.close
-        end
-      else
-        payload = pipeline.render({ html: html, render_context: render_context }, mode: :string)
-        if ruact_request?
-          render plain: payload, content_type: RequestKind::FLIGHT_MIME
-        else
-          render_ruact_document(payload)
-        end
-      end
-    end
-
     # Overrides Rails redirect_to for RSC requests: emits a Flight redirect row
     # (`0:` followed by a JSON object with `redirectUrl` and `redirectType: "push"`)
     # instead of a 302 response.
@@ -291,8 +261,7 @@ module Ruact
       # Story 15.5 (FR109) — mark the Flight-redirect sub-shape for the dev log.
       @__ruact_negotiated_page = :flight_redirect
 
-      render plain: "0:#{JSON.generate({ 'redirectUrl' => redirect_url, 'redirectType' => 'push' })}\n",
-             content_type: RequestKind::FLIGHT_MIME
+      __ruact_render_flight_redirect(redirect_url)
     end
 
     def ruact_request?
