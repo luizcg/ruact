@@ -65,7 +65,8 @@ module Ruact
         end
         # The button exists only inside the outer boundary; a second boundary sits inside it.
         let(:tree) do
-          content = [ReactElement.new(type: button, props: { "label" => "in" }), inner_suspense]
+          content = [ReactElement.new(type: button, props: { "label" => "in" }),
+                     ReactElement.new(type: "pre", props: { "children" => "x" * 1100 }), inner_suspense]
           ReactElement.new(type: "main", props: {
                              "children" => SuspenseElement.new(fallback: ReactElement.new(type: "span"),
                                                                children: content, delay: 0.0)
@@ -86,8 +87,11 @@ module Ruact
           renderer.shell
 
           outer = renderer.next_boundary(streaming: false)
-          expect(outer.first).to include(":I[").and include("Button-abc")
-          expect(outer.last).to include('"label":"in"')
+          # The import, the text row of the long string, then the boundary's own row.
+          expect(outer.length).to eq(3)
+          expect(outer[0]).to include(":I[").and include("Button-abc")
+          expect(outer[1]).to match(/\A\h+:T/)
+          expect(outer[2]).to include('"label":"in"')
           expect(renderer.pending?).to be(true)
 
           inner = renderer.next_boundary(streaming: false)
