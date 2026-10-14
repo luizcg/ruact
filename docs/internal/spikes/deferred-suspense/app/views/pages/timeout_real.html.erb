@@ -1,7 +1,8 @@
 <h1 id="shell">Timeout, a query that runs in the database</h1>
 <Suspense fallback="Loading A…">
   <% rows = Integer(params.fetch(:rows, 20_000_000)) %>
-  <p id="a"><%= Item.connection.select_value("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < #{rows}) SELECT count(*) FROM c") %></p>
+  <% sql = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < #{rows}) SELECT count(*) FROM c" %>
+  <p id="a"><%= Item.with_connection { |connection| connection.select_value(sql) } %></p>
 </Suspense>
 <Suspense fallback="Loading B…">
   <p id="b">b is quick</p>

@@ -467,6 +467,36 @@ section "after_action" do
   say
 end
 
+section "leased_connection" do
+  say "## A connection leased with `Model.connection` (`/leased`, a page with no Suspense)"
+  say
+  say "Rails returns such a connection when the request ends. Read after the responses were complete."
+  say
+  configurations = {
+    "0.0.19 with Live (today)" => { "SPIKE_MODE" => "baseline" },
+    "prototype, Live on every action" => { "SPIKE_MODE" => "live" },
+    "prototype, no Live (lazy body)" => { "SPIKE_MODE" => "body" }
+  }
+  configurations.each do |label, env|
+    with_server(env) do |base|
+      reset(base)
+      http(base, "/leased", headers: { "Accept" => "text/x-component" })
+      one = state(base)["pool"]["busy"]
+
+      # Two at once (Puma's third thread answers the probe): each waits at the
+      # gate, so that both are in their action together.
+      clients = Array.new(2) { Curl.new(base, "/leased?hold=1", flight: true) }
+      wait_for("two actions") { state(base)["waiting"] == { "a" => 2 } }
+      open_gate(base, "a")
+      clients.each(&:finish)
+      two = state(base)["pool"]["busy"]
+      say "- **#{label}**: connections still busy after one request = **#{one}**; after two more at once = **#{two}** " \
+          "(pool of #{state(base)['pool']['size']})"
+    end
+  end
+  say
+end
+
 section "unchanged" do
   say "## A page with no Suspense (`/same`): what the prototype sends against what 0.0.19 sends"
   say

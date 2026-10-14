@@ -160,6 +160,12 @@ boundary and a copy of the request's state per thread, and the parallelism it
 buys is already there for queries through Rails' own pool. Fibers need a
 scheduler Rails and Puma do not run.
 
+**A response that is open holds a server thread**, as any slow action does.
+With Puma's 3 threads, three responses waiting at their gates left none to
+answer another request (seen while writing the measurements; no script keeps
+it). Streaming changes when the browser gets the page, not how many slow
+requests a server can hold.
+
 **The known limit.** A block that is ready waits behind an earlier one that is
 not. The total time is the same; what is lost is seeing the faster part first.
 Writing rows as their work finishes is possible later for blocks backed by
@@ -241,8 +247,17 @@ i18n 1.15):
 
 ### D4 — Releasing what a block holds
 
-On Rails 7.2 and later a connection is leased per query, so a block holds one
-only while a query is running. Two facts shape the design (*measured*):
+On Rails 7.2 and later a query on a model takes a connection for the query,
+so a block holds one only while a query is running. Three facts shape the
+design (*measured*):
+
+- **A connection leased for the request is not returned under Live.**
+  `Model.connection` leases one to the thread until the request ends. Rails
+  returns it from the request's thread, and under Live the action ran on
+  another: after one request to a page that calls it, one connection stayed
+  busy; after two more at once, two. With the lazy body none did. This is
+  Rails' behaviour and the same in 0.0.19, on a page with no `<Suspense>`
+  either; the connection stays with Live's pool thread.
 
 - **The server does not learn that the client left while a block is waiting.**
   The block keeps its connection until it ends or times out. With the client
@@ -260,6 +275,8 @@ the socket from another thread and interrupt the block.
 
 **Choice: (b).** Before each block, ask whether the client is still there,
 where the server offers a way; never start a block for a client that is gone.
+When the action ends, the gem returns what the action's thread leased, as
+Rails does for the request's thread.
 A block already running ends by itself or at `suspense_timeout`, with the
 limits D2 gives for that. Nothing is cancelled from outside.
 
@@ -369,6 +386,7 @@ What Live does to an action that uses it, **on a page with no `<Suspense>`**
 | `ETag` | none (`cache-control: no-cache`) | sent; a Flight request with `If-None-Match` gets a 304 (not checked for the document) |
 | A locale set by a middleware | the pool thread's: this request's or an earlier one's (D3) | seen |
 | Thread variables set by a middleware | not visible | visible |
+| A connection leased with `Model.connection` | still busy after the request, one per pool thread (D4) | returned |
 | An `after_action` that writes a header or a cookie | arrived in 600 of 600 when the filter did nothing that lets another thread run; lost when it waited at a gate | arrives |
 | Requests per second, trivial page | a few percent fewer in `results/http.md`, where the two configurations without Live also differ from each other | — |
 
@@ -526,7 +544,8 @@ changes under D5 are in ruact's bootstrap and entry tag, not in React's client.
    response has started is an error.
 6. Before each block the gem asks whether the client is still there, where the
    server allows it, and starts no block for one that is gone; a response cut
-   short is logged as one.
+   short is logged as one. When a streamed action ends, the connections its
+   thread leased are back in the pool.
 7. D6 as decided. If (A): the `ruact_streaming` declaration, and the
    development message for a `<Suspense>` in an action that does not stream.
    Choosing Live per action has to hold for an endpoint built with
@@ -555,7 +574,8 @@ changes under D5 are in ruact's bootstrap and entry tag, not in React's client.
 - With PostgreSQL: the client leaving mid-block and the connection; the
   timeout against a running query; a statement timeout as the limit; two
   `load_async` queries that really overlap.
-- A block inside a transaction, and a controller that pins a connection.
+- A block inside a transaction, a transaction left open when the action ends,
+  and a controller that leases a connection (`Model.connection`).
 - Rails' `DatabaseSelector`, a tenant chosen by a middleware, and a locale
   chosen by one (the pool thread's locale, with i18n before and from 1.15).
 - An `after_action` on a page that streamed, and one that raises.
