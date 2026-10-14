@@ -13,7 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Every `<Suspense>` must close.** A `<Suspense>` with no `</Suspense>`, or a `</Suspense>` that closes nothing, raises `Ruact::ComponentTagError` naming the template's line, as a component tag already does. It used to render whatever the HTML parser made of it. `<Suspense fallback="…" />` is a boundary with nothing in it.
+- **Every `<Suspense>` must close, in the same template and the same ERB block.** A `<Suspense>` with no `</Suspense>`, a `</Suspense>` that closes nothing, or a pair split across an ERB block (`<% if %><Suspense><% end %>…</Suspense>`) raises `Ruact::ComponentTagError` naming the template's line, as a component tag already does. Before, such a template rendered whatever the HTML parser made of it, sometimes with the content outside the boundary. This counts `<Suspense>` written as text in an attribute, a `<script>` or an HTML comment, and a pair opened in one partial and closed in another. `<Suspense fallback="…" />` is a boundary with nothing in it.
+- **A `<Suspense>`'s content is its own Ruby scope.** A local variable assigned between the tags is not visible after `</Suspense>`. Instance variables and `content_for` still cross it. This is what lets the content be rendered later.
+- **`fallback` and `delay` take literal text.** ERB inside either now raises `Ruact::PreprocessorError` with the line. It never worked: the fallback came out empty and the page showed a stray `">`.
 - **The render path was reorganised, with no change to what a page sends.** What a template leaves for the converter, how a render hands out its rows (the shell first, then each Suspense boundary), how a response is written, and how the browser opens a page's Flight stream each live in one place now; the Flight bytes are the same, checked against the wire fixtures and in a browser. Internal classes changed shape (`Ruact::RenderContext`, `Ruact::Flight::Request`, `Ruact::Flight::Renderer`, `Ruact::RenderPipeline`); none of them is public API.
 
 ## [0.0.19] - 2026-10-08

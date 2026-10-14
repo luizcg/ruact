@@ -11,7 +11,7 @@ module Ruact
   # `</SCRIPT>`, `</script >` and `<!--` included — and every character reaches
   # JavaScript intact.
   module InlineScript
-    UNSAFE = /[<>&  ]/
+    UNSAFE = /[<>&\u2028\u2029]/
 
     # A JSON string literal for +string+ that is safe inside a `<script>`.
     # The payload is UTF-8 by construction (the serializer normalizes every

@@ -194,6 +194,38 @@ module Ruact
           .to eq(%(<p><%% x</p><%= __ruact_suspense__("x", nil) do %><p>y</p><% end %>))
       end
 
+      it "refuses a pair split across ERB blocks, which would hand the pair's `end` to the template's block" do
+        [%(<% if @c %><Suspense fallback="a"><% end %><p>in</p><% if @c %></Suspense><% end %>),
+         %(<% if @c %><Suspense fallback="a"><% end %><p>in</p></Suspense>),
+         %(<% if @c %><Suspense fallback="a"><% else %><div><% end %><p>in</p></Suspense>)].each do |source|
+          expect { transform.call(source) }
+            .to raise_error(Ruact::ComponentTagError, %r{<Suspense> at line 1 and its </Suspense> .*same ERB block})
+        end
+      end
+
+      it "takes blocks, loops and conditionals that open and close inside the pair" do
+        source = %(<Suspense fallback="a"><%= form_with do |f| %><% if @x %>y<% end %><% end %>) +
+                 %(<%- @items.each do |i| -%><%= i %><% end %><%# a comment: end %></Suspense>)
+        expect { transform.call(source) }.not_to raise_error
+      end
+
+      it "refuses ERB in a fallback or a delay, with the line" do
+        expect { transform.call(%(<p>a</p>\n<Suspense fallback="<%= t('x') %>"></Suspense>)) }
+          .to raise_error(Ruact::PreprocessorError, /<Suspense> at line 2 — `fallback` and `delay` take literal text/)
+      end
+
+      it "names the template's own line after a component tag written over several lines" do
+        source = %(<Card\n  a={1}\n  b={2}\n/>\n<p>x</p>\n<Suspense fallback="z">\n<p>y</p>)
+        expect do
+          transform.call(source)
+        end.to raise_error(Ruact::ComponentTagError, /<Suspense> at line 6 is never closed/)
+      end
+
+      it "keeps the line count of a Suspense tag written over several lines" do
+        source = %(<Suspense\n  fallback="a"\n  delay="1">\n<p>x</p>\n</Suspense\n>\n<B />)
+        expect(transform.call(source).count("\n")).to eq(source.count("\n"))
+      end
+
       it "transforms its own output to itself" do
         source = %(<Card><Suspense fallback="x"><LikeButton n={1} /></Suspense></Card><Suspense fallback="y" />)
         once = transform.call(source)

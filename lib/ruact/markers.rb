@@ -45,7 +45,7 @@ module Ruact
     # The opening of a Suspense boundary, from the `fallback` and `delay`
     # attribute values as written in the template. Only `"` is escaped: the
     # rest of the text stays as the template wrote it (entities included, which
-    # the HTML parser then decodes). ERB inside a `fallback` is not evaluated.
+    # the HTML parser then decodes). The preprocessor refuses ERB in either.
     def self.suspense_open(fallback, delay)
       delay_attr = delay ? %( #{DELAY_ATTR}="#{delay.gsub('"', '&quot;')}") : ""
       %(<#{SUSPENSE_TAG} #{FALLBACK_ATTR}="#{fallback.gsub('"', '&quot;')}"#{delay_attr}>)
