@@ -354,7 +354,7 @@ What Live does to an action that uses it, **on a page with no `<Suspense>`**
 | A locale set by a middleware | the pool thread's: this request's or an earlier one's (D3) | seen |
 | Thread variables set by a middleware | not visible | visible |
 | An `after_action` that writes a header or a cookie | arrived in 600 of 600 when the filter did nothing that lets another thread run; lost when it waited at a gate | arrives |
-| Requests per second, trivial page | a few percent fewer at most: the gap is about the size of the spread between runs | — |
+| Requests per second, trivial page | about 5% fewer in the results committed here; other runs on the same machine gave between nothing and 15% | — |
 
 By Rails' source, not measured here:
 
