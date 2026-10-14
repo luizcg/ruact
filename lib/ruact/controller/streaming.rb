@@ -64,7 +64,7 @@ module Ruact
         def ruact_streaming(only: nil, except: nil)
           raise ArgumentError, "ruact_streaming takes only: or except:, not both (#{name})" if only && except
 
-          include ActionController::Live unless include?(ActionController::Live)
+          Streaming.include_live(self)
           # Directly above Live, so the actions that do not stream skip it.
           include LiveChoice unless include?(LiveChoice)
           # Ahead of Live's `make_response!`, which this class now extends and
@@ -96,7 +96,56 @@ module Ruact
 
           ruact_page?(name)
         end
+
+        # Whether `action` runs under `ActionController::Live`: it streams a
+        # ruact page, or the app included Live itself — in this controller or
+        # in a parent — for actions of its own (an SSE stream, `send_stream`),
+        # which keep it.
+        #
+        # @api private
+        # @param action [String, Symbol]
+        # @return [Boolean]
+        def __ruact_live?(action)
+          ruact_streaming?(action) || Streaming.live_by_app?(self)
+        end
       end
+
+      # Includes `ActionController::Live` in +controller+ for `ruact_streaming`,
+      # marked as ruact's doing so {LiveInclusion} does not take it for the app's.
+      #
+      # @api private
+      def self.include_live(controller)
+        return if controller.include?(ActionController::Live)
+
+        controller.instance_variable_set(:@__ruact_including_live, true)
+        controller.include(ActionController::Live)
+      ensure
+        controller.remove_instance_variable(:@__ruact_including_live) if
+          controller.instance_variable_defined?(:@__ruact_including_live)
+      end
+
+      # Whether the app included `ActionController::Live` in +controller+ or a
+      # parent, itself and not through `ruact_streaming` (see {LiveInclusion}).
+      #
+      # @api private
+      def self.live_by_app?(controller)
+        controller.ancestors.any? { |ancestor| ancestor.instance_variable_get(:@__ruact_live_by_app) }
+      end
+
+      # Notes, on a class, that the app included `ActionController::Live` in it
+      # itself. Ruby calls `append_features` on every `include`, even of a
+      # module the class already has — the case of a controller that includes
+      # Live under a parent that declared `ruact_streaming`, where the include
+      # changes nothing and has to be seen anyway.
+      module LiveInclusion
+        def append_features(base)
+          unless base.instance_variable_defined?(:@__ruact_including_live)
+            base.instance_variable_set(:@__ruact_live_by_app, true)
+          end
+          super
+        end
+      end
+      ActionController::Live.singleton_class.prepend(LiveInclusion)
 
       # The typo check for `ruact_streaming only:`, as `ruact_pages` has it
       # (see {Pages.check_declared!}).
@@ -134,7 +183,7 @@ module Ruact
           return super unless __ruact_streaming
 
           name = request.get_header(ACTION_ENV) || request.path_parameters[:action]
-          return super if name.nil? || ruact_streaming?(name)
+          return super if name.nil? || __ruact_live?(name)
 
           ActionController::Metal.singleton_class.instance_method(:make_response!).bind_call(self, request)
         end
@@ -152,10 +201,11 @@ module Ruact
       end
 
       # Included right after Live by `ruact_streaming`: an action that does not
-      # stream runs on the request's thread, as without Live.
+      # stream runs on the request's thread, as without Live — unless the app
+      # included Live itself, for actions of its own.
       module LiveChoice
         def process(name)
-          return super if self.class.ruact_streaming?(name)
+          return super if self.class.__ruact_live?(name)
 
           Streaming.process_without_live(self, name)
         end

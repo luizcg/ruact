@@ -15,7 +15,8 @@ module Ruact
     #
     #   1. a raw `text/x-component` body (RSC/navigation request), OR
     #   2. a full HTML document embedding the payload in the `__FLIGHT_DATA`
-    #      bootstrap `<script>` (a plain browser GET).
+    #      bootstrap `<script>` (a plain browser GET) — and, in a page that
+    #      streams, in the script each `<Suspense>`'s rows are pushed in.
     #
     # A `Ruact::Server` function-call/query answer is plain JSON, not Flight —
     # feeding it here raises {NotAFlightResponseError} pointing at `JSON.parse`,
@@ -35,6 +36,16 @@ module Ruact
         (?<literal>"(?:\\.|[^"\\])*")
         \)\s*;
       /mx
+
+      # Story 19-1 — in a page that streams, each `<Suspense>`'s rows arrive
+      # later, in a script of their own pushed onto the same queue
+      # (`Ruact::Controller::Delivery#__ruact_flight_push`). Read after the
+      # bootstrap script, in document order.
+      STREAMED_PUSH = /
+        \(self\.__FLIGHT_DATA=self\.__FLIGHT_DATA\|\|\[\]\)\.push\(
+        (?<literal>"(?:\\.|[^"\\])*")
+        \)
+      /x
 
       # A Flight wire body always starts with a row header: `<hex>:` (id + colon)
       # or a hint row `:H`. JSON bodies start with `{`/`[`/`"`; HTML with `<`.
@@ -133,9 +144,15 @@ module Ruact
                   "This response did not render a ruact component (no Flight data was inlined)."
           end
 
-          literal = match[:literal]
-          # The literal is JSON (ruact >= 0.0.15). The Ruby-literal decoder stays
-          # for documents captured from earlier versions.
+          # The streamed pushes are JSON literals ({InlineScript}), written
+          # after the bootstrap script.
+          later = html[match.end(0)..].scan(STREAMED_PUSH).map { |(streamed)| JSON.parse(streamed) }
+          decode_literal(match[:literal]) + later.join
+        end
+
+        # The literal is JSON (ruact >= 0.0.15). The Ruby-literal decoder stays
+        # for documents captured from earlier versions.
+        def decode_literal(literal)
           JSON.parse(literal)
         rescue JSON::ParserError
           decode_ruby_string_literal(literal)

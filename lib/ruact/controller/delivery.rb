@@ -33,6 +33,17 @@ module Ruact
         "X-Accel-Buffering" => "no"
       }.freeze
 
+      # What Rails itself writes once the response has started, on the request's
+      # thread, while the first block may be running: the session cookie and the
+      # session's own keys (`commit_session`, `commit_flash`, and the CSRF token
+      # Rails stores at commit since 7.1), and the headers a middleware adds on
+      # the way out. Not the block's writes.
+      RAILS_WRITES = {
+        "header" => %w[set-cookie server-timing content-security-policy
+                       content-security-policy-report-only x-runtime].freeze,
+        "session" => %w[session_id flash _csrf_token].freeze
+      }.freeze
+
       # Where a streamed document is cut: the rows of each `<Suspense>` are
       # pushed before it, as they are ready.
       BODY_CLOSE = "</body>"
@@ -187,19 +198,29 @@ module Ruact
 
       # What a response can no longer carry once it has started. Each part is
       # read on its own: a controller without a session has no session to read.
+      # Reading does not load what is not loaded — the session, the flash — so
+      # development behaves as production does.
       def __ruact_response_state
         {
-          "header" => __ruact_read_state { response.headers.to_h },
-          "cookie" => __ruact_read_state { request.cookie_jar.to_hash },
-          "session" => __ruact_read_state { session.to_hash },
-          "flash" => __ruact_read_state { flash.to_hash }
+          "header" => __ruact_read_state("header") { response.headers.to_h.transform_keys(&:downcase) },
+          "cookie" => __ruact_read_state("cookie") { request.cookie_jar.to_hash.except(__ruact_session_cookie) },
+          "session" => __ruact_read_state("session") { session.loaded? ? session.to_hash : {} },
+          "flash" => __ruact_read_state("flash") { request.flash_hash&.to_hash || {} }
         }
       end
 
-      def __ruact_read_state
-        yield.dup
+      def __ruact_read_state(kind)
+        yield.except(*RAILS_WRITES.fetch(kind, []))
       rescue StandardError
         nil
+      end
+
+      # The session store's cookie. Not `request.session_options[:key]`: Rack
+      # takes the key out of the options it keeps.
+      def __ruact_session_cookie
+        Rails.application.config.session_options[:key].to_s
+      rescue StandardError
+        ""
       end
 
       # `["the cookie theme", "the header X-Trace"]` — what differs.

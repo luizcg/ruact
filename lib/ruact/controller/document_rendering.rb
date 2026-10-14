@@ -223,10 +223,9 @@ module Ruact
       def ruact_html_shell(flight_payload)
         # Story 14.2 — the JS asset block (entry `<script>` tags + `__FLIGHT_DATA`)
         # is delegated to the single `Ruact::ViewHelper#ruact_js_assets`
-        # implementation. The bootstrap entry script is a deferred ES module, so it
-        # runs after the inline `__FLIGHT_DATA` classic script has populated the
-        # queue regardless of source order — emitting the whole block in `<body>`
-        # is correct.
+        # implementation, which writes the inline `__FLIGHT_DATA` script before
+        # the entry `<script>`: the entry is `async` (Story 19-1) and runs as
+        # soon as it loads, so the queue has to be there first.
         <<~HTML
           <!DOCTYPE html>
           <html lang="en">

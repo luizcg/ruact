@@ -118,7 +118,7 @@ module ControllerRequestSpecSupport
         get "/suspense-demo/show", to: "controller_request_spec_support/suspense_demo#show"
         get "/suspense-live-demo/show", to: "controller_request_spec_support/suspense_live_demo#show"
         # Story 19-1 — `ruact_streaming`.
-        %w[show edit plain raising slow delayed late_write leased].each do |action|
+        %w[show edit plain raising slow delayed late_write leased quiet].each do |action|
           get "/streaming-demo/#{action}", to: "controller_request_spec_support/streaming_demo##{action}"
         end
         # An endpoint whose route names no action.
@@ -283,7 +283,7 @@ module ControllerRequestSpecSupport
   class StreamingDemoController < ActionController::Base
     include Ruact::Controller
 
-    ruact_streaming only: %i[show plain raising slow delayed late_write leased]
+    ruact_streaming only: %i[show plain raising slow delayed late_write leased quiet]
 
     append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
 
@@ -299,6 +299,7 @@ module ControllerRequestSpecSupport
     def slow = ruact_render
     def delayed = ruact_render
     def late_write = ruact_render
+    def quiet = ruact_render
 
     # A connection taken outside a block, as `Model.connection` takes one.
     def leased
@@ -1002,6 +1003,12 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(body).not_to match(%r{</script(?!>)}i)
       end
 
+      # The rows of a <Suspense> arrive in a script of their own: the matcher an
+      # app's request spec uses has to read them too.
+      it "lets have_ruact_component find a component that arrived with a boundary's rows" do
+        expect(document("/streaming-demo/show").body).to have_ruact_component("DemoButton").with_props("n" => 1)
+      end
+
       it "leaves an action it does not declare as it was: in place, buffered, with an ETag, on the request's thread",
          :aggregate_failures do
         response = flight("/streaming-demo/edit")
@@ -1094,6 +1101,18 @@ module Ruact # rubocop:disable Style/OneClassPerFile
           expect(body).not_to include("wrote</p>")
         end
 
+        # The request's thread commits the session and the flash, and middleware
+        # adds headers, once the shell is out — while the first block runs.
+        # Those are Rails' writes, not the block's (review R1).
+        it "does not take Rails' own writes after the shell for the block's" do
+          5.times do
+            # The document: its layout writes the session (the CSRF token).
+            body = document("/streaming-demo/quiet").body
+            expect(body).not_to include("ruact:suspense-error"), body
+            expect(body).to include("a slow block that writes nothing")
+          end
+        end
+
         it "names the line to add when an action that does not stream renders a <Suspense>, once",
            :aggregate_failures do
           log = with_log { flight("/streaming-demo/edit") }
@@ -1168,6 +1187,36 @@ module Ruact # rubocop:disable Style/OneClassPerFile
             include Ruact::Controller
           end
           expect(klass.ruact_streaming?(:anything)).to be(true)
+        end
+
+        # Review R1 — the app's own Live actions (an SSE stream) keep Live when
+        # ruact streams some pages of the same controller, or of a parent.
+        it "keeps Live for the app's own actions under a parent that declared ruact_streaming",
+           :aggregate_failures do
+          parent = controller { ruact_streaming }
+          events = Class.new(parent) do
+            include ActionController::Live
+
+            def stream; end
+          end
+          expect(events.ruact_streaming?(:stream)).to be(false)
+          expect(events.__ruact_live?(:stream)).to be(true)
+          expect(Class.new(parent).__ruact_live?(:stream)).to be(false)
+        end
+
+        it "keeps Live for every action of a controller that included it and declares only: some",
+           :aggregate_failures do
+          klass = Class.new(ActionController::Base) do
+            include ActionController::Live
+            include Ruact::Controller
+
+            ruact_streaming only: :show
+            def show; end
+            def feed; end
+          end
+          expect(klass.ruact_streaming?(:feed)).to be(false)
+          expect(klass.__ruact_live?(:feed)).to be(true)
+          expect(controller { ruact_streaming only: :show }.__ruact_live?(:feed)).to be(false)
         end
 
         it "streams nothing for a controller with neither" do

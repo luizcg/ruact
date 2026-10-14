@@ -73,10 +73,13 @@ module Ruact
     # ones a previous call resolved).
     def resolve(manifest, controller_path: nil, from: 0)
       entries = from.zero? ? @components : @components.drop(from)
-      entries.map do |entry|
-        ref = manifest.reference_for(entry[:name], controller_path: controller_path)
-        { token: entry[:token], name: entry[:name], ref: ref, props: entry[:props] }
-      end
+      entries.map { |entry| resolve_entry(entry, manifest, controller_path: controller_path) }
+    end
+
+    # One registered component, resolved as {#resolve} does.
+    def resolve_entry(entry, manifest, controller_path: nil)
+      ref = manifest.reference_for(entry[:name], controller_path: controller_path)
+      { token: entry[:token], name: entry[:name], ref: ref, props: entry[:props] }
     end
   end
 end

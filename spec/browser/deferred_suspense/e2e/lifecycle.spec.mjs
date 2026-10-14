@@ -17,6 +17,10 @@ test("the page mounts before the document ends", async ({ page, request }) => {
   await expect(page.locator("#a")).toHaveText("open:a");
 });
 
+// The document's head arrives in one piece, so here the parser has reached
+// #root before the async entry runs: this is the regression check that such a
+// layout mounts and streams. The wait for a #root that comes later
+// (`whenRoot`) is proved in page-mount.test.mjs.
 test("a layout that puts the assets above #root still mounts, before the document ends", async ({ page, request }) => {
   await page.goto("/slow?assets_first=1", { waitUntil: "commit" });
   await waitingAt(request, { a: 1 });

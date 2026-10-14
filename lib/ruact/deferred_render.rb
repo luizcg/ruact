@@ -24,6 +24,10 @@ module Ruact
     TIMEOUT_DIGEST = "ruact:suspense-timeout"
     ERROR_DIGEST   = "ruact:suspense-error"
 
+    # The content ran past `suspense_timeout`. Its own: a `Timeout::Error` the
+    # content raised itself (`Net::ReadTimeout` is one) is the content's error.
+    class Expired < StandardError; end
+
     # What production says about a block that raised: nothing of the error.
     PRODUCTION_MESSAGE = "An error occurred in a <Suspense>"
 
@@ -112,11 +116,20 @@ module Ruact
     end
 
     # The components registered since the last conversion are resolved and
-    # added: a block registers its own as it runs.
+    # added: a block registers its own as it runs. One the manifest cannot
+    # resolve fails this conversion and keeps its place (nil), so the next
+    # block does not meet it again.
     def convert(html)
-      @registry.concat(@render_context.resolve(@manifest, controller_path: @controller_path,
-                                                          from: @registry.length))
-      HtmlConverter.convert(html.to_s, @registry)
+      failure = nil
+      @render_context.components.drop(@registry.length).each do |entry|
+        @registry << @render_context.resolve_entry(entry, @manifest, controller_path: @controller_path)
+      rescue StandardError => e
+        @registry << nil
+        failure ||= e
+      end
+      raise failure if failure
+
+      HtmlConverter.convert(html.to_s, @registry.compact)
     end
 
     # The block's `delay` and the block itself, within `suspense_timeout`.
@@ -130,9 +143,17 @@ module Ruact
     def within_timeout(delay, &)
       limit = Ruact.config.suspense_timeout
       return wait_then(delay, &) unless limit&.positive?
-      raise Timeout::Error, "the delay (#{delay}s) is longer than suspense_timeout" if delay && delay > limit
+      raise Expired, "the delay (#{delay}s) is longer than suspense_timeout" if delay && delay > limit
 
-      Timeout.timeout(limit) { wait_then(delay, &) }
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      begin
+        Timeout.timeout(limit) { wait_then(delay, &) }
+      rescue Timeout::Error => e
+        # Ours only when the limit has passed; earlier, it is the content's.
+        raise if Process.clock_gettime(Process::CLOCK_MONOTONIC) - started < limit
+
+        raise Expired, "ran past suspense_timeout (#{limit}s)", cause: e
+      end
     end
 
     def wait_then(delay)
@@ -141,12 +162,7 @@ module Ruact
     end
 
     def timed_out?(error)
-      while error
-        return true if error.is_a?(Timeout::Error)
-
-        error = error.cause
-      end
-      false
+      error.is_a?(Expired)
     end
 
     def error_payload(error)

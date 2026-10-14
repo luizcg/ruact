@@ -98,7 +98,7 @@ Every item below is shipped in this gem at v0.0.11:
 - **Signed record references** — `Ruact.signed_global_id(record, for:, expires_in:)` out, `Ruact.locate_signed(token, for:)` back in; a tampered token is a `400`, not a lookup. [Docs](https://ruact.dev/docs/api/server-actions)
 - **Client-side navigation** — link interception, scroll restoration and redirect-after-POST, derived from your Rails routes. [Docs](https://ruact.dev/docs/concepts/navigation)
 - **A CRUD generator** — `rails generate ruact:scaffold Post title:string body:text` delegates the model, migration and route to Rails' own `resource` generator, then adds the ruact layer. Plain semantic HTML by default; `--shadcn` opts into the Tailwind/shadcn path. It does not run migrations — `rails db:migrate` is still yours. [Docs](https://ruact.dev/docs/api/scaffold)
-- **`bin/rails ruact:doctor`** — checks the manifest, Vite, the layout, the client-component CSS, streaming and `load_async`; exits `1` when one fails. [Docs](https://ruact.dev/docs/api/ruact-doctor)
+- **`bin/rails ruact:doctor`** — checks the manifest, Vite, the layout, the client-component CSS and streaming; exits `1` when one fails. [Docs](https://ruact.dev/docs/api/ruact-doctor)
 - **One runtime dependency** — `nokogiri`. Rails itself is not a declared dependency of this gem.
 
 ## AI tools and coding agents
