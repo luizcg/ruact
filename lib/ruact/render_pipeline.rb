@@ -131,6 +131,11 @@ module Ruact
         raise ArgumentError,
               "ruact: render input :erb must be a String; got #{erb.class} (#{DOCSTRING_REF})"
       end
+      if erb.match?(ErbPreprocessor::SUSPENSE_OPEN_RE)
+        raise ArgumentError,
+              "ruact: render input :erb cannot hold a <Suspense>: its content is a block, which only " \
+              "ActionView's `capture` can render. Render the template through ActionView (#{DOCSTRING_REF})"
+      end
       unless input.key?(:binding)
         raise ArgumentError,
               "ruact: render input { erb: ... } requires sibling :binding (Binding) (#{DOCSTRING_REF})"

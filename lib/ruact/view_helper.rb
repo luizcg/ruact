@@ -43,6 +43,14 @@ module Ruact
       Markers.component_open(ctx.register(name, props)).html_safe
     end
 
+    # The content of a `<Suspense>`: the ERB between its tags, which the
+    # preprocessor makes this block's body. Evaluated here, in place, so the
+    # page renders as one piece; the block is the seam where it could be
+    # evaluated later instead.
+    def __ruact_suspense__(&)
+      capture(&)
+    end
+
     # Story 17.0i — a client component in a template Rails is rendering on its
     # own. Says which component and template, and the two ways to a ruact page:
     # `ruact_render` for this template, or listing the action in the

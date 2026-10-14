@@ -204,8 +204,15 @@ module Ruact
       it "works around and inside Suspense" do
         out = run(%(<Card><Suspense fallback="…"><Card>late</Card></Suspense></Card>))
         expect(out).to eq(
-          %(<%= __ruact_component_open__("Card", {}) %><ruact-suspense data-ruact-fallback="…">) +
-          %(<%= __ruact_component_open__("Card", {}) %>late</ruact-component></ruact-suspense></ruact-component>)
+          [%(<%= __ruact_component_open__("Card", {}) %><ruact-suspense data-ruact-fallback="…">),
+           %(<%= __ruact_suspense__ do %><%= __ruact_component_open__("Card", {}) %>late</ruact-component>),
+           %(<% end %></ruact-suspense></ruact-component>)].join
+        )
+      end
+
+      it "leaves a Suspense tag that is Ruby text inside ERB alone" do
+        expect(run(%(<%= "<Suspense>" %><p>x</p><%= "</Suspense>" %>))).to eq(
+          %(<%= "<Suspense>" %><p>x</p><%= "</Suspense>" %>)
         )
       end
 
@@ -261,7 +268,8 @@ module Ruact
 
         it "takes `<X/>` (no space) as self-closing on the paired path too" do
           expect(run(%(<Suspense fallback="…"><LikeButton/></Suspense>))).to eq(
-            %(<ruact-suspense data-ruact-fallback="…"><%= __ruact_component__("LikeButton", {}) %></ruact-suspense>)
+            [%(<ruact-suspense data-ruact-fallback="…"><%= __ruact_suspense__ do %>),
+             %(<%= __ruact_component__("LikeButton", {}) %><% end %></ruact-suspense>)].join
           )
         end
 

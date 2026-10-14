@@ -842,6 +842,11 @@ module Ruact
             .to raise_error(ArgumentError, /unknown render mode :weird.*expected one of/)
         end
 
+        it "refuses a <Suspense> in plain-ERB input: its content is a block only ActionView renders" do
+          expect { pipeline.render({ erb: '<Suspense fallback="x"><p>late</p></Suspense>', binding: erb_binding }) }
+            .to raise_error(ArgumentError, /cannot hold a <Suspense>/)
+        end
+
         it "raises ArgumentError when :erb is not a String" do
           expect { pipeline.render({ erb: 42, binding: erb_binding }, mode: :string) }
             .to raise_error(ArgumentError, /:erb must be a String/)

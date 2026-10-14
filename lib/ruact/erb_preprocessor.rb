@@ -53,6 +53,11 @@ module Ruact
     # An ERB comment, which renders nothing.
     ERB_COMMENT_RE = /<%#.*?%>/m
 
+    # What a `<Suspense>` pair becomes around its content: the body of a
+    # {ViewHelper#__ruact_suspense__} block, inside the Suspense marker.
+    SUSPENSE_BLOCK_OPEN  = "<%= __ruact_suspense__ do %>"
+    SUSPENSE_BLOCK_CLOSE = "<% end %>#{Markers::SUSPENSE_CLOSE}".freeze
+
     # The element a paired component's content is wrapped in until
     # {HtmlConverter} turns it into the component's `children` ({Markers}).
     WRAPPER_TAG = Markers::WRAPPER_TAG
@@ -96,18 +101,31 @@ module Ruact
                  rewrite_self_closing(source)
                end
 
-      # Step 2: <Suspense> paired tags → the Suspense marker ({Markers}).
-      # `delay="2.5"` is optional: the server-side wait (seconds) before the
-      # deferred chunk streams, forwarded to SuspenseElement#delay.
-      result
-        .gsub(SUSPENSE_OPEN_RE) do
-          attrs = ::Regexp.last_match(1)
-          Markers.suspense_open(extract_string_attr(attrs, "fallback") || "", extract_string_attr(attrs, "delay"))
-        end
-        .gsub(SUSPENSE_CLOSE_RE, Markers::SUSPENSE_CLOSE)
+      rewrite_suspense(result)
     end
 
     private
+
+    # Step 2: `<Suspense>` pairs. The opening becomes the Suspense marker
+    # ({Markers}) followed by a {ViewHelper#__ruact_suspense__} block, the
+    # closing ends both: what sits between the tags is the block's body, so
+    # whoever calls the helper decides when it is evaluated. `delay="2.5"` is
+    # optional: the server-side wait (seconds) before the deferred chunk
+    # streams, forwarded to SuspenseElement#delay. A tag inside an ERB island
+    # (Ruby text that mentions `<Suspense>`) is left alone: a block opened
+    # there would end the island.
+    def rewrite_suspense(source)
+      opened = source.gsub(SUSPENSE_OPEN_RE) do |tag|
+        next tag if inside_erb?(source, ::Regexp.last_match.begin(0))
+
+        attrs = ::Regexp.last_match(1)
+        Markers.suspense_open(extract_string_attr(attrs, "fallback") || "", extract_string_attr(attrs, "delay")) +
+          SUSPENSE_BLOCK_OPEN
+      end
+      opened.gsub(SUSPENSE_CLOSE_RE) do |tag|
+        inside_erb?(opened, ::Regexp.last_match.begin(0)) ? tag : SUSPENSE_BLOCK_CLOSE
+      end
+    end
 
     # The common path: no PascalCase closing tag anywhere, so every component
     # tag should be self-closing. One gsub, no masking copies — the render
