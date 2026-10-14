@@ -52,7 +52,8 @@ module Ruact
     end
 
     def initialize(component_registry)
-      @registry = component_registry
+      # Indexed once by token: each marker in the HTML is one lookup.
+      @registry = component_registry.to_h { |entry| [entry[:token], entry] }
     end
 
     # Convert an HTML string into a ReactElement tree (instance form).
@@ -163,8 +164,8 @@ module Ruact
 
       when Nokogiri::XML::Node::COMMENT_NODE
         # Check if this is a Ruact component placeholder
-        token = node.content.strip
-        entry = @registry.find { |c| c[:token] == token }
+        token = Markers.comment_token(node)
+        entry = @registry[token]
         return nil unless entry
 
         Flight::ReactElement.new(
@@ -181,8 +182,8 @@ module Ruact
 
     def convert_element(node)
       tag = node.name.downcase
-      return convert_suspense_element(node) if tag == "ruact-suspense"
-      return convert_component_with_children(node) if tag == ErbPreprocessor::WRAPPER_TAG
+      return convert_suspense_element(node) if tag == Markers::SUSPENSE_TAG
+      return convert_component_with_children(node) if tag == Markers::WRAPPER_TAG
 
       props = build_props(node, tag)
       children = convert_children(node)
@@ -196,8 +197,8 @@ module Ruact
     # component's `children` prop, converted like any element's; an empty pair
     # passes none, like `<Card />`.
     def convert_component_with_children(node)
-      token = node["data-ruact-token"]
-      entry = @registry.find { |c| c[:token] == token }
+      token = Markers.wrapper_token(node)
+      entry = @registry[token]
       raise Ruact::HtmlConverterError, "ruact: no component registered for #{token.inspect}" unless entry
 
       props = entry[:props]
@@ -209,7 +210,7 @@ module Ruact
     end
 
     def convert_suspense_element(node)
-      fallback_text = node["data-ruact-fallback"] || ""
+      fallback_text = Markers.suspense_fallback(node)
       fallback = if fallback_text.empty?
                    nil
                  else
@@ -221,20 +222,8 @@ module Ruact
 
       # Optional `delay="2.5"` from the ERB → SuspenseElement#delay (the
       # server-side wait, in seconds, before the deferred chunk streams). When
-      # absent, blank, unparseable, or non-finite, SuspenseElement falls back to
-      # its default.
-      delay_attr = node["data-ruact-delay"]
-      delay = begin
-        if delay_attr && !delay_attr.to_s.strip.empty?
-          # A string overflow like "1e309" parses to Infinity (Float() does not
-          # raise) — guard finiteness so a non-finite delay can't reach the
-          # renderer's sleep(delay) and raise RangeError.
-          parsed = Float(delay_attr)
-          parsed.finite? ? parsed : nil
-        end
-      rescue ArgumentError, TypeError
-        nil
-      end
+      # absent or unusable, SuspenseElement falls back to its default.
+      delay = Markers.suspense_delay(node)
 
       if delay
         Flight::SuspenseElement.new(fallback: fallback, children: children, delay: delay)

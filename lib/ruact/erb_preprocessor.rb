@@ -54,16 +54,16 @@ module Ruact
     ERB_COMMENT_RE = /<%#.*?%>/m
 
     # The element a paired component's content is wrapped in until
-    # {HtmlConverter} turns it into the component's `children`.
-    WRAPPER_TAG = "ruact-component"
+    # {HtmlConverter} turns it into the component's `children` ({Markers}).
+    WRAPPER_TAG = Markers::WRAPPER_TAG
 
     # What each helper the transformed template calls leaves in the HTML, by
     # its render-context token: a component, or the opening of one with
-    # children. {RenderPipeline} installs these for a plain-ERB render;
-    # ViewHelper writes the same strings in ActionView.
+    # children ({Markers}). {RenderPipeline} installs these for a plain-ERB
+    # render; ViewHelper writes the same markers in ActionView.
     PLACEHOLDERS = {
-      __ruact_component__: ->(token) { "<!-- #{token} -->" },
-      __ruact_component_open__: ->(token) { %(<#{WRAPPER_TAG} data-ruact-token="#{token}">) }
+      __ruact_component__: ->(token) { Markers.component(token) },
+      __ruact_component_open__: ->(token) { Markers.component_open(token) }
     }.freeze
 
     # Transform ERB source, replacing component tags with ERB placeholders.
@@ -96,19 +96,15 @@ module Ruact
                  rewrite_self_closing(source)
                end
 
-      # Step 2: <Suspense> paired tags → <ruact-suspense> HTML elements.
+      # Step 2: <Suspense> paired tags → the Suspense marker ({Markers}).
+      # `delay="2.5"` is optional: the server-side wait (seconds) before the
+      # deferred chunk streams, forwarded to SuspenseElement#delay.
       result
         .gsub(SUSPENSE_OPEN_RE) do
-          attrs    = ::Regexp.last_match(1)
-          fallback = extract_string_attr(attrs, "fallback") || ""
-          escaped  = fallback.gsub('"', "&quot;")
-          # Optional `delay="2.5"` — the server-side wait (seconds) before
-          # the deferred chunk streams. Forwarded to SuspenseElement#delay.
-          delay      = extract_string_attr(attrs, "delay")
-          delay_attr = delay ? %( data-ruact-delay="#{delay.gsub('"', '&quot;')}") : ""
-          %(<ruact-suspense data-ruact-fallback="#{escaped}"#{delay_attr}>)
+          attrs = ::Regexp.last_match(1)
+          Markers.suspense_open(extract_string_attr(attrs, "fallback") || "", extract_string_attr(attrs, "delay"))
         end
-        .gsub(SUSPENSE_CLOSE_RE, "</ruact-suspense>")
+        .gsub(SUSPENSE_CLOSE_RE, Markers::SUSPENSE_CLOSE)
     end
 
     private
@@ -188,7 +184,7 @@ module Ruact
     end
 
     def rewrite_tag(source, tag, paired)
-      return "</#{WRAPPER_TAG}>" if tag[:closing]
+      return Markers::WRAPPER_CLOSE if tag[:closing]
 
       kind = if !paired.key?(tag[:from]) then :self_closing
              elsif paired[tag[:from]] then :with_children

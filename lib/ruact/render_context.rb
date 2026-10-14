@@ -23,8 +23,15 @@ module Ruact
       token
     end
 
-    def by_token(token)
-      @components.find { |c| c[:token] == token }
+    # The registered components with the client reference +manifest+ gives
+    # each, in the shape {HtmlConverter} reads:
+    # `[{ token:, name:, ref:, props: }, ...]`. Raises what the manifest raises
+    # for a component it does not have.
+    def resolve(manifest, controller_path: nil)
+      @components.map do |entry|
+        ref = manifest.reference_for(entry[:name], controller_path: controller_path)
+        { token: entry[:token], name: entry[:name], ref: ref, props: entry[:props] }
+      end
     end
   end
 end

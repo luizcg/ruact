@@ -189,11 +189,7 @@ module Ruact
             receiver.instance_variable_set(:@__ruact_render_context__, prev_ctx)
           end
 
-        registry = render_context.components.map do |entry|
-          ref = @manifest.reference_for(entry[:name], controller_path: @controller_path)
-          { token: entry[:token], name: entry[:name], ref: ref, props: entry[:props] }
-        end
-
+        registry = render_context.resolve(@manifest, controller_path: @controller_path)
         root_element = HtmlConverter.convert(html, registry)
 
         Flight::Renderer.each(root_element, @manifest,
@@ -209,10 +205,7 @@ module Ruact
     # the caller may discard the RenderContext immediately after `render` returns — the
     # returned Enumerator does not reference the RenderContext.
     def render_html_enum(html, render_context, streaming:)
-      registry = render_context.components.map do |entry|
-        ref = @manifest.reference_for(entry[:name], controller_path: @controller_path)
-        { token: entry[:token], name: entry[:name], ref: ref, props: entry[:props] }
-      end
+      registry = render_context.resolve(@manifest, controller_path: @controller_path)
       strict     = Ruact.config.strict_serialization
       warning_cb = as_json_warning_callback
 

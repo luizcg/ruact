@@ -28,8 +28,7 @@ module Ruact
       ctx = @ruact_render_context
       raise Ruact::Error, __ruact_outside_render_message(name) if ctx.nil?
 
-      token = ctx.register(name, props)
-      "<!-- #{token} -->".html_safe
+      Markers.component(ctx.register(name, props)).html_safe
     end
 
     # Story 18-2 — the opening of a component with children. Registers it like
@@ -41,8 +40,7 @@ module Ruact
       ctx = @ruact_render_context
       raise Ruact::Error, __ruact_outside_render_message(name) if ctx.nil?
 
-      token = ctx.register(name, props)
-      %(<ruact-component data-ruact-token="#{token}">).html_safe
+      Markers.component_open(ctx.register(name, props)).html_safe
     end
 
     # Story 17.0i — a client component in a template Rails is rendering on its
