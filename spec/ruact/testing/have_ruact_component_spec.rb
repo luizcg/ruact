@@ -25,13 +25,9 @@ module Ruact
                                })
     end
 
-    let(:pipeline) { RenderPipeline.new(manifest) }
-
-    # Renders an ERB snippet to a REAL Flight wire string.
+    # Renders an ERB snippet to a REAL Flight wire string, the way a page does.
     def render_wire(erb_source, **ivars)
-      ctx = Object.new
-      ivars.each { |k, v| ctx.instance_variable_set("@#{k}", v) }
-      pipeline.render({ erb: erb_source, binding: ctx.instance_eval { binding } }, mode: :string)
+      PageRender.flight(erb_source, manifest: manifest, assigns: ivars)
     end
 
     # Wraps a wire in the REAL HTML shell the gem emits (`__FLIGHT_DATA` push),
@@ -195,8 +191,7 @@ module Ruact
 
       it "reads the development wire (elements with React's three development slots)" do
         erb = "<div><LikeButton postId={1} /><LikeButton postId={2} /></div>"
-        ctx = Object.new.instance_eval { binding }
-        wire = RenderPipeline.new(manifest, development: true).render({ erb: erb, binding: ctx }, mode: :string)
+        wire = PageRender.flight(erb, manifest: manifest, development: true)
         expect(wire).to include("null,null,1]")
         props = Ruact::Testing::ComponentQuery.new(wire).props_for("LikeButton")
         expect(props).to eq([{ "postId" => 1 }, { "postId" => 2 }])
