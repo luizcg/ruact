@@ -1,0 +1,9 @@
+<main>
+  <p>shell</p>
+  <Suspense fallback="Loading &hellip;" delay="0">
+    <% @late = "<b>late</b>" %>
+    <p><%= @late %></p>
+    <DemoButton n={3} />
+  </Suspense>
+  <Suspense fallback="empty" delay="0"><% @value_only = "should not print" %></Suspense>
+</main>

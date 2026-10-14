@@ -33,15 +33,21 @@ module Ruact
       end
     end
 
-    describe "#by_token" do
-      it "finds a registered component by its token" do
-        ctx.register("NavBar", { "x" => 1 })
-        entry = ctx.by_token("__RUACT_0__")
-        expect(entry[:name]).to eq("NavBar")
+    describe "#resolve" do
+      let(:manifest) do
+        instance_double(Ruact::ClientManifest).tap do |m|
+          allow(m).to receive(:reference_for) { |name, **| "ref:#{name}" }
+        end
       end
 
-      it "returns nil for an unknown token" do
-        expect(ctx.by_token("__RUACT_99__")).to be_nil
+      it "gives each registered component its client reference, in registration order" do
+        ctx.register("NavBar", { "x" => 1 })
+        ctx.register("Footer", {})
+        expect(ctx.resolve(manifest, controller_path: "posts")).to eq(
+          [{ token: "__RUACT_0__", name: "NavBar", ref: "ref:NavBar", props: { "x" => 1 } },
+           { token: "__RUACT_1__", name: "Footer", ref: "ref:Footer", props: {} }]
+        )
+        expect(manifest).to have_received(:reference_for).with("NavBar", controller_path: "posts")
       end
     end
 

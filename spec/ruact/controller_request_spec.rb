@@ -113,6 +113,11 @@ module ControllerRequestSpecSupport
       end
       Ruact.manifest # prime the cache
 
+      # Suspense boundaries, rendered whole and through ActionController::Live.
+      app_class.routes.append do
+        get "/suspense-demo/show", to: "controller_request_spec_support/suspense_demo#show"
+        get "/suspense-live-demo/show", to: "controller_request_spec_support/suspense_live_demo#show"
+      end
       app_class.instance.initialize!
       @booted = true
     end
@@ -233,6 +238,26 @@ module ControllerRequestSpecSupport
       @likes = [1, 2]
       ruact_render
     end
+  end
+
+  # A page with Suspense boundaries, rendered whole and row by row
+  # (ActionController::Live): the content between the tags is evaluated in the
+  # view, and only what it writes is content.
+  class SuspenseDemoController < ActionController::Base
+    include Ruact::Controller
+
+    append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
+
+    def show = ruact_render
+  end
+
+  class SuspenseLiveDemoController < ActionController::Base
+    include ActionController::Live
+    include Ruact::Controller
+
+    append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
+
+    def show = ruact_render(template: "controller_request_spec_support/suspense_demo/show")
   end
 
   # Story 10.0 — an implicit-`default_render` page controller: an EMPTY GET
@@ -818,6 +843,35 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         get "/children-demo/show"
         expect(last_response.status).to eq(200)
         expect(last_response.body).to include("Card.jsx")
+      end
+    end
+
+    describe "a page with Suspense boundaries" do
+      def expect_suspense_page(body)
+        expect(body).to include('"$Sreact.suspense"')
+        expect(body).to include('"fallback":["$","p",null,{"children":"Loading …"}')
+        expect(body).to include('"children":"<b>late</b>"')
+        expect(Ruact::Testing::ComponentQuery.new(body).props_for("DemoButton")).to eq([{ "n" => 3 }])
+        expect(body).not_to include("should not print")
+      end
+
+      it "evaluates each boundary's content in the view, and keeps only what it writes", :aggregate_failures do
+        get "/suspense-demo/show", {}, { "HTTP_ACCEPT" => "text/x-component" }
+        expect(last_response.status).to eq(200), last_response.body[0, 400]
+        expect_suspense_page(last_response.body)
+      end
+
+      it "writes the same page row by row through ActionController::Live", :aggregate_failures do
+        get "/suspense-live-demo/show", {}, { "HTTP_ACCEPT" => "text/x-component" }
+        expect(last_response.status).to eq(200), last_response.body[0, 400]
+        expect(last_response.headers["X-Accel-Buffering"]).to eq("no")
+        expect_suspense_page(last_response.body)
+      end
+
+      it "renders the page on a plain browser load" do
+        get "/suspense-demo/show"
+        expect(last_response.status).to eq(200)
+        expect(last_response.body).to include("__FLIGHT_DATA")
       end
     end
 

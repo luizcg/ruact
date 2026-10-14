@@ -18,14 +18,14 @@
 //     transforming a `\0virtual:` id.
 import { createRoot } from 'react-dom/client';
 import { createElement, useState, useEffect } from 'react';
-// Story 18-1 — React's own Flight client: the copy vendored in the gem, or the
-// app's `react-server-dom-webpack` when installed (the plugin decides).
-import { createFromReadableStream } from 'virtual:ruact/flight-client';
 import { setModuleRegistry } from './flight-modules.js';
 // Registers the boundary the server wraps each Suspense child in.
 import './suspense-boundary.js';
 import { RootBoundary, onCaughtError } from './root-boundary.js';
-import { labelledStream } from './transport.js';
+// The page, opened from its Flight bytes with React's own Flight client (the
+// copy vendored in the gem, or the app's `react-server-dom-webpack` when it
+// declares one: the plugin decides).
+import { inlineRows, openPage } from './page-stream.js';
 import { setupRouter, teardownRouter } from './ruact-router.js';
 
 // MODULE_REGISTRY maps react-client-manifest "id" values to component exports.
@@ -58,17 +58,9 @@ if (!flightData || flightData.length === 0) {
 } else {
   // The inline payload, as the stream the client reads. The root is mounted
   // once the tree resolves, so the first paint is the page, not a fallback.
-  const bytes = new TextEncoder().encode(flightData.join(''));
-  const stream = new ReadableStream({
-    start(controller) {
-      controller.enqueue(bytes);
-      controller.close();
-    },
-  });
-
   let initialTree;
   try {
-    initialTree = createFromReadableStream(labelledStream(stream));
+    initialTree = openPage(inlineRows(flightData)).root;
   } catch (err) {
     showBootError(err);
     throw err;

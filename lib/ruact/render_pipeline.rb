@@ -55,6 +55,8 @@ module Ruact
     #   - `:erb` or `:html` is not a `String`,
     #   - `input` contains extra keys beyond the documented shapes,
     #   - `mode` is not in {VALID_MODES}.
+    #   - (`:erb` input) the template holds a `<Suspense>`: its content is a block only ActionView
+    #     renders. Raised when the Enumerator is consumed.
     #   All `ArgumentError` messages name the offending input and reference
     #   `RenderPipeline#render` for the canonical contract.
     #
@@ -142,6 +144,16 @@ module Ruact
             "ruact: render input :binding must be a Binding; got #{bnd.class} (#{DOCSTRING_REF})"
     end
 
+    # A `<Suspense>`'s content is the body of a helper block, and only
+    # ActionView's `capture` renders one.
+    def refuse_suspense!(transformed)
+      return unless transformed.include?("__ruact_suspense__(")
+
+      raise ArgumentError,
+            "ruact: render input :erb cannot hold a <Suspense>: its content is a block, which only " \
+            "ActionView's `capture` can render. Render the template through ActionView (#{DOCSTRING_REF})"
+    end
+
     def validate_html_shape!(input)
       html = input[:html]
       unless html.is_a?(String)
@@ -179,6 +191,7 @@ module Ruact
         # so passing nil is byte-for-byte equivalent while avoiding any dev HTTP
         # fetch / test-double dispatch inside callers that measure this path.
         transformed    = ErbPreprocessor.transform(erb_source, registry: nil)
+        refuse_suspense!(transformed)
         receiver       = binding_context.eval("self")
         prev_ctx       = receiver.instance_variable_get(:@__ruact_render_context__)
         inject_helper!(binding_context, render_context)
@@ -189,11 +202,7 @@ module Ruact
             receiver.instance_variable_set(:@__ruact_render_context__, prev_ctx)
           end
 
-        registry = render_context.components.map do |entry|
-          ref = @manifest.reference_for(entry[:name], controller_path: @controller_path)
-          { token: entry[:token], name: entry[:name], ref: ref, props: entry[:props] }
-        end
-
+        registry = render_context.resolve(@manifest, controller_path: @controller_path)
         root_element = HtmlConverter.convert(html, registry)
 
         Flight::Renderer.each(root_element, @manifest,
@@ -209,10 +218,7 @@ module Ruact
     # the caller may discard the RenderContext immediately after `render` returns — the
     # returned Enumerator does not reference the RenderContext.
     def render_html_enum(html, render_context, streaming:)
-      registry = render_context.components.map do |entry|
-        ref = @manifest.reference_for(entry[:name], controller_path: @controller_path)
-        { token: entry[:token], name: entry[:name], ref: ref, props: entry[:props] }
-      end
+      registry = render_context.resolve(@manifest, controller_path: @controller_path)
       strict     = Ruact.config.strict_serialization
       warning_cb = as_json_warning_callback
 

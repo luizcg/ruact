@@ -57,6 +57,69 @@ module Ruact
         end
       end
 
+      describe "a render in steps" do
+        let(:button) { ClientReference.new(module_id: "/assets/Button-abc.js", export_name: "Button") }
+        let(:inner_suspense) do
+          SuspenseElement.new(fallback: ReactElement.new(type: "i"),
+                              children: ReactElement.new(type: "p", props: { "children" => "inner" }), delay: 0.0)
+        end
+        # The button exists only inside the outer boundary; a second boundary sits inside it.
+        let(:tree) do
+          content = [ReactElement.new(type: button, props: { "label" => "in" }),
+                     ReactElement.new(type: "pre", props: { "children" => "x" * 1100 }), inner_suspense]
+          ReactElement.new(type: "main", props: {
+                             "children" => SuspenseElement.new(fallback: ReactElement.new(type: "span"),
+                                                               children: content, delay: 0.0)
+                           })
+        end
+
+        it "gives the shell first: what the page shows with its fallbacks, ending with the root row" do
+          renderer = described_class.new(tree, manifest_with_button)
+          shell = renderer.shell
+
+          expect(shell.last).to start_with("0:")
+          expect(shell.join).not_to include("Button-abc")
+          expect(renderer.pending?).to be(true)
+        end
+
+        it "gives a boundary its own rows: the import it brings, its text row, then its row" do
+          renderer = described_class.new(tree, manifest_with_button)
+          renderer.shell
+
+          outer = renderer.next_boundary(streaming: false)
+          expect(outer.length).to eq(3)
+          expect(outer[0]).to include(":I[").and include("Button-abc")
+          expect(outer[1]).to match(/\A\h+:T/)
+          expect(outer[2]).to include('"label":"in"')
+        end
+
+        it "finds a boundary inside a boundary when the outer one is rendered, and renders it next" do
+          renderer = described_class.new(tree, manifest_with_button)
+          renderer.shell
+          renderer.next_boundary(streaming: false)
+
+          expect(renderer.pending?).to be(true)
+          expect(renderer.next_boundary(streaming: false).last).to include('"children":"inner"')
+          expect(renderer.pending?).to be(false)
+        end
+
+        it "refuses a boundary before the shell, past the last one, and a second shell" do
+          renderer = described_class.new(tree, manifest_with_button)
+          expect { renderer.next_boundary(streaming: false) }.to raise_error(Ruact::Error, /before #shell/)
+          renderer.shell
+          expect { renderer.shell }.to raise_error(Ruact::Error, /already taken/)
+          renderer.next_boundary(streaming: false) while renderer.pending?
+          expect { renderer.next_boundary(streaming: false) }.to raise_error(Ruact::Error, /no boundary pending/)
+        end
+
+        it "adds up to what .render writes" do
+          renderer = described_class.new(tree, manifest_with_button)
+          rows = renderer.shell
+          rows += renderer.next_boundary(streaming: false) while renderer.pending?
+          expect(rows.join).to eq(described_class.render(tree, manifest_with_button))
+        end
+      end
+
       describe "suspense timeout (Story 3.5 AC #4)" do
         let(:fallback)  { ReactElement.new(type: "span") }
         let(:inner)     { ReactElement.new(type: "div") }

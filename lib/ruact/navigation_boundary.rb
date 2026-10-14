@@ -37,7 +37,7 @@ module Ruact
       end
 
       def call(env)
-        return @app.call(env) unless env["HTTP_RUACT_REQUEST"] == "1"
+        return @app.call(env) unless RequestKind.from_router?(env)
         return native_response if @classifier.classify(env) == :native
 
         @app.call(env)
@@ -60,7 +60,7 @@ module Ruact
         headers[HEADER] = NATIVE
         headers["content-type"] = "text/plain; charset=utf-8"
         headers["cache-control"] = "no-store"
-        headers["vary"] = "Ruact-Request"
+        headers["vary"] = RequestKind::ROUTER_HEADER
         headers
       end
     end

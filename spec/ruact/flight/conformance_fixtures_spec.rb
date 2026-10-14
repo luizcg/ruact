@@ -36,12 +36,10 @@ module ConformanceFixtures
     </Card>
   ERB
 
+  # Through ActionView, as a page renders (spec/support/page_render.rb).
   def self.render_tree(development:, erb: TREE)
-    pipeline = Ruact::RenderPipeline.new(Ruact::ClientManifest.from_hash(MANIFEST), development: development)
-    ctx = Object.new
-    ctx.instance_variable_set(:@likes, [1, 2, 3])
-    ctx.instance_variable_set(:@title, "Server title")
-    pipeline.render({ erb: erb, binding: ctx.instance_eval { binding } }, mode: :string)
+    PageRender.flight(erb, manifest: Ruact::ClientManifest.from_hash(MANIFEST), development: development,
+                           assigns: { likes: [1, 2, 3], title: "Server title" })
   end
 
   # A Suspense child that ran past `suspense_timeout`: its row is an error.
