@@ -18,7 +18,8 @@ module Ruact
     attr_reader :components
 
     def register(name, props)
-      token = "__RUACT_#{@components.length}__"
+      # Frozen: the converter keys a Hash by it, which would copy an unfrozen one.
+      token = "__RUACT_#{@components.length}__".freeze
       @components << { token: token, name: name, props: props }
       token
     end
