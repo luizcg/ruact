@@ -122,7 +122,7 @@ module Ruact
         config = File.join(root.to_s, name)
         next unless File.file?(config)
 
-        match = File.binread(config).scrub.match(PLUGIN_IMPORT)
+        match = File.binread(config).force_encoding(Encoding::UTF_8).scrub.match(PLUGIN_IMPORT)
         return nil unless match
 
         imported = match[2]

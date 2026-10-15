@@ -72,6 +72,15 @@ RSpec.describe Ruact::BuildSkew, :story_19_3 do
         expect(described_class.message(nil, root: root)).to include("vite.config.js imports")
       end
 
+      it "keeps the message UTF-8 when the paths are not ASCII" do
+        allow(Ruact).to receive(:vite_plugin_path)
+          .and_return("/Users/José/gems/ruact/vendor/javascript/vite-plugin-ruact/index.js")
+        config("import ruact from '/Users/José/gems/ruact-0.0.6/vendor/javascript/vite-plugin-ruact/index.js';\n")
+        text = described_class.message(nil, root: root)
+        expect(text.encoding).to eq(Encoding::UTF_8)
+        expect(text).to include("from /Users/José/gems/ruact-0.0.6/", "import it from '/Users/José/gems/ruact/")
+      end
+
       it "says nothing of the import when it cannot read one (fail open)" do
         config("const ruact = (await import(pluginPath)).default;\n")
         expect(described_class.message(nil, root: root)).not_to include("imports ruact's Vite plugin")
