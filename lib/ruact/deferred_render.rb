@@ -82,11 +82,18 @@ module Ruact
     rescue StandardError => e
       raise if boundary.nil?
 
+      skip_unconverted_components
       report(e, boundary)
       @renderer.error_rows(boundary[:id], error_payload(e), boundary: boundary).join
     end
 
     private
+
+    # A block that failed may have registered components its HTML, now thrown
+    # away, was going to use: the next block's conversion starts after them.
+    def skip_unconverted_components
+      @registry.fill(nil, @registry.length...@render_context.components.length)
+    end
 
     # The block's HTML as elements; content that is already elements as is.
     def content(element)

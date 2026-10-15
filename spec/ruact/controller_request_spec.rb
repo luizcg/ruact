@@ -651,10 +651,11 @@ module Ruact # rubocop:disable Style/OneClassPerFile
     let(:app_class) { ControllerRequestSpecSupport.app_class }
     let(:app)       { app_class.instance }
 
-    # Reads the whole body, then closes it, as a client does. Rack::Test
-    # closes a streamed body before reading it to the end, and under Live
-    # closing is "the client left": what the action writes later is dropped
-    # (Story 19-1 — a page that streams renders its blocks after the shell).
+    # Reads the whole body, then closes it, as a client does. Through
+    # Rack::Test a page whose block ran 0.3 s came back with its shell only:
+    # the body was closed while the action was still writing, and under Live
+    # closing is "the client left" (Story 19-1 — a page that streams renders
+    # its blocks after the shell).
     def read_streamed(path, headers = {})
       status, response_headers, body = app.call(Rack::MockRequest.env_for(path, headers))
       read = +""
@@ -1110,6 +1111,16 @@ module Ruact # rubocop:disable Style/OneClassPerFile
             body = document("/streaming-demo/quiet").body
             expect(body).not_to include("ruact:suspense-error"), body
             expect(body).to include("a slow block that writes nothing")
+          end
+        end
+
+        # Review R2 — an app that does not name its session cookie: the store's
+        # own name is the one Rails writes.
+        it "knows the session cookie by the store's name when the app gives none" do
+          allow(Rails.application.config).to receive(:session_options).and_return({})
+          5.times do
+            body = document("/streaming-demo/quiet").body
+            expect(body).not_to include("ruact:suspense-error"), body
           end
         end
 

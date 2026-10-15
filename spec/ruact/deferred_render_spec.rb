@@ -67,6 +67,19 @@ RSpec.describe Ruact::DeferredRender do
     expect(rows[2]).to include('"children":"third"')
   end
 
+  # Review R2 — a block that failed after registering a component leaves it
+  # unresolved; the next block's conversion must not meet it.
+  it "does not hand a failed block's components to the next block", :aggregate_failures do
+    failing = lambda do |ctx, _view|
+      ctx.register("Missing", {})
+      raise ArgumentError, "after registering"
+    end
+    rows = run(boundary(failing), boundary(component("Good")))
+    expect(rows[0]).to match(/\A\h+:E\{/)
+    expect(rows[1]).not_to include(":E{")
+    expect(rows[1]).to include("/Good.js")
+  end
+
   # Review R1 — the content's own timeout (a slow API) is the content's error,
   # with its class and message, not the Suspense timeout.
   it "tells the content's own Timeout::Error from suspense_timeout", :aggregate_failures do

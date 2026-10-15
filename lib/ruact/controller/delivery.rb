@@ -215,12 +215,15 @@ module Ruact
         nil
       end
 
-      # The session store's cookie. Not `request.session_options[:key]`: Rack
-      # takes the key out of the options it keeps.
+      # The session store's cookie: the key the app configured, or the one the
+      # store falls back to without one. Not `request.session_options[:key]`:
+      # Rack takes the key out of the options it keeps.
       def __ruact_session_cookie
-        Rails.application.config.session_options[:key].to_s
+        key = Rails.application.config.session_options[:key]
+        key ||= request.session.instance_variable_get(:@by).try(:key)
+        (key || "_session_id").to_s
       rescue StandardError
-        ""
+        "_session_id"
       end
 
       # `["the cookie theme", "the header X-Trace"]` — what differs.
