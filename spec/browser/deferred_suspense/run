@@ -75,6 +75,20 @@ perturbation() {
   echo "| every \`<Suspense>\` in place: \`deferred.spec.mjs\` | $env | 2 failed, as it must: at the shell's text and at the URL |" >>"$BROWSER"
 }
 
+# Story 19-2 (AC21) — with the rows pushed without the nonce, the content of
+# a first load must never arrive under the policy.
+csp_perturbation() {
+  local env=$1
+  echo "== CSP, rows without the nonce: must FAIL, $env"
+  if HARNESS_CSP=1 HARNESS_CSP_PERTURB=1 RAILS_ENV=$env npx playwright test csp.spec.mjs -g "first load" >tmp/csp.log 2>&1; then
+    echo "the CSP scenario passed with the rows pushed without a nonce: it proves nothing" >&2
+    exit 1
+  fi
+  grep -q "1 failed" tmp/csp.log
+  grep -q "open:a" tmp/csp.log
+  echo "| a CSP by nonce, rows pushed without it | $env | 1 failed, as it must: the content never arrives |" >>"$BROWSER"
+}
+
 browser() {
   echo "# Story 19-1 — browser runs" >"$BROWSER"
   echo >>"$BROWSER"
@@ -83,6 +97,8 @@ browser() {
   for env in development production; do
     scenarios "the scenarios" "$env"
     perturbation "$env"
+    scenarios "a CSP by nonce, without 'unsafe-inline'" "$env" HARNESS_CSP=1
+    csp_perturbation "$env"
   done
 }
 

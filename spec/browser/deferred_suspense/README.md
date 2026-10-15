@@ -19,6 +19,10 @@ Slow work waits at a gate the test opens with a request of its own
 ./run postgres        # what suspense_timeout does to a query running in PostgreSQL (19-1)
 ```
 
+`./run` also runs the scenarios under a Content Security Policy that allows
+scripts by nonce only (`HARNESS_CSP=1`, `e2e/csp.spec.mjs`), and checks that
+with each boundary's rows pushed without the nonce the content never arrives.
+
 `./run` writes `results/browser.md`, one row per run. What a scenario measures
 rather than requires goes to `results/<name>-<env>.json`; a run with another
 React or i18n writes `results/<name>-<variant>-<env>.json` and leaves the

@@ -92,7 +92,7 @@ module Ruact
     # are only ever invoked internally by `ruact_html_shell`; the others only
     # by templates).
     private :ruact_js_assets, :ruact_head_assets, :__ruact_component__, :__ruact_component_open__,
-            :__ruact_suspense__
+            :__ruact_suspense__, :__ruact_nonce_attr
 
     # Resolves the manifest for this render. In PRODUCTION this is the boot-time
     # cached +Ruact.manifest+ (set by Railtie#config.to_prepare) — no per-request

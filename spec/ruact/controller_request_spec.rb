@@ -1091,6 +1091,26 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(events).to eq([[:shell, false], [:one, true], [:two, true], [:inner, true]])
       end
 
+      # Story 19-2 (AC21) — an app whose CSP allows scripts by nonce: every
+      # script ruact writes carries the request's nonce, the rows of each
+      # boundary included; without a generator, not a byte changes.
+      it "puts the request's CSP nonce on every script it writes, and none without one", :aggregate_failures do
+        # The app's config is read once, at its first request: the request is stubbed instead.
+        allow_any_instance_of(ActionDispatch::Request) # rubocop:disable RSpec/AnyInstance
+          .to receive(:content_security_policy_nonce_generator).and_return(->(_request) { "n0nce" })
+        body = document("/streaming-demo/show").body
+        scripts = body.scan(/<script\b[^>]*>/)
+        expect(scripts.length).to be >= 6
+        expect(scripts).to all(include(' nonce="n0nce"'))
+        expect(body).to include('<script nonce="n0nce">(self.__FLIGHT_DATA=self.__FLIGHT_DATA||[]).push(')
+
+        allow_any_instance_of(ActionDispatch::Request) # rubocop:disable RSpec/AnyInstance
+          .to receive(:content_security_policy_nonce_generator).and_return(nil)
+        plain = document("/streaming-demo/show").body
+        expect(plain).not_to include("nonce=")
+        expect(plain.scan(/<script\b[^>]*>/).length).to eq(scripts.length)
+      end
+
       # Story 19-2 (AC20) — that page was not streamed, and nothing said so: a
       # warning, once per process, naming the action and the proxy's line.
       it "says once that an action declared to stream got a request over HTTP/1.0", :aggregate_failures do

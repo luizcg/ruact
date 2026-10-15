@@ -18,6 +18,8 @@ const rails = {
     HARNESS_IN_PLACE: process.env.HARNESS_IN_PLACE ?? "",
     HARNESS_TIMEOUT: process.env.HARNESS_TIMEOUT ?? "",
     HARNESS_ASYNC: process.env.HARNESS_ASYNC ?? "",
+    HARNESS_CSP: process.env.HARNESS_CSP ?? "",
+    HARNESS_CSP_PERTURB: process.env.HARNESS_CSP_PERTURB ?? "",
     ...(process.env.DATABASE_URL ? { DATABASE_URL: process.env.DATABASE_URL } : {}),
   },
   reuseExistingServer: false,
@@ -33,7 +35,7 @@ const vite = {
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: process.env.HARNESS_IN_PLACE ? ["deferred.spec.mjs"] : process.env.HARNESS_DB === "postgres" ? ["00-warm-up.spec.mjs", "postgres.spec.mjs"] : ["00-warm-up.spec.mjs", "deferred.spec.mjs", "lifecycle.spec.mjs", "navigation.spec.mjs", "failures.spec.mjs", "placement.spec.mjs", "forms.spec.mjs", "isolation.spec.mjs", "leaving.spec.mjs", "transactions.spec.mjs", "middleware.spec.mjs", "caching.spec.mjs"],
+  testMatch: process.env.HARNESS_IN_PLACE ? ["deferred.spec.mjs"] : process.env.HARNESS_CSP ? ["00-warm-up.spec.mjs", "csp.spec.mjs"] : process.env.HARNESS_DB === "postgres" ? ["00-warm-up.spec.mjs", "postgres.spec.mjs"] : ["00-warm-up.spec.mjs", "deferred.spec.mjs", "lifecycle.spec.mjs", "navigation.spec.mjs", "failures.spec.mjs", "placement.spec.mjs", "forms.spec.mjs", "isolation.spec.mjs", "leaving.spec.mjs", "transactions.spec.mjs", "middleware.spec.mjs", "caching.spec.mjs"],
   workers: 1,
   fullyParallel: false,
   retries: 0,
