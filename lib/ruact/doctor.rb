@@ -490,8 +490,9 @@ module Ruact
 
       # Story 19-2 (AC20) — the doctor sees no request: what it can say is
       # where a page that streams silently does not.
-      [:pass, "#{message}; #{pluralize_count(declaring, 'controller')} #{declaring == 1 ? 'declares' : 'declare'} " \
-              "ruact_streaming — behind a proxy, the app must be reached over HTTP/1.1, or those pages are sent whole",
+      [:pass, "#{message}; #{pluralize_count(declaring, 'controller')} #{declaring == 1 ? 'streams' : 'stream'} " \
+              "(ruact_streaming or ActionController::Live) — behind a proxy, the app must be reached over " \
+              "HTTP/1.1 (nginx: `proxy_http_version 1.1;`), or those pages are sent whole",
        PROXY_HTTP11]
     end
 
@@ -501,11 +502,11 @@ module Ruact
                    "(the app logs it once)."
     private_constant :PROXY_HTTP11
 
-    # Controller files that declare `ruact_streaming`. Reads source, as
-    # {#island_controllers} does.
+    # Controller files that declare `ruact_streaming` or include
+    # `ActionController::Live`. Reads source, as {#island_controllers} does.
     def streaming_controllers
       Dir.glob(Rails.root.join("app", "controllers", "**", "*.rb").to_s).select do |file|
-        File.read(file).match?(/^\s*ruact_streaming\b/)
+        File.read(file).match?(/^\s*(ruact_streaming\b|include\s+ActionController::Live\b)/)
       end
     end
 

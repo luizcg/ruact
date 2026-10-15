@@ -1106,6 +1106,18 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(flight("/streaming-demo/show").headers["ETag"]).to be_nil
       end
 
+      # Review 19-2b R1 — an action's own validator (`fresh_when`) already keeps
+      # Rack::ETag away, and conditional GET needs it: it is left as it is.
+      it "leaves an ETag or a Last-Modified the action set", :aggregate_failures do
+        stub_const("Ruact::Controller::Streaming::RACK_ETAG_BUFFERS", true)
+        own = { "ETag" => 'W/"the-app"' }
+        Ruact::Controller::Streaming.keep_unbuffered(own)
+        expect(own).to eq("ETag" => 'W/"the-app"')
+        dated = { "Last-Modified" => "Wed, 14 Oct 2026 10:00:00 GMT" }
+        Ruact::Controller::Streaming.keep_unbuffered(dated)
+        expect(dated.keys).to eq(["Last-Modified"])
+      end
+
       # Story 19-2 (AC21) — an app whose CSP allows scripts by nonce: every
       # script ruact writes carries the request's nonce, the rows of each
       # boundary included; without a generator, not a byte changes.
@@ -1134,15 +1146,15 @@ module Ruact # rubocop:disable Style/OneClassPerFile
           get "/streaming-demo/show"
           get "/streaming-demo/show"
         end
-        line = "[ruact] ControllerRequestSpecSupport::StreamingDemoController#show is declared with ruact_streaming"
+        line = "[ruact] ControllerRequestSpecSupport::StreamingDemoController#show streams (ruact_streaming"
         expect(log.scan(line).length).to eq(1)
         expect(log).to include("proxy_http_version 1.1;")
         expect(log).to match(/WARN/)
 
         # Over HTTP/1.1 it streams; an action not declared is not concerned.
         Ruact::Controller::Streaming.reset_unstreamed_note!
-        expect(with_log { read_streamed("/streaming-demo/show") }).not_to include("declared with ruact_streaming")
-        expect(with_log { get "/streaming-demo/edit" }).not_to include("declared with ruact_streaming")
+        expect(with_log { read_streamed("/streaming-demo/show") }).not_to include("came over HTTP/1.0")
+        expect(with_log { get "/streaming-demo/edit" }).not_to include("came over HTTP/1.0")
       end
 
       # Review R3 — HTTP/1.0 (nginx's default to its upstream, Rack::Test): Live

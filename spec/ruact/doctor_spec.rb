@@ -760,8 +760,15 @@ end
       it "names the proxy's HTTP/1.1, with the nginx line to set", :aggregate_failures do
         status, msg, remediation = doctor.send(:check_streaming)
         expect(status).to eq(:pass)
-        expect(msg).to include("1 controller declares ruact_streaming").and include("HTTP/1.1")
+        expect(msg).to include("1 controller streams").and include("proxy_http_version 1.1;")
         expect(remediation).to include("proxy_http_version 1.1;")
+      end
+
+      it "counts a controller that includes ActionController::Live itself" do
+        File.write(tmpdir.join("app", "controllers", "events_controller.rb"),
+                   "class EventsController < ApplicationController\n  include ActionController::Live\nend\n")
+        _, msg = doctor.send(:check_streaming)
+        expect(msg).to include("2 controllers stream")
       end
 
       it "carries the remediation into --json" do
