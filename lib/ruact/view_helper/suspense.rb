@@ -44,6 +44,8 @@ module Ruact
 
         owner = respond_to?(:controller) ? controller : nil
         return unless owner.respond_to?(:action_name) && owner.respond_to?(:logger)
+        # Declared, and answering a request it cannot stream to (HTTP/1.0).
+        return if owner.class.respond_to?(:ruact_streaming?) && owner.class.ruact_streaming?(owner.action_name)
 
         where = location ? " (#{location.path.delete_prefix("#{Rails.root}/")}:#{location.lineno})" : ""
         owner.logger&.warn(

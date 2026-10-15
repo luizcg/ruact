@@ -182,8 +182,11 @@ module Ruact
                                      development: Flight::Renderer.development_default)
       # Story 19-1 — in an action that streams, the first load and a
       # navigation alike, each `<Suspense>`'s content renders after the shell
-      # is sent: the view keeps its blocks instead of running them.
-      streaming = self.class.ruact_streaming?(action_name)
+      # is sent: the view keeps its blocks instead of running them. Only when
+      # the response really is Live's: on HTTP/1.0 (nginx's default to its
+      # upstream) Live gives an ordinary response, which the server sends as
+      # soon as anything is written — the page then renders whole, in place.
+      streaming = self.class.ruact_streaming?(action_name) && response.is_a?(ActionController::Live::Response)
 
       # Allocate a per-render context and expose it to the view via a normal
       # (non-`@_`-prefixed) instance variable on the controller. Rails 8's

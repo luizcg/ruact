@@ -651,11 +651,9 @@ module Ruact # rubocop:disable Style/OneClassPerFile
     let(:app_class) { ControllerRequestSpecSupport.app_class }
     let(:app)       { app_class.instance }
 
-    # Reads the whole body, then closes it, as a client does. Through
-    # Rack::Test a page whose block ran 0.3 s came back with its shell only:
-    # the body was closed while the action was still writing, and under Live
-    # closing is "the client left" (Story 19-1 — a page that streams renders
-    # its blocks after the shell).
+    # Reads the whole body, then closes it, as a client does, over HTTP/1.1.
+    # Rack::Test speaks HTTP/1.0, where Live gives an ordinary response and a
+    # page renders whole, without streaming (Story 19-1, review R3).
     def read_streamed(path, headers = {})
       status, response_headers, body = app.call(Rack::MockRequest.env_for(path, headers))
       read = +""
@@ -1035,6 +1033,22 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(response.status).to eq(200)
         expect(response.headers["X-Accel-Buffering"]).to eq("no")
         expect(events).to eq([[:shell, false], [:one, true], [:two, true], [:inner, true]])
+      end
+
+      # Review R3 — HTTP/1.0 (nginx's default to its upstream, Rack::Test): Live
+      # answers with an ordinary response, so the page renders whole, in place,
+      # with its blocks' content, and no development note asks to declare what
+      # is declared.
+      it "renders the whole page in place over HTTP/1.0", :aggregate_failures do
+        allow(Rails.env).to receive(:development?).and_return(true)
+        log = with_log { get "/streaming-demo/quiet", {}, { "HTTP_ACCEPT" => "text/x-component" } }
+        expect(last_response.status).to eq(200)
+        expect(last_response.body).to include("a slow block that writes nothing")
+        expect(last_response.body).not_to include("ruact:suspense-error")
+        expect(log).not_to include("does not stream")
+        get "/streaming-demo/show"
+        expect(events.map(&:last).uniq).to eq([false])
+        expect(last_response.body).to include("Lazy text")
       end
 
       it "answers a page that left nothing for later as one that does not stream", :aggregate_failures do

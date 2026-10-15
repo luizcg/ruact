@@ -620,6 +620,11 @@ What the gem does, where it differs from the prototype of 19-0:
   thread) both decide by the action's name, which `Controller.action(:name)`
   passes along in the request. The prototype read the route, which an endpoint
   built with `.action` does not name.
+- **HTTP/1.0.** Live answers it with an ordinary response, which the server
+  sends whole as soon as anything is written; the gem defers only when the
+  response is Live's, so over HTTP/1.0 (nginx's default to its upstream) the
+  page renders in place, whole. Found in review R3: a deferred render there
+  sent the shell alone.
 - **Order.** A `<Suspense>` inside a block is queued behind the boundaries the
   page already had (the prototype did the same): blocks run one at a time,
   each queue in page order.
