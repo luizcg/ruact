@@ -118,7 +118,7 @@ module ControllerRequestSpecSupport
         get "/suspense-demo/show", to: "controller_request_spec_support/suspense_demo#show"
         get "/suspense-live-demo/show", to: "controller_request_spec_support/suspense_live_demo#show"
         # Story 19-1 — `ruact_streaming`.
-        %w[show edit plain raising slow delayed late_write leased quiet].each do |action|
+        %w[show edit plain raising slow delayed late_write leased quiet after_raises].each do |action|
           get "/streaming-demo/#{action}", to: "controller_request_spec_support/streaming_demo##{action}"
         end
         # An endpoint whose route names no action.
@@ -287,7 +287,7 @@ module ControllerRequestSpecSupport
   class StreamingDemoController < ActionController::Base
     include Ruact::Controller
 
-    ruact_streaming only: %i[show plain raising slow delayed late_write leased quiet]
+    ruact_streaming only: %i[show plain raising slow delayed late_write leased quiet after_raises]
 
     append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
 
@@ -304,6 +304,11 @@ module ControllerRequestSpecSupport
     def delayed = ruact_render
     def late_write = ruact_render
     def quiet = ruact_render
+
+    # Story 19-2 (AC6) — an after_action that raises once the page was sent.
+    after_action(only: :after_raises) { raise ArgumentError, "after the page" }
+
+    def after_raises = ruact_render(template: "controller_request_spec_support/streaming_demo/quiet")
 
     # A connection taken outside a block, as `Model.connection` takes one.
     def leased
@@ -1167,6 +1172,19 @@ module Ruact # rubocop:disable Style/OneClassPerFile
           expect(log).to include("streaming_demo/show.html.erb:4")
           expect(log).to include("ruact_streaming only: :edit")
         end
+      end
+
+      # Story 19-2 (AC6.2) — the page was sent whole; Live only logs an error
+      # raised after the response started, so the app's error reporting would
+      # never hear of it.
+      it "reports an after_action that raises once the page was sent", :aggregate_failures do
+        allow(Rails.error).to receive(:report).and_call_original
+        response = document("/streaming-demo/after_raises")
+        expect(response.status).to eq(200)
+        expect(response.body).to include("a slow block that writes nothing")
+        expect(response.body).not_to include("500.html")
+        expect(Rails.error).to have_received(:report)
+          .with(an_instance_of(ArgumentError), hash_including(source: "ruact.stream"))
       end
 
       it "says nothing about an action that does not stream outside development" do

@@ -221,6 +221,14 @@ module Ruact
       # support runs Live inline).
       def process_action(*)
         super
+      rescue StandardError => e
+        # Story 19-2 (AC6) — raised once the page was sent (an `after_action`):
+        # Live only logs what is raised after the response started, so the
+        # app's error reporting would never hear of it.
+        if @__ruact_streamed && defined?(Rails) && Rails.respond_to?(:error)
+          Rails.error.report(e, handled: false, severity: :error, source: "ruact.stream")
+        end
+        raise
       ensure
         __ruact_check_writes_after_stream
         __ruact_release_connections if __ruact_on_live_thread?

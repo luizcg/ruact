@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **A client component or a `<Suspense>` inside a `cache` block no longer comes back as another one.** A fragment cache stores the HTML a render produced, with the markers that render gave its components and blocks; read back in another render, a marker could name one of *that* render's components (the page showed the wrong component, with its props) or another boundary's block (a `<Suspense>` showed another one's content). Every marker now carries the id of the render that wrote it. A client component read from the cache raises `Ruact::HtmlConverterError`, naming the `cache` and what to do (keep the component outside it); a `<Suspense>` read from the cache gets an error row for that boundary only, saying the same, and the rest of the page renders.
+- **An exception raised after a streamed page was sent (an `after_action`) reaches `Rails.error`.** `ActionController::Live` only logs what is raised once the response has started, so an app's error reporting never heard of it; ruact reports it (`source: "ruact.stream"`). The page in the browser is unchanged.
 
 ## [0.0.20] - 2026-10-14
 

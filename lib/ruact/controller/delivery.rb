@@ -97,6 +97,7 @@ module Ruact
       # not sent stays pending, for the browser's transport to label.
       def __ruact_stream(run, headers, first, last = nil)
         headers.each { |name, value| response.headers[name] = value }
+        @__ruact_streamed = true
         stream = response.stream
         begin
           stream.write(first)
