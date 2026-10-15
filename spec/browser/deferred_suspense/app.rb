@@ -265,10 +265,13 @@ class PagesController < ApplicationController
   def flaky; end
   def errors; end
   def inside; end
+  def mixed; end
   def after_write; end
 
+  # Story 19-2 (AC12) — who, where and when come from the request, so two at
+  # once can differ.
   def context
-    Current.user = "ada"
+    Current.user = params[:user] || "ada"
   end
 
   # A slow query inside the block: a lazy relation, loaded where the view walks it.
@@ -279,9 +282,9 @@ class PagesController < ApplicationController
   private
 
   def scoped(&)
-    I18n.with_locale(:pt) do
-      Time.use_zone("Tokyo") do
-        Tenant.with("acme", &)
+    I18n.with_locale(params[:locale] || :pt) do
+      Time.use_zone(params[:zone] || "Tokyo") do
+        Tenant.with(params[:tenant] || "acme", &)
       end
     end
   end
@@ -327,7 +330,7 @@ end
 
 Rails.application.routes.draw do
   root "pages#home"
-  %w[plain slow two nested error context db late_cookie leased flaky errors after_write inside].each do |page|
+  %w[plain slow two nested error context db late_cookie leased flaky errors after_write inside mixed].each do |page|
     get page, to: "pages##{page}"
   end
   post "__gate/reset", to: "probe#reset"

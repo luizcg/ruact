@@ -30,7 +30,7 @@ const vite = {
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: process.env.HARNESS_IN_PLACE ? ["deferred.spec.mjs"] : ["deferred.spec.mjs", "lifecycle.spec.mjs", "navigation.spec.mjs", "failures.spec.mjs", "placement.spec.mjs", "forms.spec.mjs"],
+  testMatch: process.env.HARNESS_IN_PLACE ? ["deferred.spec.mjs"] : ["deferred.spec.mjs", "lifecycle.spec.mjs", "navigation.spec.mjs", "failures.spec.mjs", "placement.spec.mjs", "forms.spec.mjs", "isolation.spec.mjs"],
   workers: 1,
   fullyParallel: false,
   retries: 0,

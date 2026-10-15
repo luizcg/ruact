@@ -1,0 +1,4 @@
+<h1 id="shell">Mixed</h1>
+<Suspense fallback="Loading fast one…"><p id="f1">fast one</p></Suspense>
+<Suspense fallback="Loading slow…"><p id="s"><%= Gate.wait("s") %></p></Suspense>
+<Suspense fallback="Loading fast two…"><p id="f2">fast two</p></Suspense>
