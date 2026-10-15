@@ -295,6 +295,13 @@ class PagesController < ApplicationController
   ruact_streaming except: :plain
 
   around_action :scoped, only: :context
+  # Story 19-2 (AC16.1) — the whole action in a transaction, as some apps do.
+  around_action(only: :tx_around) do |_controller, action|
+    Item.transaction do
+      action.call
+      Harness::Events.add("transaction about to commit")
+    end
+  end
   # Story 19-2 (AC6) — an after_action that writes once the page was sent.
   after_action(only: :after_write) do
     cookies[:after] = "1"
@@ -318,6 +325,26 @@ class PagesController < ApplicationController
   def pg_slow; end
   def pg_statement; end
   def pg_transaction; end
+  def tx_around; end
+  def tx_block; end
+
+  # Story 19-2 (AC16.3) — a transaction begun on the connection and never
+  # closed, streamed (this action) and not (`tx_left_open_plain`).
+  def tx_left_open
+    Item.connection.begin_db_transaction
+    Item.connection.execute("INSERT INTO items (name) VALUES ('left open')")
+  end
+
+  def tx_left_open_plain
+    Item.connection.begin_db_transaction
+    Item.connection.execute("INSERT INTO items (name) VALUES ('left open')")
+    render json: { ok: true }
+  end
+
+  # Story 19-2 (AC16.4) — the connection taken by the action, and a block's query.
+  def leased_block
+    Item.connection.select_value("SELECT 1")
+  end
 
   # Story 19-2 (AC15) — two queries started early, each held at its own gate.
   def pg_async
@@ -398,6 +425,24 @@ class ProbeController < ActionController::API
     head :no_content
   end
 
+  # Story 19-2 (AC16) — what the database holds: the items, and whether a
+  # connection the pool hands out now sees an open transaction.
+  def db_state
+    connection = ActiveRecord::Base.connection_pool.checkout
+    render json: { names: Item.pluck(:name), open_transaction_on_checkout: connection.raw_connection.transaction_active? }
+  ensure
+    ActiveRecord::Base.connection_pool.checkin(connection) if connection
+  end
+
+  # Story 19-2 (AC16.3) — undo what a scenario left open, so the next one can write.
+  def db_rollback
+    ActiveRecord::Base.connection_pool.connections.each do |connection|
+      raw = connection.raw_connection
+      raw.rollback if raw.respond_to?(:transaction_active?) && raw.transaction_active?
+    end
+    head :no_content
+  end
+
   # A quick query, timed by the test: does it wait for one left running?
   def pg_quick
     render json: { count: Item.count }
@@ -407,7 +452,7 @@ end
 Rails.application.routes.draw do
   root "pages#home"
   %w[plain slow two nested error context db late_cookie leased flaky errors after_write inside mixed pg_slow pg_statement pg_transaction
-     pg_async].each do |page|
+     pg_async tx_around tx_block tx_left_open tx_left_open_plain leased_block].each do |page|
     get page, to: "pages##{page}"
   end
   post "__gate/reset", to: "probe#reset"
@@ -419,6 +464,8 @@ Rails.application.routes.draw do
   post "__pg/:gate/hold", to: "probe#pg_hold"
   post "__pg/:gate/release", to: "probe#pg_release"
   get "__pg/quick", to: "probe#pg_quick"
+  get "__db", to: "probe#db_state"
+  post "__db/rollback", to: "probe#db_rollback"
   get "items/new", to: "items#new"
   post "items", to: "items#create"
   post "items/in_place", to: "items#create_in_place"
