@@ -78,14 +78,15 @@ READ IT instead of simulating the name generation. Regenerate after routes/queri
    `<Card title={@t}>...</Card>` passes the ERB between its tags to the
    component as `children`. An unclosed or stray tag fails LOUDLY with a
    `PreprocessorError` naming file:line. `<Suspense fallback="...">` pairs too;
-   under `ruact_streaming` its content runs AFTER the page is sent, so status,
-   redirect, cookies, session and flash belong in the controller, not inside it.
+   under `ruact_streaming` its content runs AFTER the page is sent: status,
+   redirect, cookies, session, flash, `content_for` and locale/tenant/DB-role
+   scopes belong in the controller (`around_action`), not inside it or in a
+   middleware; a `cache` block goes inside a `<Suspense>`, never around one.
    In a loop of items holding components, give each item a `data-react-key`
    (the record's id): React matches them by position otherwise, silently.
 2. **`{}` props are Ruby, not JavaScript.** `<Badge label={@post.title} />`
-   evaluates `@post.title` as a Ruby expression in the ERB. No JS ternaries,
-   no `{...spread}`. A quoted value (`title="Hi"`) is a
-   plain string and a bare attribute is `true`, as in JSX.
+   evaluates `@post.title` as a Ruby expression: no JS ternaries, no `{...spread}`.
+   A quoted value (`title="Hi"`) is a plain string; a bare attribute is `true`.
 3. **One action, two response shapes.** A `Ruact::Server` non-GET action
    answers JSON — its instance variables, or `204`, or `{"$redirect": path}` —
    when the request's `Accept` header is exactly `application/json`, which is
@@ -144,8 +145,7 @@ duration, or a deliberate `expires_in: nil` for a non-expiring token.
 - `bin/rails ruact:routes -- --json` — the accessor/route table (each accessor's
   name, kind, verb, path, params) as JSON, from the same route table codegen
   reads; bare `ruact:routes` prints a compact human table.
-- Both `--json` outputs are EXPERIMENTAL — the shape may change; gate on their
-  `schema_version` field (currently `0`), do not treat it as a stable contract.
+- Both `--json` outputs are EXPERIMENTAL: gate on `schema_version` (now `0`).
 - `bin/rails ruact:server_functions:generate` — regenerates the TS module;
   exits 1 on a naming collision or an invalid name.
 - `bin/dev` — boots Rails AND Vite (both required: Vite serves the client components).

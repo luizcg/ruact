@@ -31,7 +31,9 @@ the test drives the gates through a listener of its own (`control.rb`, port
 When nginx is on the PATH (the CI runner has it), the proof also runs behind
 it (`HARNESS_NGINX=1`, `e2e/nginx.spec.mjs`, port 4192): nginx's defaults,
 `proxy_http_version 1.1`, and gzip on top, each with its own configuration in
-`tmp/nginx/`. Written to `results/nginx-<env>.json`.
+`tmp/nginx/`. Written to `results/nginx-<env>.json`; the committed ones come
+from the CI runner (nginx 1.24.0, run 38765200915), the step "What ran" prints
+each run's.
 
 `./run` writes `results/browser.md`, one row per run. What a scenario measures
 rather than requires goes to `results/<name>-<env>.json`; a run with another

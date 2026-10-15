@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Every script ruact writes carries the request's CSP nonce.** An app whose Content Security Policy allows scripts by nonce (`config.content_security_policy_nonce_generator`, no `'unsafe-inline'`) blocked the inline `__FLIGHT_DATA` script, the development module that loads Vite, and — on a page that streams — each `<Suspense>`'s rows: the page never mounted, or its fallbacks never resolved. The nonce is now on all of them, and on the entry `<script src>`. Without a nonce generator not a byte changes. In development React's own Flight client tries `eval()` for its debugging features and goes on without it; a policy without `'unsafe-eval'` reports that refusal in development only.
 
+- **The `AGENTS.md` that `rails generate ruact:install` writes names what a `<Suspense>` that streams cannot hold.** Besides status, redirect, cookies, session and flash: `content_for`, and the locale, tenant or database role a middleware scopes (they belong in an `around_action`); and a `cache` block goes inside a `<Suspense>`, never around one.
+
 ### Fixed
 
 - **On Rack 2, a page that streams was held until its last `<Suspense>`.** Rack 2's `Rack::ETag` (in every Rails app's middleware) reads a 200 body whole to digest it, unless the response already has an `ETag` or a `Last-Modified` — `Cache-Control: no-cache` does not stop it, contrary to what ruact assumed. Rails 7.2 through 8.1 accept Rack 2.2, so an app on it got no streaming at all: no shell, no fallback, the page at the end. On Rack 2 a streamed response now carries a weak `ETag` of its own, new for every response, so no `If-None-Match` ever matches it. Measured with Rack 2.2.24. Rack 3 is unchanged.
