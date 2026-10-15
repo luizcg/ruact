@@ -55,11 +55,17 @@ module Harness
     @calls = 0
 
     def self.arm
-      @mutex.synchronize { @armed = true; @calls = 0 }
+      @mutex.synchronize do
+        @armed = true
+        @calls = 0
+      end
     end
 
     def self.clear
-      @mutex.synchronize { @armed = false; @calls = 0 }
+      @mutex.synchronize do
+        @armed = false
+        @calls = 0
+      end
     end
 
     def self.now?
