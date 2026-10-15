@@ -155,6 +155,9 @@ other_i18n() {
   done
 }
 
+# What this run wrote is newer than this stamp (CI prints only that).
+mkdir -p tmp && touch tmp/run-started
+
 case "${1:-all}" in
   # On CI PostgreSQL is required (AC24.1): a runner without it fails the run.
   all)      setup; browser

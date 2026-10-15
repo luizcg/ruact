@@ -1,4 +1,4 @@
 <h1 id="shell">Mixed</h1>
-<Suspense fallback="Loading fast one…"><p id="f1">fast one</p></Suspense>
-<Suspense fallback="Loading slow…"><p id="s"><%= Gate.wait("s") %></p></Suspense>
-<Suspense fallback="Loading fast two…"><p id="f2">fast two</p></Suspense>
+<Suspense fallback="Loading fast one…"><% Harness::Events.add("block:f1") %><p id="f1">fast one</p></Suspense>
+<Suspense fallback="Loading slow…"><% Harness::Events.add("block_start:s") %><p id="s"><%= Gate.wait("s") %></p><% Harness::Events.add("block_end:s") %></Suspense>
+<Suspense fallback="Loading fast two…"><% Harness::Events.add("block:f2") %><p id="f2">fast two</p></Suspense>

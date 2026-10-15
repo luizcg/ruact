@@ -5,8 +5,8 @@
 // Measured (results/middleware-<env>.json): the database role is gone; the
 // tenant is still there, copied to the action's thread when it started. The
 // locale is not to be relied on: with i18n before 1.15 the block loses it, and
-// with 1.15 even the shell showed another value once the pool's threads had
-// served other requests (ADR D3) — so it is recorded, not asserted. The fix for
+// with 1.15 the shell and the block showed it in some runs and not in others,
+// the cause not established (ADR D3) — so it is recorded, not asserted. The fix for
 // all of them is to scope in the controller (around_action), proved by "what a
 // deferred block sees".
 import fs from "node:fs";

@@ -1,0 +1,13 @@
+{
+  "while_slow_waits": [
+    "block:f1",
+    "block_start:s"
+  ],
+  "at_the_end": [
+    "block:f1",
+    "block_start:s",
+    "block_end:s",
+    "block:f2",
+    "action done:mixed"
+  ]
+}

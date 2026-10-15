@@ -624,6 +624,51 @@ describe("leaving a document that is still loading", () => {
     expect(fetch).toHaveBeenCalled();
   });
 
+  it("stops it for a form the router submits", async () => {
+    globalThis.document.readyState = "loading";
+    let stoppedBeforeFetch = null;
+    globalThis.fetch.mockImplementation(async () => {
+      stoppedBeforeFetch = window.stop.mock.calls.length === 1;
+      return respond({ body: '0:"next"\n' });
+    });
+    submit(dom.listeners, new dom.FakeForm({ action: "/people", method: "post" }));
+    await settle();
+    expect(stoppedBeforeFetch).toBe(true);
+  });
+
+  // Review 19-2a R3 — a `#anchor` on the page still loading: not leaving it.
+  it("leaves the document loading for a popstate that only changes the hash", async () => {
+    globalThis.document.readyState = "loading";
+    location._set("/products/1#reviews");
+    dom.listeners.window.popstate.forEach((fn) => fn({}));
+    await settle();
+    expect(window.stop).not.toHaveBeenCalled();
+  });
+
+  // Review 19-2a R3 — the navigation that stopped the document failed: the user
+  // is still on that page, whose boundaries would keep their fallback.
+  it("fetches the page again when the navigation that stopped it fails", async () => {
+    globalThis.document.readyState = "loading";
+    globalThis.fetch
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValue(respond({ body: '0:"again"\n' }));
+    submit(dom.listeners, new dom.FakeForm({ action: "/people", method: "post" }));
+    await settle();
+    await settle();
+    expect(window.stop).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[1][0]).toBe("/products/1");
+  });
+
+  it("does not fetch the page again after a failure when nothing was stopped", async () => {
+    globalThis.document.readyState = "complete";
+    globalThis.fetch.mockRejectedValue(new TypeError("Failed to fetch"));
+    submit(dom.listeners, new dom.FakeForm({ action: "/people", method: "post" }));
+    await settle();
+    await settle();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   // revalidate() stays on the page: stopping the document would also fail the
   // page's other requests in flight (a server function, a useQuery).
   it("leaves the document loading for revalidate()", async () => {

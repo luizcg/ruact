@@ -26,7 +26,10 @@ const outcomes = {};
 test.afterAll(() => {
   const file = resultFile("navigation");
   fs.writeFileSync(file, JSON.stringify(outcomes, null, 2) + "\n");
-  fs.appendFileSync(file.replace(/\.json$/, ".history.jsonl"), JSON.stringify({ at: new Date().toISOString(), ...outcomes }) + "\n");
+  // A run of every scenario only: a focused run would record part of one.
+  if (["AC1", "AC2", "AC4.2"].every((name) => name in outcomes)) {
+    fs.appendFileSync(file.replace(/\.json$/, ".history.jsonl"), JSON.stringify({ at: new Date().toISOString(), ...outcomes }) + "\n");
+  }
 });
 
 // What the server did with the request the router aborted, once its first
@@ -36,6 +39,12 @@ async function abortedRequestOutcome(request, startsOfB) {
     .poll(async () => (await clientLeft(request)).length > 0 || count(await events(request), "block_start:b") >= startsOfB)
     .toBe(true);
   return (await clientLeft(request)).length > 0 ? "stopped: the client left" : "rendered its next block";
+}
+
+// Once the document has ended and React has rendered what arrived.
+async function settled(page) {
+  await page.waitForFunction(() => document.readyState === "complete");
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0))));
 }
 
 // What a page left behind must not do: report an error.
@@ -76,6 +85,13 @@ test("AC1 — a navigation that replaces one still pending: the new page, and th
   // Whichever way the server went, nothing is left holding a connection.
   await open(request, "b");
   await expect.poll(async () => (await state(request)).pool.busy).toBe(0);
+  // And once the aborted response could have ended: still nothing of it.
+  await expect.poll(async () => count(await events(request), "action done:two")).toBe(1);
+  await settled(page);
+  await expect(page.locator("#a")).toHaveCount(0);
+  await expect(page.locator("#b")).toHaveCount(0);
+  await expect(page.locator("#ruact-dev-overlay")).toHaveCount(0);
+  expect(errors.join("\n")).not.toContain("[ruact] Server error");
 });
 
 test("AC2 — the same page twice: the first request is cut, the second renders once", async ({ page, request }) => {
@@ -172,8 +188,11 @@ test("AC4.3 — revalidate() while the first load's document is open", async ({ 
   await open(request, "b");
   await expect(page.locator("#b")).toHaveText("open:b");
   await expect(page.locator("#revalidate")).toHaveAttribute("data-state", "resolved");
-  await expect(page.locator("#b")).toHaveCount(1);
   await expect.poll(async () => count(await events(request), "block_start:b")).toBe(2);
+  // Both responses have ended, the document too: then what is on the page.
+  await expect.poll(async () => count(await events(request), "action done:two")).toBe(2);
+  await settled(page);
+  await expect(page.locator("#b")).toHaveCount(1);
   expect(await events(request)).not.toContain(expect.stringContaining("the client left"));
   expect(errors.join("\n")).not.toContain("[ruact] Server error");
 });

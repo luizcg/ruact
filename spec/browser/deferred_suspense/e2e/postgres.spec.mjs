@@ -1,9 +1,10 @@
 // Story 19-2 (AC13–AC15) — PostgreSQL (`./run pg`): a query held at an
 // advisory lock the test holds (`harness_gate(n)`), read in pg_stat_activity.
 // Run with HARNESS_TIMEOUT=5; the load_async case runs again with HARNESS_ASYNC=1.
+import fs from "node:fs";
 import net from "node:net";
 import { test, expect } from "@playwright/test";
-import { state, events, reset } from "./support.mjs";
+import { state, events, reset, resultFile } from "./support.mjs";
 
 const ASYNC = process.env.HARNESS_ASYNC === "1";
 
@@ -99,6 +100,8 @@ test("AC15.1/15.2 — two load_async queries run at once while the shell is on s
   page.goto("/pg_async", { waitUntil: "commit" });
   await atGate(request, 2);
   await expect(page.locator("#shell")).toHaveText("Two queries at once");
+  // AC15.4 — written down: both queries waiting at once, the shell on screen.
+  const overlap = await pg(request);
 
   // The second query has ended; its boundary still waits for the first (D2).
   await release(request, 2);
@@ -111,6 +114,7 @@ test("AC15.1/15.2 — two load_async queries run at once while the shell is on s
   await expect(page.locator("#first")).toHaveText("2 first");
   await expect(page.locator("#second")).toHaveText("2 second");
   await expect.poll(async () => (await state(request)).pool.busy).toBe(0);
+  fs.writeFileSync(resultFile("load-async"), JSON.stringify({ with_the_shell_on_screen: overlap, events: await events(request) }, null, 2) + "\n");
 });
 
 test("AC15.3 — without an executor, load_async runs in the controller: no shell until the queries ran", async ({ page, request }) => {

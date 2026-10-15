@@ -127,6 +127,7 @@ test("what a deferred block sees of the request", async ({ page, request }) => {
   const shell = await read("in-shell");
   const block = await read("in-block");
   const lazy = { shell: await page.locator("#shell-lazy").textContent(), block: await page.locator("#block-lazy").textContent() };
+  await expect.poll(async () => (await events(request)).includes("action done:context")).toBe(true);
   const order = await events(request);
   fs.writeFileSync(resultFile("context"), JSON.stringify({ shell, block, lazy, events: order }, null, 2) + "\n");
 

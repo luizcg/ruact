@@ -240,7 +240,7 @@ jobs:
         # an aborted fetch, what stopping a document stops) on this runner.
         run: |
           cat results/browser.md || true
-          for f in results/navigation-*.json results/leaving-*.json; do echo "== $f"; cat "$f"; done || true
+          for f in $(find results -name '*.json' -newer tmp/run-started | sort); do echo "== $f"; cat "$f"; done || true
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

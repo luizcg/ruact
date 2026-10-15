@@ -1,7 +1,8 @@
 // Story 19-2 (AC12) — two requests at once each see their own; fast and slow
 // boundaries on one page.
+import fs from "node:fs";
 import { test, expect } from "@playwright/test";
-import { waitingAt, open, reset, fallback } from "./support.mjs";
+import { waitingAt, open, reset, fallback, events, resultFile } from "./support.mjs";
 
 test.beforeEach(async ({ request }) => reset(request));
 
@@ -38,7 +39,13 @@ test("AC12.2 — fast, slow, fast: the first fast one comes with the shell, the 
   await expect(page.getByText("Loading fast two…", { exact: true })).toBeVisible();
   await expect(page.locator("#f2")).toHaveCount(0);
 
+  // The order the server ran them in, written down (AC12.2).
+  const beforeSlow = await events(request);
+  expect(beforeSlow).toEqual(["block:f1", "block_start:s"]);
+
   await open(request, "s");
   await expect(page.locator("#s")).toHaveText("open:s");
   await expect(page.locator("#f2")).toHaveText("fast two");
+  await expect.poll(async () => (await events(request)).includes("action done:mixed")).toBe(true);
+  fs.writeFileSync(resultFile("mixed"), JSON.stringify({ while_slow_waits: beforeSlow, at_the_end: await events(request) }, null, 2) + "\n");
 });

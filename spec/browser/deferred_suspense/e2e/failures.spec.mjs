@@ -45,6 +45,7 @@ for (const how of ["first load", "navigation"]) {
 
 for (const how of ["first load", "navigation"]) {
   test(`AC6.1 — an after_action that writes after the page was sent (${how}): the browser never gets it`, async ({ page, request }) => {
+    const sent = page.waitForResponse((response) => new URL(response.url()).pathname === "/after_write");
     if (how === "navigation") {
       await page.goto("/");
       await page.evaluate(() => {
@@ -58,7 +59,6 @@ for (const how of ["first load", "navigation"]) {
     } else {
       page.goto("/after_write");
     }
-    const sent = page.waitForResponse((response) => new URL(response.url()).pathname === "/after_write");
     await waitingAt(request, { a: 1 });
     await open(request, "a");
     await expect(page.locator("#a")).toHaveText("open:a");

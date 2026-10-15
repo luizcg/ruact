@@ -468,11 +468,10 @@ today: `Cache-Control: no-cache` and `X-Accel-Buffering: no`.
 - **i18n before 1.15**, which kept the locale in a thread variable: by D3's
   second bullet a Live action would then not see a locale set outside it at
   all. *Since 19-2 (`e2e/middleware.spec.mjs`, `./run i18n 1.14.7`):* with
-  1.14.7 a block loses the locale a middleware set; with 1.15 it kept it one
-  request at a time, but even the shell showed another value once the pool's
-  threads had served other requests — each version ran once per environment,
-  and with 1.15.2 the shell showed `en` in one committed run and `pt` in the
-  next, so the locale a middleware set is not to be relied on with either.
+  1.14.7 a block loses the locale a middleware set; with 1.15.2 the shell
+  and the block showed `pt` in some runs and `en` in others (the committed
+  `results/middleware-*.json` of different runs), the cause not established.
+  The locale a middleware set is not to be relied on with either.
   Rails' `DatabaseSelector` (primary and replica, `/role`): the shell reads as
   `reading`, a block that runs later as `writing` — the selector's
   `connected_to` ended when the response started; with the role set in the

@@ -14,7 +14,7 @@ module Ruact
   #   <%= __ruact_component__("LikeButton", { "postId" => @post.id, "initialCount" => 5 }) %>
   #
   # The placeholder is replaced by an HTML comment with a unique token:
-  #   <!-- __RUACT_0__ -->
+  #   <!-- __RUACT_a1b2c3d4_0__ -->
   #
   # A component with children (Story 18-2) keeps its content as ERB, inside a
   # wrapper element HtmlConverter turns into the component's `children`:

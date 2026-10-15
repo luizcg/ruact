@@ -8,7 +8,7 @@ module Ruact
   # Rules:
   # - HTML attributes → React equivalents (class→className, for→htmlFor, etc.)
   # - data-react-key="x" → becomes the React key on the element
-  # - HTML comments matching __RUACT_N__ tokens → replaced by client component refs
+  # - HTML comments matching __RUACT_<render>_<n>__ tokens → replaced by client component refs
   # - Text nodes → plain Ruby strings
   # - Multiple root nodes → wrapped in a Fragment (array)
   # rubocop:disable Metrics/ClassLength
