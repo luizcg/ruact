@@ -88,8 +88,9 @@ csp_perturbation() {
     exit 1
   fi
   grep -q "1 failed" tmp/csp.log
-  grep -q "open:a" tmp/csp.log
-  echo "| a CSP by nonce, rows pushed without it | $env | 1 failed, as it must: the content never arrives |" >>"$BROWSER"
+  grep -q 'Expected: "open:a"' tmp/csp.log
+  node -e 'const r = require("./results/csp-perturbation-'"$env"'.json"); if (!r.refused.some((v) => v.startsWith("script-src"))) process.exit(1)'
+  echo "| a CSP by nonce, rows pushed without it | $env | 1 failed, as it must: the content never arrives, the browser refused the script |" >>"$BROWSER"
 }
 
 browser() {
@@ -105,6 +106,9 @@ browser() {
     scenarios "Puma with 3 threads (\`e2e/threads.spec.mjs\`)" "$env" HARNESS_THREADS=3
     if command -v nginx >/dev/null; then
       scenarios "nginx in front of Puma (\`e2e/nginx.spec.mjs\`)" "$env" HARNESS_NGINX=1
+    elif [ -n "${CI:-}" ]; then
+      echo "nginx is required on CI: none on the PATH" >&2
+      exit 1
     else
       echo "| nginx in front of Puma | $env | not run: no nginx on the PATH |" >>"$BROWSER"
     fi
@@ -202,6 +206,13 @@ other_rack() {
     echo "== Rack $version, $env"
     HARNESS_VARIANT="rack-$version" RAILS_ENV=$env npx playwright test deferred.spec.mjs lifecycle.spec.mjs 2>&1 | tee tmp/playwright.log
     row "the proof and the lifecycle" "$env" tmp/playwright.log
+    echo "== Rack $version without ruact's ETag: the proof must FAIL, $env"
+    if HARNESS_NO_RACK2_ETAG=1 RAILS_ENV=$env npx playwright test deferred.spec.mjs >tmp/rack-etag.log 2>&1; then
+      echo "the proof passed on Rack 2 without ruact's ETag: Rack::ETag no longer buffers, or the proof proves nothing" >&2
+      exit 1
+    fi
+    grep -q "2 failed" tmp/rack-etag.log
+    echo "| the proof without ruact's ETag | $env | 2 failed, as it must: Rack::ETag held the page |" >>"$BROWSER"
   done
 }
 

@@ -327,6 +327,14 @@ if ENV["HARNESS_CSP_PERTURB"] == "1"
   end)
 end
 
+# Story 19-2 (AC19.3) — the Rack 2 perturbation: no ETag of ruact's, so Rack
+# 2's Rack::ETag reads the streamed body whole.
+if ENV["HARNESS_NO_RACK2_ETAG"] == "1"
+  Ruact::Controller::Streaming.singleton_class.prepend(Module.new do
+    def keep_unbuffered(_headers) = nil
+  end)
+end
+
 # The perturbation: the helper renders every <Suspense> in place, as 0.0.19
 # did, though the action still streams.
 if ENV["HARNESS_IN_PLACE"] == "1"

@@ -20,6 +20,15 @@ const VARIANTS = {
   defaults: "",
   "proxy_http_version 1.1": "proxy_http_version 1.1;",
   "proxy_http_version 1.1, gzip on": "proxy_http_version 1.1;\n      gzip on;\n      gzip_types text/html text/x-component;",
+  // What `X-Accel-Buffering: no` (sent by ruact) is worth: told to ignore it,
+  // nginx buffers the response as its defaults say.
+  "proxy_http_version 1.1, X-Accel-Buffering ignored": "proxy_http_version 1.1;\n      proxy_ignore_headers X-Accel-Buffering;",
+};
+// What each variant must show (the gzip one is measured only).
+const EXPECTED = {
+  defaults: false,
+  "proxy_http_version 1.1": true,
+  "proxy_http_version 1.1, X-Accel-Buffering ignored": false,
 };
 
 function startNginx(name, directives) {
@@ -66,8 +75,9 @@ async function shellFirst(page, request, how) {
     page.goto(`${PROXY}/two`, { waitUntil: "commit" }).catch(() => {});
   }
   await waitingAt(request, { a: 1 });
-  // The one wait by time: how long the shell is given to come through the proxy.
-  const early = await fallback(page, "A").waitFor({ state: "visible", timeout: 3_000 }).then(() => true, () => false);
+  // The one wait by time: how long the shell is given to come through the
+  // proxy while the gate is closed — generous, since a closed gate costs nothing.
+  const early = await fallback(page, "A").waitFor({ state: "visible", timeout: 10_000 }).then(() => true, () => false);
   await open(request, "a");
   await open(request, "b");
   await expect(page.locator("#b")).toHaveText("open:b", { timeout: 10_000 });
@@ -90,13 +100,19 @@ for (const [name, directives] of Object.entries(VARIANTS)) {
       measured[name] = { first_load_shell_before_the_gate: document, navigation_shell_before_the_gate: navigation };
       if (name === "defaults") {
         measured[name].ac20_warning_logged = warned;
-        expect({ document, navigation, warned }).toEqual({ document: false, navigation: false, warned: true });
-      } else if (name === "proxy_http_version 1.1") {
-        expect({ document, navigation }).toEqual({ document: true, navigation: true });
+        expect(warned).toBe(true);
       }
+      if (name in EXPECTED) expect({ document, navigation }).toEqual({ document: EXPECTED[name], navigation: EXPECTED[name] });
+    } catch (error) {
+      const log = path.resolve("tmp", "nginx", name.replace(/\W+/g, "-"), "error.log");
+      if (fs.existsSync(log)) console.error(`nginx error.log (${name}):\n${fs.readFileSync(log, "utf8")}`);
+      throw error;
     } finally {
-      nginx.kill("SIGTERM");
-      await new Promise((resolve) => nginx.once("exit", resolve));
+      if (nginx.exitCode === null && nginx.signalCode === null) {
+        const exited = new Promise((resolve) => nginx.once("exit", resolve));
+        nginx.kill("SIGTERM");
+        await exited;
+      }
     }
   });
 }

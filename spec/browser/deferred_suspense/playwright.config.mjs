@@ -24,6 +24,7 @@ const rails = {
     HARNESS_CSP: process.env.HARNESS_CSP ?? "",
     HARNESS_CONTROL_PORT: process.env.HARNESS_THREADS ? String(port + 1) : "",
     HARNESS_CSP_PERTURB: process.env.HARNESS_CSP_PERTURB ?? "",
+    HARNESS_NO_RACK2_ETAG: process.env.HARNESS_NO_RACK2_ETAG ?? "",
     ...(process.env.DATABASE_URL ? { DATABASE_URL: process.env.DATABASE_URL } : {}),
   },
   reuseExistingServer: false,

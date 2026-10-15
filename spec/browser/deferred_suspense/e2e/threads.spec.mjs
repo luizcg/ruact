@@ -22,20 +22,24 @@ const measured = {};
 test.afterAll(() => fs.writeFileSync(resultFile("threads"), JSON.stringify(measured, null, 2) + "\n"));
 test.beforeEach(async ({ request }) => control(request, "/reset"));
 
+const ORIGIN = `http://localhost:${Number(process.env.PORT ?? 4190)}`;
+
 test("AC18.1 — three pages at a gate hold the three threads; a fourth request waits", async ({ browser, request }) => {
   const pages = await Promise.all([1, 2, 3].map(() => browser.newPage()));
+  // In production Puma serves the pages' own JavaScript too (no Vite server):
+  // those requests queue behind the three that stream. The requests the pages
+  // sent to Puma and got no answer to are the ones queued.
+  const unanswered = new Set();
+  for (const page of pages) {
+    page.on("request", (sent) => sent.url().startsWith(ORIGIN) && unanswered.add(sent));
+    page.on("response", (answer) => unanswered.delete(answer.request()));
+    page.on("requestfailed", (sent) => unanswered.delete(sent));
+  }
   pages.forEach((page) => page.goto("/two", { waitUntil: "commit" }).catch(() => {}));
   await waitingAt(request, { a: 3 });
   await expect.poll(async () => (await puma(request)).busy).toBe(3);
-  // In production Puma serves the pages' own JavaScript too (no Vite server):
-  // those requests queue behind the three that stream. Read once they settle.
-  let queued = -1;
-  await expect.poll(async () => {
-    const before = (await puma(request)).backlog;
-    const settled = before === queued;
-    queued = before;
-    return settled;
-  }, { timeout: 10_000, intervals: [300] }).toBe(true);
+  await expect.poll(async () => (await puma(request)).backlog === unanswered.size, { timeout: 10_000 }).toBe(true);
+  const queued = unanswered.size;
 
   // A page with no <Suspense> at all: it waits for a thread.
   let answered = false;
