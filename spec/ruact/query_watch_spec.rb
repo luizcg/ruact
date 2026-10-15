@@ -36,7 +36,11 @@ RSpec.describe Ruact::QueryWatch do
       end
     end
   end
-  let(:fake_pool) { Struct.new(:connections) }
+  let(:fake_pool) do
+    Struct.new(:connections) do
+      def synchronize = yield
+    end
+  end
   let(:fake_handler) do
     Struct.new(:pools) do
       def connection_pool_list(_role) = pools
@@ -98,6 +102,33 @@ RSpec.describe Ruact::QueryWatch do
     described_class.start(block_thread, 0.05).stop
     sleep 0.15
     expect(finished.cancelled).to be(false)
+  end
+
+  # Review 19-2a R1 — under `isolation_level = :fiber` Active Record records
+  # the fiber as a connection's owner, not the thread.
+  it "cancels a query of the fiber that holds the connection", :aggregate_failures do
+    fiber = Fiber.new { nil }
+    mine = fake_pg.new(active)
+    watch = watch_over([connection(fiber, mine)])
+    watch.cancel_now(block_thread)
+    expect(mine.cancelled).to be(false)
+    watch.cancel_now(fiber)
+    watch.stop
+    expect(mine.cancelled).to be(true)
+  end
+
+  it "takes the owner as Active Record records it" do
+    expect(described_class.current_owner).to equal(ActiveSupport::IsolatedExecutionState.context)
+  end
+
+  it "says whether it cancelled a query", :aggregate_failures do
+    watch = watch_over([connection(block_thread, fake_pg.new(0))])
+    watch.cancel_now(block_thread)
+    expect(watch.cancelled?).to be(false)
+    handle([connection(block_thread, fake_pg.new(active))])
+    watch.cancel_now(block_thread)
+    watch.stop
+    expect(watch.cancelled?).to be(true)
   end
 
   it "watches nothing without PostgreSQL's driver" do

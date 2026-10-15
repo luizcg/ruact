@@ -181,18 +181,27 @@ module Ruact
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       # A query still running at the limit is cancelled on the server, so its
       # connection is free again (Story 19-2, QueryWatch).
-      watch = QueryWatch.start(Thread.current, limit)
+      owner = QueryWatch.current_owner
+      watch = QueryWatch.start(owner, limit)
       begin
         Timeout.timeout(limit) { wait_then(delay, &) }
-      rescue Timeout::Error => e
-        # Ours only when the limit has passed; earlier, it is the content's.
-        raise if Process.clock_gettime(Process::CLOCK_MONOTONIC) - started < limit
+      rescue StandardError => e
+        raise unless expired?(e, started, limit, watch)
 
-        watch&.cancel_now(Thread.current)
+        watch&.cancel_now(owner)
         raise Expired, "ran past suspense_timeout (#{limit}s)", cause: e
       ensure
         watch&.stop
       end
+    end
+
+    # A `Timeout::Error` is ours only when the limit has passed; earlier, it is
+    # the content's. Any other error is ours when the watch cancelled a query
+    # at the limit: what the cancelled query raised.
+    def expired?(error, started, limit, watch)
+      return watch&.cancelled? || false unless error.is_a?(Timeout::Error)
+
+      Process.clock_gettime(Process::CLOCK_MONOTONIC) - started >= limit
     end
 
     def wait_then(delay)

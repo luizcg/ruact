@@ -11,7 +11,7 @@
  */
 
 import { setBoundaryErrorHandler } from "./suspense-boundary.js";
-import { openPage } from "./page-stream.js";
+import { LEAVE_EVENT, openPage } from "./page-stream.js";
 
 // Errors already reported once (by a Suspense boundary) that navigate() must
 // not report again on their way out to a revalidate() caller.
@@ -461,11 +461,17 @@ function handlePopstate() {
  * Story 19-2 — the page being left may be a document still arriving: a page
  * that streams, whose <Suspense> rows are still to come. Nobody will see them,
  * so stop loading it: the connection closes, and the server, which asks before
- * each block, starts no further block for it. Only while the document itself
- * is loading — not its images, which `readyState` does not count.
+ * each block, starts no further block for it. Only a document that streams
+ * and has rows still to come (the server marks it, `__FLIGHT_DATA.streaming`):
+ * any other document still being parsed — a slow network, a long layout — is
+ * left to load, the part of its layout after `#root` included.
  */
 function _leaveOpenDocument() {
   if (typeof document === "undefined" || document.readyState !== "loading") return;
+  if (globalThis.__FLIGHT_DATA?.streaming !== true) return;
+  // First its rows' stream ends as an aborted navigation: stopped, it would
+  // read as a response cut short, which the page being left reports.
+  if (typeof document.dispatchEvent === "function") document.dispatchEvent(new Event(LEAVE_EVENT));
   if (typeof window !== "undefined" && typeof window.stop === "function") window.stop();
 }
 

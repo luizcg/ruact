@@ -144,6 +144,14 @@ module Ruact
         expect(child).to be_a(Flight::ReactElement)
         expect(child.type).to eq(ref)
       end
+
+      # Story 19-2 — a marker of another render (out of a `cache` block) is an
+      # error; a comment that only looks like one (the page's own text) is not.
+      it "refuses another render's marker and drops a comment that only looks like one", :aggregate_failures do
+        expect { convert.call("<!-- __RUACT_0a1b2c3d_0__ -->") }
+          .to raise_error(Ruact::HtmlConverterError, /came out of a `cache` block/)
+        expect(convert.call("<p>a<!-- __RUACT_x__ --></p>").props["children"]).to eq("a")
+      end
     end
 
     describe "form element value handling" do

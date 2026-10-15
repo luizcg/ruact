@@ -1043,6 +1043,21 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(body).not_to match(%r{</script(?!>)}i)
       end
 
+      # Story 19-2 — what tells the client router this document has rows to
+      # come (it stops only such a document when it leaves the page): set
+      # before the first boundary's rows, cleared after the last.
+      it "marks the streamed document as streaming from the shell to the last boundary", :aggregate_failures do
+        body = document("/streaming-demo/show").body
+        open = body.index(".streaming=true</script>")
+        done = body.index(".streaming=false</script>")
+        push = "(self.__FLIGHT_DATA=self.__FLIGHT_DATA||[]).push("
+        pushes = body.enum_for(:scan, push).map { Regexp.last_match.begin(0) }
+        expect(open).to be < pushes.first
+        expect(done).to be > pushes.last
+        expect(done).to be < body.rindex("</body>")
+        expect(document("/streaming-demo/plain").body).not_to include(".streaming=")
+      end
+
       # The rows of a <Suspense> arrive in a script of their own: the matcher an
       # app's request spec uses has to read them too.
       it "lets have_ruact_component find a component that arrived with a boundary's rows" do

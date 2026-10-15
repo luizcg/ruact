@@ -1,7 +1,7 @@
 // The two ways a page is opened read the same way: the rows a document inlined
 // in `__FLIGHT_DATA`, and a fetch body that may end early.
 import { describe, it, expect } from "vitest";
-import { documentRows, openPage } from "./runtime/page-stream.js";
+import { LEAVE_EVENT, documentRows, openPage } from "./runtime/page-stream.js";
 
 const encoder = new TextEncoder();
 
@@ -62,6 +62,10 @@ describe("documentRows", () => {
         this.readyState = state;
         listeners.readystatechange?.();
       },
+      leave() {
+        listeners[LEAVE_EVENT]?.();
+        this.finish("complete");
+      },
     };
   }
 
@@ -101,6 +105,17 @@ describe("documentRows", () => {
     await reader.read();
     doc.finish("complete");
     await expect(reader.read()).resolves.toMatchObject({ done: true });
+  });
+
+  // Story 19-2 — the router leaving it: the page being left reports nothing,
+  // as for a superseded navigation.
+  it("ends as an aborted navigation when the router leaves the document", async () => {
+    const doc = openDocument();
+    const page = openPage(documentRows(['0:{"later":"$@1"}\n'], doc));
+    const root = await page.root;
+    doc.leave();
+    await expect(root.later).rejects.toMatchObject({ name: "AbortError" });
+    await expect(page.end).rejects.toMatchObject({ name: "AbortError" });
   });
 
   it("closes at once when the document has already ended", async () => {

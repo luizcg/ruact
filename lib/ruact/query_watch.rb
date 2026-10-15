@@ -18,29 +18,48 @@ module Ruact
   # called from another thread. Other adapters are left as they are; the
   # database's own statement timeout is the limit there.
   #
+  # Not cancelled: a query `load_async` runs. The async executor's thread holds
+  # its connection, not the block's, and nothing ties that query to the block
+  # that waits for it; it runs to its end. The statement timeout is the limit
+  # for those.
+  #
   # Internal API: not part of the public compatibility contract.
   class QueryWatch
-    # Watches +thread+'s connections for +limit+ seconds; nil when there is
-    # nothing to watch (no Active Record).
-    def self.start(thread, limit)
-      return nil unless defined?(::ActiveRecord::Base) && defined?(::PG::Connection)
-
-      new(thread, limit)
+    # Who holds a connection the way Active Record records it: the thread, or
+    # the fiber under `isolation_level = :fiber`.
+    def self.current_owner
+      ::ActiveSupport::IsolatedExecutionState.context
     end
 
-    def initialize(thread, limit)
+    # Watches +owner+'s connections for +limit+ seconds; nil when there is
+    # nothing to watch (no Active Record).
+    def self.start(owner, limit)
+      return nil unless defined?(::ActiveRecord::Base) && defined?(::PG::Connection)
+
+      new(owner, limit)
+    end
+
+    def initialize(owner, limit)
       @lock = Mutex.new
       @done = false
+      @cancelled = false
       @watcher = Thread.new do
         sleep(limit)
-        @lock.synchronize { cancel_queries_of(thread) unless @done }
+        @lock.synchronize { cancel_queries_of(owner) unless @done }
       end
     end
 
-    # The block ran past the limit and was given back: cancel what its thread
+    # The block ran past the limit and was given back: cancel what its owner
     # still has in flight now, whether or not the watcher got there first.
-    def cancel_now(thread)
-      @lock.synchronize { cancel_queries_of(thread) }
+    def cancel_now(owner)
+      @lock.synchronize { cancel_queries_of(owner) }
+    end
+
+    # Whether a query was cancelled: the error the block then raises
+    # (`ActiveRecord::QueryCanceled`) is the timeout's, not the content's. The
+    # watcher can get there before `Timeout` does.
+    def cancelled?
+      @lock.synchronize { @cancelled }
     end
 
     # The block ended (or was ended): nothing to cancel any more.
@@ -51,24 +70,27 @@ module Ruact
 
     private
 
-    def cancel_queries_of(thread)
+    def cancel_queries_of(owner)
       ::ActiveRecord::Base.connection_handler.connection_pool_list(:all).each do |pool|
-        pool.connections.each do |connection|
-          # The block's thread's own, or one already back in the pool: unwinding
-          # a `with_connection` gives the connection back with its query still
-          # running. A query in flight on a connection nobody holds is one
-          # nobody waits for.
-          next unless connection.owner.nil? || connection.owner.equal?(thread)
-
-          raw = connection.instance_variable_get(:@raw_connection)
-          next unless raw.is_a?(::PG::Connection)
-          next unless raw.transaction_status == ::PG::PQTRANS_ACTIVE
-
-          raw.cancel
-        end
+        # Under the pool's lock: a connection nobody holds is not handed to
+        # another request between the check and the cancel.
+        pool.synchronize { pool.connections.each { |connection| cancel_query_on(connection, owner) } }
       end
     rescue StandardError
       nil
+    end
+
+    # The owner's own connection, or one already back in the pool: unwinding a
+    # `with_connection` gives the connection back with its query still running.
+    # A query in flight on a connection nobody holds is one nobody waits for.
+    def cancel_query_on(connection, owner)
+      return unless connection.owner.nil? || connection.owner.equal?(owner)
+
+      raw = connection.instance_variable_get(:@raw_connection)
+      return unless raw.is_a?(::PG::Connection) && raw.transaction_status == ::PG::PQTRANS_ACTIVE
+
+      raw.cancel
+      @cancelled = true
     end
   end
 end

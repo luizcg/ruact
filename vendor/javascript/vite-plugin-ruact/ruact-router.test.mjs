@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { setupRouter, teardownRouter } from "./runtime/ruact-router.js";
+import { LEAVE_EVENT } from "./runtime/page-stream.js";
 
 const ORIGIN = "http://localhost:3000";
 
@@ -578,13 +579,29 @@ describe("leaving a document that is still loading", () => {
     dom = installDom();
     globalThis.fetch = vi.fn().mockResolvedValue(respond({ body: '0:"next"\n' }));
     globalThis.window.stop = vi.fn();
+    globalThis.__FLIGHT_DATA = Object.assign([], { streaming: true });
     vi.spyOn(console, "error").mockImplementation(() => {});
     setupRouter({ onNavigate: vi.fn(), moduleRegistry: {}, onError: vi.fn() });
   });
 
   afterEach(() => {
     teardownRouter();
+    delete globalThis.__FLIGHT_DATA;
     vi.restoreAllMocks();
+  });
+
+  // A slow network, a long layout: the rest of the document after `#root`
+  // (which a navigation does not replace) still has to arrive.
+  it("leaves a loading document alone when it does not stream, or its rows are all in", async () => {
+    globalThis.document.readyState = "loading";
+    globalThis.__FLIGHT_DATA = [];
+    click(dom.listeners, "/products/2");
+    await settle();
+    globalThis.__FLIGHT_DATA = Object.assign([], { streaming: false });
+    click(dom.listeners, "/products/3");
+    await settle();
+    expect(window.stop).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it("stops the document before it fetches the next page", async () => {
@@ -610,6 +627,20 @@ describe("leaving a document that is still loading", () => {
   it("stops it for revalidate() too", async () => {
     globalThis.document.readyState = "loading";
     await globalThis.__ruact_revalidate();
+    expect(window.stop).toHaveBeenCalledTimes(1);
+  });
+
+  // Stopped, the document's rows would read as a response cut short, which
+  // the page being left reports: they are told first.
+  it("tells the document's rows it is left before it stops it", async () => {
+    globalThis.document.readyState = "loading";
+    const told = [];
+    globalThis.document.dispatchEvent = vi.fn((event) => {
+      told.push([event.type, window.stop.mock.calls.length]);
+      return true;
+    });
+    await globalThis.__ruact_revalidate();
+    expect(told).toEqual([[LEAVE_EVENT, 0]]);
     expect(window.stop).toHaveBeenCalledTimes(1);
   });
 });

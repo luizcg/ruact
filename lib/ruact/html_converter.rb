@@ -35,8 +35,9 @@ module Ruact
       "spellcheck" => "spellCheck"
     }.freeze
 
-    # A client component's marker (`__RUACT_<render>_<n>__`).
-    TOKEN = /\A__RUACT_\w+__\z/
+    # A client component's marker (`__RUACT_<render>_<n>__`, the render's id
+    # being eight hex digits, {RenderContext}).
+    TOKEN = /\A__RUACT_\h{8}_\d+__\z/
 
     # Tags whose `value` attribute maps to React's `defaultValue` (uncontrolled).
     DEFAULT_VALUE_TAGS = %w[textarea select].freeze

@@ -54,6 +54,13 @@ module Ruact
       # pushed before it, as they are ready.
       BODY_CLOSE = "</body>"
 
+      # Story 19-2 — written around the pushed rows of a streamed document, so
+      # the client router knows a document still loading has rows to come: it
+      # stops such a document when it leaves the page, and only such a one (a
+      # document that is still being parsed, its rows all in, is left alone).
+      STREAMING_OPEN = "<script>(self.__FLIGHT_DATA=self.__FLIGHT_DATA||[]).streaming=true</script>"
+      STREAMING_DONE = "<script>self.__FLIGHT_DATA.streaming=false</script>"
+
       private
 
       # Build the wire output and write it to the response. Nothing is written
@@ -92,7 +99,8 @@ module Ruact
 
         document = ruact_document_html(shell)
         cut = document.rindex(BODY_CLOSE) || document.length
-        __ruact_stream(run, DOCUMENT_STREAM_HEADERS, document[0...cut], document[cut..]) do |rows|
+        __ruact_stream(run, DOCUMENT_STREAM_HEADERS, "#{document[0...cut]}#{STREAMING_OPEN}",
+                       "#{STREAMING_DONE}#{document[cut..]}") do |rows|
           __ruact_flight_push(rows)
         end
       end

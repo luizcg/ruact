@@ -66,7 +66,8 @@ module Ruact
     #
     # @example Pre-rendered HTML, streaming output
     #   ctx = Ruact::RenderContext.new
-    #   pipeline.render({ html: "<!-- __RUACT_0__ -->", render_context: ctx }, mode: :stream)
+    #   html = Ruact::Markers.component(ctx.register("NavBar", {}))
+    #   pipeline.render({ html: html, render_context: ctx }, mode: :stream)
     #   # => #<Enumerator: ...>  (yields Flight rows lazily)
     def render(input, mode: :string)
       validate_mode!(mode)

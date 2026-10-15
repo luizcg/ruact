@@ -88,6 +88,32 @@ RSpec.describe Ruact::DeferredRender do
     expect(rows[0]).not_to include("ruact:suspense-timeout")
   end
 
+  # Review 19-2a R1 — the watch can cancel the query before Timeout interrupts
+  # the block: what the cancelled query raises is the timeout's.
+  it "takes the error of a query the watch cancelled at the limit for the timeout", :aggregate_failures do
+    Ruact.configure { |c| c.suspense_timeout = 5 }
+    canceled = Class.new(StandardError)
+    watch = instance_double(Ruact::QueryWatch, cancelled?: true, cancel_now: nil, stop: nil)
+    allow(Ruact::QueryWatch).to receive(:start).and_return(watch)
+    rows = run(boundary(->(*) { raise canceled, "canceling statement due to user request" }))
+    expect(rows[0]).to include("ruact:suspense-timeout")
+
+    allow(watch).to receive(:cancelled?).and_return(false)
+    rows = run(boundary(->(*) { raise canceled, "the content's own" }))
+    expect(rows[0]).to include("ruact:suspense-error")
+  end
+
+  # Review 19-2a R1 — under `isolation_level = :fiber` the connection's owner is
+  # the fiber: the watch is given the owner Active Record records.
+  it "watches the connections of the owner Active Record records" do
+    Ruact.configure { |c| c.suspense_timeout = 5 }
+    fiber = Fiber.new { nil }
+    allow(ActiveSupport::IsolatedExecutionState).to receive(:context).and_return(fiber)
+    allow(Ruact::QueryWatch).to receive(:start).and_return(nil)
+    run(boundary("<p>quick</p>"))
+    expect(Ruact::QueryWatch).to have_received(:start).with(fiber, 5)
+  end
+
   it "ends a block that runs past suspense_timeout with the timeout row" do
     Ruact.configure { |c| c.suspense_timeout = 0.05 }
     rows = run(boundary(lambda { |*|
