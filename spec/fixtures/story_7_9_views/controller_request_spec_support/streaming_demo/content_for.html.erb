@@ -1,0 +1,5 @@
+<main>
+  <% content_for :title, "set before" %>
+  <Suspense fallback="reads"><p><%= content_for?(:title) ? yield(:title) : "none" %></p></Suspense>
+  <Suspense fallback="writes"><% content_for :sidebar, "set inside" %><p>wrote content_for</p></Suspense>
+</main>

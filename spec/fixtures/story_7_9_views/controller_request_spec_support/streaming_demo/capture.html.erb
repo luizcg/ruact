@@ -1,0 +1,10 @@
+<main>
+  <% n = 1 %>
+  <Suspense fallback="local"><p data-case="local"><%= n %></p></Suspense>
+  <% n = 2 %>
+  <% @value = "before" %>
+  <Suspense fallback="ivar"><p data-case="ivar"><%= @value %></p></Suspense>
+  <% @value = "after" %>
+  <% [1, 2, 3].each do |item| %><Suspense fallback="each"><p data-case="each"><%= item %></p></Suspense><% end %>
+  <% for item_for in [1, 2, 3] %><Suspense fallback="for"><p data-case="for"><%= item_for %></p></Suspense><% end %>
+</main>

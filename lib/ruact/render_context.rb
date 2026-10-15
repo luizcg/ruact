@@ -16,9 +16,11 @@ module Ruact
   # Internal API: not part of the public compatibility contract.
   class RenderContext
     # A `<Suspense>` block waiting to be rendered: the view it was written in,
-    # the block, and the template Rails was rendering when it met the tag
-    # (`t(".key")` and error messages read it).
-    Block = Struct.new(:view, :block, :virtual_path, :template, :location)
+    # the block, the template Rails was rendering when it met the tag
+    # (`t(".key")` and error messages read it), and the local variables the
+    # block can see, as they were then (Story 19-2: a `for` loop reuses one
+    # variable, a local can be reassigned below the tag).
+    Block = Struct.new(:view, :block, :virtual_path, :template, :location, :locals)
 
     # @param deferring [Boolean] whether a `<Suspense>`'s content is rendered
     #   after the shell (an action that streams) instead of in place

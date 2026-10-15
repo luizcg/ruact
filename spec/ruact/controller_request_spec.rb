@@ -118,7 +118,7 @@ module ControllerRequestSpecSupport
         get "/suspense-demo/show", to: "controller_request_spec_support/suspense_demo#show"
         get "/suspense-live-demo/show", to: "controller_request_spec_support/suspense_live_demo#show"
         # Story 19-1 — `ruact_streaming`.
-        %w[show edit plain raising slow delayed late_write leased quiet after_raises positions].each do |action|
+        %w[show edit plain raising slow delayed late_write leased quiet after_raises positions capture empty content_for partials].each do |action|
           get "/streaming-demo/#{action}", to: "controller_request_spec_support/streaming_demo##{action}"
         end
         # An endpoint whose route names no action.
@@ -287,7 +287,7 @@ module ControllerRequestSpecSupport
   class StreamingDemoController < ActionController::Base
     include Ruact::Controller
 
-    ruact_streaming only: %i[show plain raising slow delayed late_write leased quiet after_raises positions]
+    ruact_streaming only: %i[show plain raising slow delayed late_write leased quiet after_raises positions capture empty content_for partials]
 
     append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
 
@@ -305,6 +305,10 @@ module ControllerRequestSpecSupport
     def late_write = ruact_render
     def quiet = ruact_render
     def positions = ruact_render
+    def capture = ruact_render
+    def empty = ruact_render
+    def content_for = ruact_render
+    def partials = ruact_render
 
     # Story 19-2 (AC6) — an after_action that raises once the page was sent.
     after_action(only: :after_raises) { raise ArgumentError, "after the page" }
@@ -975,7 +979,8 @@ module Ruact # rubocop:disable Style/OneClassPerFile
       before do
         events.clear
         I18n.backend.store_translations(
-          :en, controller_request_spec_support: { streaming_demo: { show: { lazy: "Lazy text" } } }
+          :en, controller_request_spec_support: { streaming_demo: { show: { lazy: "Lazy text" },
+                                                                    item: { label: "Item" } } }
         )
       end
 
@@ -1181,6 +1186,16 @@ module Ruact # rubocop:disable Style/OneClassPerFile
           expect(template[2..]).to eq([8, 1, 0, 0])
         end
 
+        # Story 19-2 (AC10.2) — the layout was sent before the block ran: what
+        # it declares with content_for never shows. Reading it still works.
+        it "makes content_for inside a block an error of that block, and lets it read", :aggregate_failures do
+          body = flight("/streaming-demo/content_for").body
+          expect(body).to include("set before")
+          expect(body).to match(/^\h+:E\{"digest":"ruact:suspense-error"/)
+          expect(body).to include("content_for :sidebar")
+          expect(body).not_to include("wrote content_for")
+        end
+
         it "names the line to add when an action that does not stream renders a <Suspense>, once",
            :aggregate_failures do
           log = with_log { flight("/streaming-demo/edit") }
@@ -1202,6 +1217,39 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(response.body).not_to include("500.html")
         expect(Rails.error).to have_received(:report)
           .with(an_instance_of(ArgumentError), hash_including(source: "ruact.stream"))
+      end
+
+      # Story 19-2 (AC8.3) — a block runs after the rest of the template. Its
+      # local variables are as they were when the tag was met — a local
+      # reassigned below it, and `for`, which reuses one variable for every
+      # item, showed the later value; an instance variable is read when the
+      # block runs.
+      it "gives a block its locals as they were at the tag, and instance variables as they are",
+         :aggregate_failures do
+        body = flight("/streaming-demo/capture").body
+        seen = ->(kase) { body.scan(/"data-case":"#{kase}","children":"([^"]*)"/).flatten }
+        expect(seen.call("local")).to eq(["1"])
+        expect(seen.call("each")).to eq(%w[1 2 3])
+        expect(seen.call("for")).to eq(%w[1 2 3])
+        expect(seen.call("ivar")).to eq(["after"])
+      end
+
+      # Story 19-2 (AC10.1) — a block that renders nothing empties its boundary.
+      it "renders a block that writes nothing as an empty boundary, and goes on", :aggregate_failures do
+        body = flight("/streaming-demo/empty").body
+        expect(body).not_to include(":E{")
+        expect(body).not_to include("a value the block does not write")
+        expect(body).to include("the last boundary")
+        expect(body.lines.grep(/\A\h+:null\n\z/).length).to eq(4)
+      end
+
+      # Story 19-2 (AC8.4) — a <Suspense> in a partial, with its locals, in a
+      # collection: each block sees its own item, and t(".key") the partial's scope.
+      it "renders a <Suspense> in a partial and a collection with each one's own locals", :aggregate_failures do
+        body = flight("/streaming-demo/partials").body
+        expect(body.scan(/"data-item":"(\w+)","children":"Item (\w+)"/)).to eq(
+          [%w[solo solo], %w[one one], %w[two two], %w[three three]]
+        )
       end
 
       it "says nothing about an action that does not stream outside development" do

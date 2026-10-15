@@ -106,9 +106,36 @@ module Ruact
       convert(html)
     end
 
-    # Runs the block in its view, with the template path restored, and returns
-    # what it wrote. Only what it writes: a value it ends on is not content.
+    # Runs the block in its view, with the template path and its local
+    # variables as they were when the tag was met, and returns what it wrote.
+    # Only what it writes: a value it ends on is not content.
     def evaluate(pending)
+      flow = declared_content(pending.view)
+      html = with_locals(pending.block, pending.locals) { run_in_view(pending) }
+      check_declared_content!(pending.view, flow) if flow
+      html
+    end
+
+    # Story 19-2 (AC10) — in development, what the view declared with
+    # `content_for`/`provide`, to see whether a block declares more. The layout
+    # was sent before the block ran: nothing it declares shows.
+    def declared_content(view)
+      return nil unless @development && view.respond_to?(:view_flow) && view.view_flow.respond_to?(:content)
+
+      view.view_flow.content.transform_values(&:to_s)
+    end
+
+    def check_declared_content!(view, before)
+      after = view.view_flow.content
+      changed = after.keys.reject { |name| name == :layout || after[name].to_s == before[name] }
+      return if changed.empty?
+
+      raise Ruact::Error,
+            "#{changed.map { |name| "content_for :#{name}" }.join(', ')} inside a <Suspense> runs after the " \
+            "layout was sent, so the layout never shows it. Move it outside the <Suspense>."
+    end
+
+    def run_in_view(pending)
       pending.view.instance_exec(pending) do |entry|
         saved = [@virtual_path, @current_template]
         @virtual_path = entry.virtual_path
@@ -121,6 +148,22 @@ module Ruact
         ensure
           @virtual_path, @current_template = saved
         end
+      end
+    end
+
+    # Sets the block's local variables to +locals+ while it runs, and back
+    # after. A block shares them with the template and with the blocks met
+    # after it.
+    def with_locals(block, locals)
+      return yield if locals.nil? || locals.empty?
+
+      scope = block.binding
+      now = locals.keys.to_h { |name| [name, scope.local_variable_get(name)] }
+      locals.each { |name, value| scope.local_variable_set(name, value) }
+      begin
+        yield
+      ensure
+        now.each { |name, value| scope.local_variable_set(name, value) }
       end
     end
 
