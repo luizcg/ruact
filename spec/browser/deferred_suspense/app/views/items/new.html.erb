@@ -1,0 +1,10 @@
+<h1 id="shell">New item</h1>
+<form action="<%= @form_action || "/items" %>" method="post" id="item-form">
+  <%= hidden_field_tag :authenticity_token, form_authenticity_token %>
+  <input name="name" id="name">
+  <button id="save">Save</button>
+</form>
+<Suspense fallback="Loading the errors…">
+  <% Gate.wait("a") %>
+  <p id="errors"><%= ruact_errors.to_json %></p>
+</Suspense>

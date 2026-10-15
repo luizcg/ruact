@@ -143,6 +143,9 @@ class HarnessApp < Rails::Application
     config.assume_ssl = true
     config.force_ssl = true
     config.ssl_options = { hsts: false } # the browser runs it on http://localhost
+    # assume_ssl makes the request https while the browser is on http: a form's
+    # Origin (http://…) never matches. Only the harness has that mismatch.
+    config.action_controller.forgery_protection_origin_check = false
     config.silence_healthcheck_path = "/up"
   end
   config.logger = ActiveSupport::BroadcastLogger.new(
@@ -230,15 +233,12 @@ module Tenant
 end
 
 class Item < ActiveRecord::Base
+  validates :name, length: { minimum: 3 }
 end
 
 Item.create!(name: "one")
 Item.create!(name: "two")
 ActiveRecord::Base.connection_pool.disconnect!
-
-class ApplicationController < ActionController::Base
-  include Ruact::Controller
-end
 
 class PagesController < ApplicationController
   # Every page streams but `plain`, which shows that an action left out keeps
@@ -264,6 +264,7 @@ class PagesController < ApplicationController
   def leased; end
   def flaky; end
   def errors; end
+  def inside; end
   def after_write; end
 
   def context
@@ -326,7 +327,7 @@ end
 
 Rails.application.routes.draw do
   root "pages#home"
-  %w[plain slow two nested error context db late_cookie leased flaky errors after_write].each do |page|
+  %w[plain slow two nested error context db late_cookie leased flaky errors after_write inside].each do |page|
     get page, to: "pages##{page}"
   end
   post "__gate/reset", to: "probe#reset"
@@ -335,4 +336,8 @@ Rails.application.routes.draw do
   get "__session", to: "probe#session_probe"
   get "up", to: "probe#up"
   post "__fail_stream", to: "probe#fail_stream"
+  get "items/new", to: "items#new"
+  post "items", to: "items#create"
+  post "items/in_place", to: "items#create_in_place"
+  post "items/redirect", to: "items#create_redirect"
 end

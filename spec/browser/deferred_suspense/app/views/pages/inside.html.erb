@@ -1,0 +1,9 @@
+<h1 id="shell">Inside</h1>
+<Box>
+  <Suspense fallback="Loading A…"><p id="a"><%= Gate.wait("a") %></p></Suspense>
+</Box>
+<ul>
+  <% %w[x y].each do |item| %>
+    <li><Suspense fallback="Loading an item…"><p data-loop="<%= item %>"><%= Gate.wait(item) %></p></Suspense></li>
+  <% end %>
+</ul>
