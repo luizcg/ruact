@@ -58,6 +58,24 @@ its results go to `results/skew-*-no-skew-check-<env>.json`.
 Every other run requires the opposite (`e2e/00-warm-up.spec.mjs`): no banner,
 nothing logged, the doctor passing.
 
+`./run upgrade` (Story 19-4) proves the `vite.config.js` that
+`rails generate ruact:install` writes across an upgrade of the gem. It extracts
+0.0.21 with `git archive v0.0.21` (from the gem's root, into a temporary directory outside the gem; it needs the
+repository with its tags, and does not run on CI) as the gem installed before
+the upgrade, with a Gemfile of its own (`tmp/Gemfile.0.0.21`). The generator
+writes the config into `./vite.config.js` — the app's, where Story 19-3's
+detection reads its import — listening on the template's port, 5173. Before
+the upgrade (`BUNDLE_GEMFILE` on 0.0.21) the build is 0.0.21's plugin's; after
+it (this harness's Gemfile, the same file unedited) the build is this
+ruact's and the detection says nothing (`e2e/upgrade.spec.mjs`,
+`HARNESS_UPGRADE=quiet`), in both environments. The perturbation is the config
+the install wrote before 19-4, its import fixed on 0.0.21's plugin: the
+detection fires and names the import (`HARNESS_UPGRADE=pinned`), and the quiet
+assertions must fail at the log, the doctor and — in development — the banner.
+Results go to `results/upgrade-*-<env>.json`. Every other run names
+`vite.config.mjs` (this harness's) explicitly, so a `./vite.config.js` left by
+an interrupted run is never taken for it.
+
 Rails' test support runs `ActionController::Live` inline, in the whole
 process, so the streaming itself is only observable against a server started
 on its own, as here. The gem's CI runs `./run` (job "Browser (deferred
