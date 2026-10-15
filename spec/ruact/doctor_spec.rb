@@ -745,6 +745,36 @@ end
         expect(msg).to include("buffered")
       end
     end
+
+    # Story 19-2 (AC20) — behind nginx's defaults a declared page is sent
+    # whole; the doctor sees no request, so it says where to look.
+    context "when a controller declares ruact_streaming", :story_19_2 do
+      before do
+        FileUtils.mkdir_p(tmpdir.join("app", "controllers"))
+        File.write(tmpdir.join("app", "controllers", "posts_controller.rb"),
+                   "class PostsController < ApplicationController\n  ruact_streaming only: :show\nend\n")
+        File.write(tmpdir.join("app", "controllers", "pages_controller.rb"),
+                   "class PagesController < ApplicationController\n  # ruact_streaming later\nend\n")
+      end
+
+      it "names the proxy's HTTP/1.1, with the nginx line to set", :aggregate_failures do
+        status, msg, remediation = doctor.send(:check_streaming)
+        expect(status).to eq(:pass)
+        expect(msg).to include("1 controller declares ruact_streaming").and include("HTTP/1.1")
+        expect(remediation).to include("proxy_http_version 1.1;")
+      end
+
+      it "carries the remediation into --json" do
+        check = doctor.as_json["checks"].find { |entry| entry["name"] == "streaming" }
+        expect(check["remediation"]).to include("proxy_http_version 1.1;")
+      end
+    end
+
+    it "says nothing of a proxy when no controller declares ruact_streaming" do
+      _, msg, remediation = doctor.send(:check_streaming)
+      expect(msg).not_to include("HTTP/1.1")
+      expect(remediation).to be_nil
+    end
   end
 
   # --- check_load_async (Story 19-1, ADR D1) ---

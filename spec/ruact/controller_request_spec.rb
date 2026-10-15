@@ -1091,6 +1091,25 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(events).to eq([[:shell, false], [:one, true], [:two, true], [:inner, true]])
       end
 
+      # Story 19-2 (AC20) — that page was not streamed, and nothing said so: a
+      # warning, once per process, naming the action and the proxy's line.
+      it "says once that an action declared to stream got a request over HTTP/1.0", :aggregate_failures do
+        Ruact::Controller::Streaming.reset_unstreamed_note!
+        log = with_log do
+          get "/streaming-demo/show"
+          get "/streaming-demo/show"
+        end
+        line = "[ruact] ControllerRequestSpecSupport::StreamingDemoController#show is declared with ruact_streaming"
+        expect(log.scan(line).length).to eq(1)
+        expect(log).to include("proxy_http_version 1.1;")
+        expect(log).to match(/WARN/)
+
+        # Over HTTP/1.1 it streams; an action not declared is not concerned.
+        Ruact::Controller::Streaming.reset_unstreamed_note!
+        expect(with_log { read_streamed("/streaming-demo/show") }).not_to include("declared with ruact_streaming")
+        expect(with_log { get "/streaming-demo/edit" }).not_to include("declared with ruact_streaming")
+      end
+
       # Review R3 — HTTP/1.0 (nginx's default to its upstream, Rack::Test): Live
       # answers with an ordinary response, so the page renders whole, in place,
       # with its blocks' content, and no development note asks to declare what

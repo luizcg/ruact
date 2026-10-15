@@ -110,6 +110,36 @@ module Ruact
         end
       end
 
+      # Story 19-2 (AC20) — said once per process, in every environment: an
+      # action declared with `ruact_streaming` got a request over HTTP/1.0, so
+      # Live gave it an ordinary response and the page was sent whole. nginx
+      # talks HTTP/1.0 to its upstream unless told otherwise, so in production
+      # this is a proxy's configuration, found here or not at all.
+      UNSTREAMED = "%<action>s is declared with ruact_streaming, but the request came over HTTP/1.0, so " \
+                   "the page was sent whole, not streamed. Behind nginx, set `proxy_http_version 1.1;` " \
+                   "where it proxies to the app. (Said once.)"
+
+      # Logs {UNSTREAMED} the first time an action that streams could not.
+      #
+      # @api private
+      # @param controller [ActionController::Metal]
+      # @return [void]
+      def self.note_unstreamed(controller)
+        return if @unstreamed_noted
+
+        @unstreamed_noted = true
+        action = "#{controller.class.name}##{controller.action_name}"
+        controller.logger&.warn("[ruact] #{format(UNSTREAMED, action: action)}")
+        nil
+      end
+
+      # Forgets that it logged (specs).
+      #
+      # @api private
+      def self.reset_unstreamed_note!
+        @unstreamed_noted = false
+      end
+
       # Includes `ActionController::Live` in +controller+ for `ruact_streaming`,
       # marked as ruact's doing so {LiveInclusion} does not take it for the app's.
       #
