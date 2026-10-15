@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.21] - 2026-10-15
+
 ### Changed
 
 - **Leaving a page whose document is still arriving stops loading it.** A page that streams keeps its document open until its last `<Suspense>`; when the router leaves the page (a link, a form) before that, it now calls `window.stop()` first, so the connection closes and the server, which asks before each block, starts no further block for a page nobody will see. Only a document that streams and still has rows to come: the server marks it. Stopping it also stops what that document was still loading — measured in Chrome: an image still loading stays broken, a `fetch` in flight fails with `TypeError`, and a module `import()` in flight fails (importing it again works). The boundaries of the page being left stay quiet, as for a navigation that replaced another: no "response ended before the whole page arrived" error is reported for them. Only while the document itself is loading — a page that has finished is not touched. `revalidate()` stays on the page and does not stop it: stopping would fail the page's other requests in flight, a server function or a `useQuery` among them. When the navigation that stopped it ends without replacing the page — the network, a 403 or a 500 to a form, a redirect that fails, or a second click that superseded the first and failed — the router fetches the page it is still on again, once, so its boundaries do not keep their fallback.
@@ -542,7 +544,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **E2E test app** — `e2e/` Rails app (no DB, in-memory Post model) with full CRUD system tests validating the complete request cycle.
 
-[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.20...HEAD
+[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.21...HEAD
+[0.0.21]: https://github.com/luizcg/ruact/releases/tag/v0.0.21
 [0.0.20]: https://github.com/luizcg/ruact/releases/tag/v0.0.20
 [0.0.19]: https://github.com/luizcg/ruact/releases/tag/v0.0.19
 [0.0.18]: https://github.com/luizcg/ruact/releases/tag/v0.0.18
