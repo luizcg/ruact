@@ -26,7 +26,7 @@ module Ruact
     VITE_CONFIGS = %w[vite.config.js vite.config.mjs vite.config.ts vite.config.cjs vite.config.mts
                       vite.config.cts].freeze
     # A string literal naming ruact's plugin entry, as `ruact:install` writes it
-    # (no `${…}` interpolation: a path built in JavaScript is not read).
+    # (no template interpolation: a path built in JavaScript is not read).
     PLUGIN_IMPORT = %r{(["'`])([^"'`$\n]*vite-plugin-ruact/index\.js)\1}
     LOCK = Mutex.new
     private_constant :LOCK
