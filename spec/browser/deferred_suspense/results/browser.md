@@ -8,8 +8,16 @@ Written by `./run`: one row per Playwright run, Chromium, one worker, against th
 | --- | --- | --- |
 | the scenarios | development | 49 passed |
 | every `<Suspense>` in place: `deferred.spec.mjs` | development | 2 failed, as it must: at the shell's text and at the URL |
+| a CSP by nonce, without 'unsafe-inline' | development | 3 passed |
+| a CSP by nonce, rows pushed without it | development | 1 failed, as it must: the content never arrives |
+| Puma with 3 threads (`e2e/threads.spec.mjs`) | development | 3 passed |
+| nginx in front of Puma | development | not run: no nginx on the PATH |
 | the scenarios | production | 1 skipped, 48 passed |
 | every `<Suspense>` in place: `deferred.spec.mjs` | production | 2 failed, as it must: at the shell's text and at the URL |
+| a CSP by nonce, without 'unsafe-inline' | production | 3 passed |
+| a CSP by nonce, rows pushed without it | production | 1 failed, as it must: the content never arrives |
+| Puma with 3 threads (`e2e/threads.spec.mjs`) | production | 3 passed |
+| nginx in front of Puma | production | not run: no nginx on the PATH |
 
 ## PostgreSQL 14.19 — e2e/postgres.spec.mjs, suspense_timeout 5 s
 
@@ -33,3 +41,16 @@ Written by `./run`: one row per Playwright run, Chromium, one worker, against th
 | --- | --- | --- |
 | middleware scopes | development | 3 passed |
 | middleware scopes | production | 3 passed |
+
+## Rack 2.2.24 — e2e/deferred.spec.mjs, e2e/lifecycle.spec.mjs
+
+| what ran | environment | outcome |
+| --- | --- | --- |
+| the proof and the lifecycle | development | 14 passed |
+| the proof and the lifecycle | production | 1 skipped, 13 passed |
+
+## 0.0.19's bootstrap, this server — e2e/skew.spec.mjs
+
+| what ran | environment | outcome |
+| --- | --- | --- |
+| the streamed document read by 0.0.19's bootstrap | production | measured: the fallback stays, the content never shown; 1 distinct error(s): Error: [ruact] Server error: the response ended before the whole page arrived |
