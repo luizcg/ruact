@@ -6,11 +6,14 @@
 #   ./run react 19.2.8    the same scenarios with the app's own react-server-dom-webpack
 #                         (appends to results/browser.md)
 #   ./run i18n 1.14.7     the middleware-scope scenario with another i18n
+#   ./run rack 2.2.24     the proof and the lifecycle with Rack 2.2
+#   ./run skew            the streamed document read by 0.0.19's bootstrap (production)
 #   ./run pg              the PostgreSQL scenarios (also part of ./run when initdb is on the PATH)
 #   ./run postgres        what suspense_timeout does to a query running in PostgreSQL
 #                         (writes results/postgres.md; needs initdb and pg_ctl)
 #
-# Needs Ruby (bundler) and Node. Uses ports 4190 and 5199. Runs from a
+# Needs Ruby (bundler) and Node. Uses ports 4190, 4191 (the threads scenario's
+# control listener), 4192 (nginx, when it is on the PATH) and 5199. Runs from a
 # `git archive` of the repository in an empty directory, too.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -18,7 +21,7 @@ cd "$(dirname "$0")"
 BROWSER=results/browser.md
 
 setup() {
-  for port in 4190 5199; do
+  for port in 4190 4191 4192 5199; do
     if lsof -ti "tcp:$port" >/dev/null 2>&1; then echo "port $port is in use" >&2; exit 1; fi
   done
   mkdir -p tmp log results
@@ -75,6 +78,21 @@ perturbation() {
   echo "| every \`<Suspense>\` in place: \`deferred.spec.mjs\` | $env | 2 failed, as it must: at the shell's text and at the URL |" >>"$BROWSER"
 }
 
+# Story 19-2 (AC21) — with the rows pushed without the nonce, the content of
+# a first load must never arrive under the policy.
+csp_perturbation() {
+  local env=$1
+  echo "== CSP, rows without the nonce: must FAIL, $env"
+  if HARNESS_CSP=1 HARNESS_CSP_PERTURB=1 RAILS_ENV=$env npx playwright test csp.spec.mjs -g "first load" >tmp/csp.log 2>&1; then
+    echo "the CSP scenario passed with the rows pushed without a nonce: it proves nothing" >&2
+    exit 1
+  fi
+  grep -q "1 failed" tmp/csp.log
+  grep -q 'Expected: "open:a"' tmp/csp.log
+  node -e 'const r = require("./results/csp-perturbation-'"$env"'.json"); if (!r.refused.some((v) => v.startsWith("script-src"))) process.exit(1)'
+  echo "| a CSP by nonce, rows pushed without it | $env | 1 failed, as it must: the content never arrives, the browser refused the script |" >>"$BROWSER"
+}
+
 browser() {
   echo "# Story 19-1 — browser runs" >"$BROWSER"
   echo >>"$BROWSER"
@@ -83,6 +101,17 @@ browser() {
   for env in development production; do
     scenarios "the scenarios" "$env"
     perturbation "$env"
+    scenarios "a CSP by nonce, without 'unsafe-inline'" "$env" HARNESS_CSP=1
+    csp_perturbation "$env"
+    scenarios "Puma with 3 threads (\`e2e/threads.spec.mjs\`)" "$env" HARNESS_THREADS=3
+    if command -v nginx >/dev/null; then
+      scenarios "nginx in front of Puma (\`e2e/nginx.spec.mjs\`)" "$env" HARNESS_NGINX=1
+    elif [ -n "${CI:-}" ]; then
+      echo "nginx is required on CI: none on the PATH" >&2
+      exit 1
+    else
+      echo "| nginx in front of Puma | $env | not run: no nginx on the PATH |" >>"$BROWSER"
+    fi
   done
 }
 
@@ -158,6 +187,58 @@ other_i18n() {
 # What this run wrote is newer than this stamp (CI prints only that).
 mkdir -p tmp && touch tmp/run-started
 
+# Story 19-2 (AC19.3) — the proof with Rack 2.2, whose ETag middleware
+# buffers a body it digests: ./run rack 2.2.24. Appends to results/browser.md.
+other_rack() {
+  local version=$1
+  cp Gemfile tmp/Gemfile.keep
+  cp Gemfile.lock tmp/Gemfile.lock.keep
+  restore_gems() {
+    cp tmp/Gemfile.keep Gemfile
+    cp tmp/Gemfile.lock.keep Gemfile.lock
+    bundle install --quiet
+  }
+  trap restore_gems EXIT
+  echo "gem \"rack\", \"$version\"" >>Gemfile
+  bundle install --quiet
+  table "Rack $(bundle exec ruby -e 'require "rack"; print Rack.release') — e2e/deferred.spec.mjs, e2e/lifecycle.spec.mjs"
+  for env in development production; do
+    echo "== Rack $version, $env"
+    HARNESS_VARIANT="rack-$version" RAILS_ENV=$env npx playwright test deferred.spec.mjs lifecycle.spec.mjs 2>&1 | tee tmp/playwright.log
+    row "the proof and the lifecycle" "$env" tmp/playwright.log
+    echo "== Rack $version without ruact's ETag: the proof must FAIL, $env"
+    if HARNESS_NO_RACK2_ETAG=1 RAILS_ENV=$env npx playwright test deferred.spec.mjs >tmp/rack-etag.log 2>&1; then
+      echo "the proof passed on Rack 2 without ruact's ETag: Rack::ETag no longer buffers, or the proof proves nothing" >&2
+      exit 1
+    fi
+    grep -q "2 failed" tmp/rack-etag.log
+    echo "| the proof without ruact's ETag | $env | 2 failed, as it must: Rack::ETag held the page |" >>"$BROWSER"
+  done
+}
+
+# Story 19-2 (AC22) — the streamed document read by 0.0.19's bootstrap: the
+# assets built with that release's plugin (from `git archive v0.0.19`), the
+# server this checkout, production. Appends to results/browser.md, then builds
+# the assets back with this checkout's plugin.
+skew() {
+  local old=tmp/plugin-0.0.19
+  rm -rf "$old" && mkdir -p "$old"
+  git -C ../../.. archive v0.0.19 vendor/javascript/vite-plugin-ruact | tar -x -C "$old"
+  trap 'build >/dev/null' EXIT
+  HARNESS_PLUGIN_DIR="$PWD/$old/vendor/javascript/vite-plugin-ruact" npx vite build >tmp/build-0.0.19.log
+  table "0.0.19's bootstrap, this server — e2e/skew.spec.mjs"
+  echo "== skew, production"
+  HARNESS_SKEW=1 RAILS_ENV=production npx playwright test 2>&1 | tee tmp/playwright.log
+  local seen
+  seen=$(node -e '
+    const r = require("./results/skew-production.json");
+    const end = r.when_it_ends;
+    const shown = end.b ? "the content shown" : end.fallback_still_shown ? "the fallback stays, the content never shown" : "nothing shown";
+    console.log(`measured: ${shown}; ${r.errors.length} distinct error(s)${r.errors[0] ? ": " + r.errors[0].slice(0, 90) : ""}`);
+  ')
+  echo "| the streamed document read by 0.0.19's bootstrap | production | $seen |" >>"$BROWSER"
+}
+
 case "${1:-all}" in
   # On CI PostgreSQL is required (AC24.1): a runner without it fails the run.
   all)      setup; browser
@@ -166,7 +247,9 @@ case "${1:-all}" in
             else echo "| PostgreSQL | — | not run: no initdb on the PATH |" >>"$BROWSER"; fi ;;
   pg)       setup; pg ;;
   i18n)     setup; build >/dev/null; other_i18n "${2:?version}" ;;
+  rack)     setup; build >/dev/null; other_rack "${2:?version}" ;;
+  skew)     setup; skew ;;
   react)    setup; other_react "${2:?version}" ;;
   postgres) postgres ;;
-  *)        echo "usage: ./run [react VERSION | i18n VERSION | pg | postgres]" >&2; exit 1 ;;
+  *)        echo "usage: ./run [react VERSION | i18n VERSION | rack VERSION | skew | pg | postgres]" >&2; exit 1 ;;
 esac

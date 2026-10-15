@@ -1,0 +1,6 @@
+{
+  "refused": [
+    "script-src eval",
+    "script-src-elem inline"
+  ]
+}

@@ -484,7 +484,30 @@ module Ruact
     def check_streaming
       mode  = Ruact.streaming_mode || :buffered
       label = mode == :enabled ? "enabled" : "buffered"
-      [:pass, "streaming: #{label} (#{streaming_server_hint})"]
+      message = "streaming: #{label} (#{streaming_server_hint})"
+      declaring = streaming_controllers.length
+      return [:pass, message] if declaring.zero?
+
+      # Story 19-2 (AC20) — the doctor sees no request: what it can say is
+      # where a page that streams silently does not.
+      [:pass, "#{message}; #{pluralize_count(declaring, 'controller')} #{declaring == 1 ? 'streams' : 'stream'} " \
+              "(ruact_streaming or ActionController::Live) — behind a proxy, the app must be reached over " \
+              "HTTP/1.1 (nginx: `proxy_http_version 1.1;`), or those pages are sent whole",
+       PROXY_HTTP11]
+    end
+
+    # Story 19-2 (AC20) — what makes a proxy talk HTTP/1.1 to the app.
+    PROXY_HTTP11 = "Behind nginx, set `proxy_http_version 1.1;` where it proxies to the app: by default it " \
+                   "talks HTTP/1.0 upstream, and a page declared with ruact_streaming is then sent whole " \
+                   "(the app logs it once)."
+    private_constant :PROXY_HTTP11
+
+    # Controller files that declare `ruact_streaming` or include
+    # `ActionController::Live`. Reads source, as {#island_controllers} does.
+    def streaming_controllers
+      Dir.glob(Rails.root.join("app", "controllers", "**", "*.rb").to_s).select do |file|
+        File.read(file).match?(/^\s*(ruact_streaming\b|include\s+ActionController::Live\b)/)
+      end
     end
 
     # Story 19-1 (ADR D1) — whether `load_async` runs its query in the

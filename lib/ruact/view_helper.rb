@@ -235,13 +235,23 @@ module Ruact
     # `</script>`, and its `\e`-style escapes mean something else in JS).
     def ruact_flight_data_script(flight_payload)
       <<~HTML.strip
-        <script>
+        <script#{__ruact_nonce_attr}>
           (function() {
             var d = (self.__FLIGHT_DATA = self.__FLIGHT_DATA || []);
             d.push(#{InlineScript.string_literal(flight_payload)});
           })();
         </script>
       HTML
+    end
+
+    # Story 19-2 (AC21) — the request's CSP nonce as a `<script>` attribute, so
+    # an app whose policy allows scripts by nonce (no `'unsafe-inline'`) runs
+    # the ones ruact writes. Empty without a nonce generator: the bytes are
+    # those of before.
+    def __ruact_nonce_attr
+      source = respond_to?(:request, true) ? request : nil
+      nonce = source.content_security_policy_nonce if source.respond_to?(:content_security_policy_nonce)
+      nonce ? %( nonce="#{ERB::Util.html_escape(nonce)}") : ""
     end
 
     # The bootstrap entry `<script>` tags — dev serves the virtual module from
@@ -264,7 +274,7 @@ module Ruact
         # bootstrap, in that order.
         dev_server = Ruact.config.vite_dev_server.chomp("/")
         <<~HTML
-          <script type="module" async>
+          <script type="module" async#{__ruact_nonce_attr}>
             import RefreshRuntime from '#{dev_server}/@react-refresh';
             RefreshRuntime.injectIntoGlobalHook(window);
             window.$RefreshReg$ = () => {};
@@ -279,7 +289,7 @@ module Ruact
         # virtual entry id (the manifest key Vite emits for the virtual input).
         entry = vite_manifest_entry(Ruact.bootstrap_virtual_id)
         src   = entry ? "/assets/#{entry['file']}" : "/assets/application.js"
-        tag   = %(<script type="module" async src="#{src}"></script>)
+        tag   = %(<script type="module" async src="#{src}"#{__ruact_nonce_attr}></script>)
         # Story 17-0k — in development with neither the Vite dev server nor a
         # build, that script 404s and the page stays empty with no error.
         Rails.env.development? && entry.nil? ? "#{ruact_vite_down_warning}\n#{tag}" : tag

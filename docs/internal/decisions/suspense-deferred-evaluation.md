@@ -481,11 +481,27 @@ today: `Cache-Control: no-cache` and `X-Accel-Buffering: no`.
   kept in Rails' execution state is copied to the action's thread. Scopes
   belong in the controller.
 - **Rack 2.2**, whose `ETag` buffers any body unless it sees
-  `Cache-Control: no-cache` or `Last-Modified`.
+  `Cache-Control: no-cache` or `Last-Modified`. *Since 19-2 (`./run rack
+  2.2.24`):* wrong on the first count — 2.2.24 skips only a response with an
+  `ETag` or a `Last-Modified`, so every streamed page was held whole. The gem
+  now gives a streamed response a weak `ETag` of its own on Rack 2; the proof
+  and the lifecycle pass with 2.2.24, and fail without that.
 - **A reverse proxy.** By its documentation nginx buffers a proxied response by
   default (`proxy_buffering on`) and honours `X-Accel-Buffering: no`, which the
   gem sends; a proxy that compresses, or that ignores that header, has to be
   configured not to buffer. The guide has to say this with the header names.
+  *Since 19-2 (`e2e/nginx.spec.mjs`, nginx 1.24.0 on the CI runner,
+  `results/nginx-*.json`):* with nginx's defaults it talks HTTP/1.0 to the app,
+  Live cannot stream, and the page comes whole, on a first load and on a
+  navigation (the app now logs it once). With `proxy_http_version 1.1;` the
+  shell comes before the content, and still does with `gzip on` for
+  `text/html` and `text/x-component`; `proxy_buffering` left at its default.
+  With nginx told to ignore `X-Accel-Buffering` (so `proxy_buffering on`
+  applies) and no compression, the shell still came first: nginx 1.24 passed
+  on the chunks it had received. With compression and the header ignored, the
+  page came whole (gzip writes on a flush or a full buffer, and only
+  `X-Accel-Buffering: no` makes nginx flush). Behind nginx: HTTP/1.1 upstream,
+  and the header kept, which ruact sends.
 - **Other servers**; Puma terminating TLS itself (the socket check reads a
   plain socket); HTTP/2.
 - **PostgreSQL and MySQL**: whether the timeout interrupts a running query
@@ -690,6 +706,29 @@ What 19-2 changed, from the lifecycle cases:
 - **Errors' positions:** the error row's frames are the six fields React's
   development client reads, and a component tag over several lines keeps
   them, so the template lines are right.
+
+What 19-2 changed, for deployment (19-2b):
+
+- **HTTP/1.0 is no longer silent:** an action declared with
+  `ruact_streaming` that got a request over HTTP/1.0 logs a warning once per
+  process; `ruact:doctor` names `proxy_http_version 1.1`.
+- **CSP:** every script ruact writes carries the request's nonce, each
+  boundary's pushed rows included (proved under a policy without
+  `'unsafe-inline'`). React's development Flight client tries `eval()` and goes
+  on without it.
+- **Rack 2:** a streamed response carries a weak `ETag` of its own, so Rack 2's
+  `Rack::ETag` does not read it whole first (see "Not measured").
+- **Puma's threads** (`e2e/threads.spec.mjs`, three threads): a page that
+  streams holds its thread until its last block; with every thread at a gate a
+  fourth request queues, and in production so do the pages' own assets when
+  Puma serves them. One user leaving a document still streaming for a
+  navigation holds two threads until the document's block ends.
+- **0.0.19's JavaScript with this server** (`./run skew`): the entry tag is
+  `async` since 19-1, so the old bootstrap runs early, reads the shell's rows
+  only, and the fallback stays with a transport error. 19-0 measured the page
+  whole because the prototype's entry was still deferred. A deploy that
+  updates the gem without rebuilding the JavaScript breaks the pages that
+  stream; what to do about it is Luiz's to decide (Story 19-2 Resultado).
 
 ## Decided by Luiz
 

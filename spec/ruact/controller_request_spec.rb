@@ -1091,6 +1091,72 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(events).to eq([[:shell, false], [:one, true], [:two, true], [:inner, true]])
       end
 
+      # Story 19-2 (AC19.3) — on Rack 2, Rack::ETag reads a 200 body whole to
+      # digest it unless the response has an ETag: a streamed one gets its own,
+      # new each time, so no If-None-Match matches it. Not on Rack 3.
+      it "gives a streamed response an ETag of its own on Rack 2, and none on Rack 3", :aggregate_failures do
+        stub_const("Ruact::Controller::Streaming::RACK_ETAG_BUFFERS", true)
+        first = flight("/streaming-demo/show").headers["ETag"]
+        second = document("/streaming-demo/show").headers["ETag"]
+        expect(first).to match(%r{\AW/"ruact-stream-\h{16}"\z})
+        expect(second).to match(%r{\AW/"ruact-stream-\h{16}"\z})
+        expect(first).not_to eq(second)
+
+        stub_const("Ruact::Controller::Streaming::RACK_ETAG_BUFFERS", false)
+        expect(flight("/streaming-demo/show").headers["ETag"]).to be_nil
+      end
+
+      # Review 19-2b R1 — an action's own validator (`fresh_when`) already keeps
+      # Rack::ETag away, and conditional GET needs it: it is left as it is.
+      it "leaves an ETag or a Last-Modified the action set", :aggregate_failures do
+        stub_const("Ruact::Controller::Streaming::RACK_ETAG_BUFFERS", true)
+        own = { "ETag" => 'W/"the-app"' }
+        Ruact::Controller::Streaming.keep_unbuffered(own)
+        expect(own).to eq("ETag" => 'W/"the-app"')
+        dated = { "Last-Modified" => "Wed, 14 Oct 2026 10:00:00 GMT" }
+        Ruact::Controller::Streaming.keep_unbuffered(dated)
+        expect(dated.keys).to eq(["Last-Modified"])
+      end
+
+      # Story 19-2 (AC21) — an app whose CSP allows scripts by nonce: every
+      # script ruact writes carries the request's nonce, the rows of each
+      # boundary included; without a generator, not a byte changes.
+      it "puts the request's CSP nonce on every script it writes, and none without one", :aggregate_failures do
+        # The app's config is read once, at its first request: the request is stubbed instead.
+        allow_any_instance_of(ActionDispatch::Request) # rubocop:disable RSpec/AnyInstance
+          .to receive(:content_security_policy_nonce_generator).and_return(->(_request) { "n0nce" })
+        body = document("/streaming-demo/show").body
+        scripts = body.scan(/<script\b[^>]*>/)
+        expect(scripts.length).to be >= 6
+        expect(scripts).to all(include(' nonce="n0nce"'))
+        expect(body).to include('<script nonce="n0nce">(self.__FLIGHT_DATA=self.__FLIGHT_DATA||[]).push(')
+
+        allow_any_instance_of(ActionDispatch::Request) # rubocop:disable RSpec/AnyInstance
+          .to receive(:content_security_policy_nonce_generator).and_return(nil)
+        plain = document("/streaming-demo/show").body
+        expect(plain).not_to include("nonce=")
+        expect(plain.scan(/<script\b[^>]*>/).length).to eq(scripts.length)
+      end
+
+      # Story 19-2 (AC20) — that page was not streamed, and nothing said so: a
+      # warning, once per process, naming the action and the proxy's line.
+      it "says once that an action declared to stream got a request over HTTP/1.0", :aggregate_failures do
+        Ruact::Controller::Streaming.reset_unstreamed_note!
+        log = with_log do
+          get "/streaming-demo/show"
+          get "/streaming-demo/show"
+        end
+        line = "[ruact] ControllerRequestSpecSupport::StreamingDemoController#show streams (ruact_streaming"
+        expect(log.scan(line).length).to eq(1)
+        expect(log).to include("proxy_http_version 1.1;")
+        expect(log).to match(/WARN/)
+
+        # Over HTTP/1.1 it streams; an action not declared is not concerned.
+        Ruact::Controller::Streaming.reset_unstreamed_note!
+        expect(with_log { read_streamed("/streaming-demo/show") }).not_to include("an ordinary response")
+        expect(with_log { get "/streaming-demo/edit" }).not_to include("an ordinary response")
+      end
+
       # Review R3 — HTTP/1.0 (nginx's default to its upstream, Rack::Test): Live
       # answers with an ordinary response, so the page renders whole, in place,
       # with its blocks' content, and no development note asks to declare what

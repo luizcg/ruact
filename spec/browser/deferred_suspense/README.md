@@ -16,8 +16,24 @@ Slow work waits at a gate the test opens with a request of its own
 ./run pg              # only the PostgreSQL scenarios (e2e/postgres.spec.mjs), on a throwaway server
 ./run react 19.2.8    # the scenarios with the app's own react-server-dom-webpack
 ./run i18n 1.14.7     # the middleware scenario with another i18n
+./run rack 2.2.24     # the proof and the lifecycle with Rack 2.2
 ./run postgres        # what suspense_timeout does to a query running in PostgreSQL (19-1)
 ```
+
+`./run` also runs the scenarios under a Content Security Policy that allows
+scripts by nonce only (`HARNESS_CSP=1`, `e2e/csp.spec.mjs`), and checks that
+with each boundary's rows pushed without the nonce the content never arrives.
+
+And with Puma on three threads (`HARNESS_THREADS=3`, `e2e/threads.spec.mjs`):
+the test drives the gates through a listener of its own (`control.rb`, port
+4191), since every Puma thread may be busy, and reads Puma's own stats.
+
+When nginx is on the PATH (the CI runner has it), the proof also runs behind
+it (`HARNESS_NGINX=1`, `e2e/nginx.spec.mjs`, port 4192): nginx's defaults,
+`proxy_http_version 1.1`, and gzip on top, each with its own configuration in
+`tmp/nginx/`. Written to `results/nginx-<env>.json`; the committed ones come
+from the CI runner (nginx 1.24.0, run 38790576743), the step "What ran" prints
+each run's.
 
 `./run` writes `results/browser.md`, one row per run. What a scenario measures
 rather than requires goes to `results/<name>-<env>.json`; a run with another

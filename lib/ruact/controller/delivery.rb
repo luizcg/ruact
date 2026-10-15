@@ -58,8 +58,8 @@ module Ruact
       # the client router knows a document still loading has rows to come: it
       # stops such a document when it leaves the page, and only such a one (a
       # document that is still being parsed, its rows all in, is left alone).
-      STREAMING_OPEN = "<script>(self.__FLIGHT_DATA=self.__FLIGHT_DATA||[]).streaming=true</script>"
-      STREAMING_DONE = "<script>self.__FLIGHT_DATA.streaming=false</script>"
+      STREAMING_OPEN = "(self.__FLIGHT_DATA=self.__FLIGHT_DATA||[]).streaming=true"
+      STREAMING_DONE = "self.__FLIGHT_DATA.streaming=false"
 
       private
 
@@ -99,10 +99,9 @@ module Ruact
 
         document = ruact_document_html(shell)
         cut = document.rindex(BODY_CLOSE) || document.length
-        __ruact_stream(run, DOCUMENT_STREAM_HEADERS, "#{document[0...cut]}#{STREAMING_OPEN}",
-                       "#{STREAMING_DONE}#{document[cut..]}") do |rows|
-          __ruact_flight_push(rows)
-        end
+        open = "<script#{__ruact_nonce_attr}>"
+        __ruact_stream(run, DOCUMENT_STREAM_HEADERS, "#{document[0...cut]}#{open}#{STREAMING_OPEN}</script>",
+                       "#{open}#{STREAMING_DONE}</script>#{document[cut..]}") { |rows| __ruact_flight_push(rows, open) }
       end
 
       # Writes +first+, then each boundary's rows (through the block, when given),
@@ -111,6 +110,7 @@ module Ruact
       # not sent stays pending, for the browser's transport to label.
       def __ruact_stream(run, headers, first, last = nil)
         headers.each { |name, value| response.headers[name] = value }
+        Streaming.keep_unbuffered(response.headers)
         @__ruact_streamed = true
         stream = response.stream
         begin
@@ -137,9 +137,9 @@ module Ruact
       # One boundary's rows, as the script a streamed document carries them in:
       # pushed onto the queue the bootstrap reads. Written as
       # {InlineScript.string_literal} writes it — no byte of the payload can
-      # close the `<script>`.
-      def __ruact_flight_push(rows)
-        "<script>(self.__FLIGHT_DATA=self.__FLIGHT_DATA||[]).push(#{InlineScript.string_literal(rows)})</script>"
+      # close the `<script>`. +open+ carries the request's CSP nonce, if any.
+      def __ruact_flight_push(rows, open = "<script>")
+        "#{open}(self.__FLIGHT_DATA=self.__FLIGHT_DATA||[]).push(#{InlineScript.string_literal(rows)})</script>"
       end
 
       # Story 19-1 (D4) — has the client closed its end? Asked before each

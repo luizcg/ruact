@@ -7,9 +7,12 @@ import { defineConfig, devices } from "@playwright/test";
 const env = process.env.RAILS_ENV ?? "development";
 const port = Number(process.env.PORT ?? 4190);
 const vitePort = Number(process.env.VITE_PORT ?? 5199);
+// Story 19-2 (AC18) — HARNESS_THREADS=3: Puma with three threads, and the
+// control listener the threads scenario uses beside it.
+const threads = Number(process.env.HARNESS_THREADS || 6);
 
 const rails = {
-  command: `bundle exec puma -t 6:6 -p ${port} config.ru`,
+  command: `bundle exec puma -t ${threads}:${threads} -p ${port} config.ru`,
   url: `http://localhost:${port}/up`,
   env: {
     RAILS_ENV: env,
@@ -18,6 +21,10 @@ const rails = {
     HARNESS_IN_PLACE: process.env.HARNESS_IN_PLACE ?? "",
     HARNESS_TIMEOUT: process.env.HARNESS_TIMEOUT ?? "",
     HARNESS_ASYNC: process.env.HARNESS_ASYNC ?? "",
+    HARNESS_CSP: process.env.HARNESS_CSP ?? "",
+    HARNESS_CONTROL_PORT: process.env.HARNESS_THREADS ? String(port + 1) : "",
+    HARNESS_CSP_PERTURB: process.env.HARNESS_CSP_PERTURB ?? "",
+    HARNESS_NO_RACK2_ETAG: process.env.HARNESS_NO_RACK2_ETAG ?? "",
     ...(process.env.DATABASE_URL ? { DATABASE_URL: process.env.DATABASE_URL } : {}),
   },
   reuseExistingServer: false,
@@ -33,7 +40,7 @@ const vite = {
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: process.env.HARNESS_IN_PLACE ? ["deferred.spec.mjs"] : process.env.HARNESS_DB === "postgres" ? ["00-warm-up.spec.mjs", "postgres.spec.mjs"] : ["00-warm-up.spec.mjs", "deferred.spec.mjs", "lifecycle.spec.mjs", "navigation.spec.mjs", "failures.spec.mjs", "placement.spec.mjs", "forms.spec.mjs", "isolation.spec.mjs", "leaving.spec.mjs", "transactions.spec.mjs", "middleware.spec.mjs", "caching.spec.mjs"],
+  testMatch: process.env.HARNESS_IN_PLACE ? ["deferred.spec.mjs"] : process.env.HARNESS_SKEW ? ["skew.spec.mjs"] : process.env.HARNESS_NGINX ? ["00-warm-up.spec.mjs", "nginx.spec.mjs"] : process.env.HARNESS_THREADS ? ["00-warm-up.spec.mjs", "threads.spec.mjs"] : process.env.HARNESS_CSP ? ["00-warm-up.spec.mjs", "csp.spec.mjs"] : process.env.HARNESS_DB === "postgres" ? ["00-warm-up.spec.mjs", "postgres.spec.mjs"] : ["00-warm-up.spec.mjs", "deferred.spec.mjs", "lifecycle.spec.mjs", "navigation.spec.mjs", "failures.spec.mjs", "placement.spec.mjs", "forms.spec.mjs", "isolation.spec.mjs", "leaving.spec.mjs", "transactions.spec.mjs", "middleware.spec.mjs", "caching.spec.mjs"],
   workers: 1,
   fullyParallel: false,
   retries: 0,

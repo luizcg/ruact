@@ -1,0 +1,13 @@
+{
+  "AC18.1": {
+    "threads": 3,
+    "at_the_gate": 3,
+    "busy": 3,
+    "queued_behind_them_before_the_fourth": 3,
+    "fourth_request": "queued until a gate opened"
+  },
+  "AC18.3": {
+    "while_the_first_block_waits": 2,
+    "once_it_ended": 1
+  }
+}

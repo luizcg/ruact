@@ -21,6 +21,7 @@ require "web-console" if ENV.fetch("RAILS_ENV", "development") == "development"
 require "ruact"
 
 require_relative "gate"
+require_relative "control"
 
 %w[tmp log results].each { |dir| FileUtils.mkdir_p(File.join(__dir__, dir)) }
 
@@ -243,6 +244,21 @@ class HarnessApp < Rails::Application
   config.middleware.use RoleSelector, ActiveRecord::Middleware::DatabaseSelector::Resolver,
                         ActiveRecord::Middleware::DatabaseSelector::Resolver::Session, { delay: 2.seconds }
   config.active_record.async_query_executor = :global_thread_pool if ENV["HARNESS_ASYNC"] == "1"
+
+  # Story 19-2 (AC21) — HARNESS_CSP=1: a policy that allows scripts by nonce
+  # only (no 'unsafe-inline'), as an app with `content_security_policy_nonce_generator` has.
+  if ENV["HARNESS_CSP"] == "1"
+    vite = "http://localhost:#{ENV.fetch('VITE_PORT', '5199')}"
+    config.content_security_policy do |policy|
+      policy.default_src :self
+      policy.script_src(*[:self, (vite if Rails.env.development?)].compact)
+      policy.connect_src(*[:self, (vite if Rails.env.development?), (vite.sub("http", "ws") if Rails.env.development?)].compact)
+      policy.style_src :self, :unsafe_inline
+      policy.img_src :self, :data
+    end
+    config.content_security_policy_nonce_generator = ->(_request) { SecureRandom.base64(16) }
+    config.content_security_policy_nonce_directives = %w[script-src]
+  end
 end
 
 Ruact.configure do |config|
@@ -271,6 +287,8 @@ ActiveSupport.on_load(:active_record_sqlite3adapter) { prepend GateFunction }
 
 Rails.application.initialize!
 
+Control.start(Integer(ENV["HARNESS_CONTROL_PORT"], 10)) if ENV["HARNESS_CONTROL_PORT"].present?
+
 # What the app's error reporting (Sentry and the like) would be told.
 Rails.error.subscribe(Class.new do
   def report(error, source: nil, **)
@@ -298,6 +316,24 @@ Ruact::DeferredRender.prepend(Module.new do
     super
   end
 end)
+
+# Story 19-2 (AC21) — the CSP perturbation: the rows of each boundary pushed
+# without the nonce. The content must then never arrive.
+if ENV["HARNESS_CSP_PERTURB"] == "1"
+  Ruact::Controller::Delivery.prepend(Module.new do
+    private
+
+    def __ruact_flight_push(rows, _open = nil) = super(rows)
+  end)
+end
+
+# Story 19-2 (AC19.3) — the Rack 2 perturbation: no ETag of ruact's, so Rack
+# 2's Rack::ETag reads the streamed body whole.
+if ENV["HARNESS_NO_RACK2_ETAG"] == "1"
+  Ruact::Controller::Streaming.singleton_class.prepend(Module.new do
+    def keep_unbuffered(_headers) = nil
+  end)
+end
 
 # The perturbation: the helper renders every <Suspense> in place, as 0.0.19
 # did, though the action still streams.
