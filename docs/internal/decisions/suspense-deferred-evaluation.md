@@ -705,3 +705,16 @@ On 2026-10-14:
 3. **`suspense_timeout` stays at 5 s** once it limits real time. It is a
    backstop: it does not stop a query the driver cannot interrupt, and the
    guide says so.
+
+On 2026-10-15 (Story 19-2a):
+
+4. **A transaction left open at the end of an action is not rolled back by
+   ruact.** The next request inherits it with and without streaming: that is
+   Rails, and ruact does not undo for the app what Rails leaves alone
+   everywhere else. The guide says so.
+5. **The router keeps stopping a document still streaming when it leaves the
+   page by a link or a form**, so the server renders nothing for a page nobody
+   sees. The cost, measured, goes in the guide: what that document was still
+   loading (an image, a `fetch`, an `import()`) fails.
+6. **The browser job is a required check** for merging into the gem's `main`
+   (five green runs in a row, without retry, after the last change of 19-2a).
