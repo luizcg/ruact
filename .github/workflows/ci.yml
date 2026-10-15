@@ -210,6 +210,11 @@ jobs:
     defaults:
       run:
         working-directory: spec/browser/deferred_suspense
+    env:
+      # The app loads the gem by path, and its lockfile records the gem's
+      # version: frozen mode would fail on every release, which moves it.
+      BUNDLE_DEPLOYMENT: "false"
+      BUNDLE_FROZEN: "false"
     steps:
       - uses: actions/checkout@v5
       - uses: ruby/setup-ruby@v1

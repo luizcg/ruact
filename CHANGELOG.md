@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.20] - 2026-10-14
+
 ### Added
 
 - **`ruact_streaming` — a page sent as it renders.** In an action the controller declares (`ruact_streaming`, `ruact_streaming only: :show`, `except:`; without arguments, every ruact page of the controller), the shell and the `<Suspense>` fallbacks reach the browser first, and each `<Suspense>`'s content runs after that, one at a time, in page order (a `<Suspense>` inside one waits behind the page's others), in the view and with the template path it was written in, and arrives when it is ready — on the first load (the document stays open and pushes each boundary's rows) and on a navigation. Those actions run under `ActionController::Live`, applied per action: the controller's other actions respond as before, with their `ETag`, on the request's thread. `Controller.action(:name)` endpoints included. Over HTTP/1.0 — nginx's default to its upstream; set `proxy_http_version 1.1` — Live cannot stream, and the page renders whole, as without `ruact_streaming`.
@@ -516,7 +518,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **E2E test app** — `e2e/` Rails app (no DB, in-memory Post model) with full CRUD system tests validating the complete request cycle.
 
-[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.19...HEAD
+[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.20...HEAD
+[0.0.20]: https://github.com/luizcg/ruact/releases/tag/v0.0.20
 [0.0.19]: https://github.com/luizcg/ruact/releases/tag/v0.0.19
 [0.0.18]: https://github.com/luizcg/ruact/releases/tag/v0.0.18
 [0.0.17]: https://github.com/luizcg/ruact/releases/tag/v0.0.17
