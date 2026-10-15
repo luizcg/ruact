@@ -39,7 +39,7 @@ const vite = {
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: process.env.HARNESS_IN_PLACE ? ["deferred.spec.mjs"] : process.env.HARNESS_NGINX ? ["00-warm-up.spec.mjs", "nginx.spec.mjs"] : process.env.HARNESS_THREADS ? ["00-warm-up.spec.mjs", "threads.spec.mjs"] : process.env.HARNESS_CSP ? ["00-warm-up.spec.mjs", "csp.spec.mjs"] : process.env.HARNESS_DB === "postgres" ? ["00-warm-up.spec.mjs", "postgres.spec.mjs"] : ["00-warm-up.spec.mjs", "deferred.spec.mjs", "lifecycle.spec.mjs", "navigation.spec.mjs", "failures.spec.mjs", "placement.spec.mjs", "forms.spec.mjs", "isolation.spec.mjs", "leaving.spec.mjs", "transactions.spec.mjs", "middleware.spec.mjs", "caching.spec.mjs"],
+  testMatch: process.env.HARNESS_IN_PLACE ? ["deferred.spec.mjs"] : process.env.HARNESS_SKEW ? ["skew.spec.mjs"] : process.env.HARNESS_NGINX ? ["00-warm-up.spec.mjs", "nginx.spec.mjs"] : process.env.HARNESS_THREADS ? ["00-warm-up.spec.mjs", "threads.spec.mjs"] : process.env.HARNESS_CSP ? ["00-warm-up.spec.mjs", "csp.spec.mjs"] : process.env.HARNESS_DB === "postgres" ? ["00-warm-up.spec.mjs", "postgres.spec.mjs"] : ["00-warm-up.spec.mjs", "deferred.spec.mjs", "lifecycle.spec.mjs", "navigation.spec.mjs", "failures.spec.mjs", "placement.spec.mjs", "forms.spec.mjs", "isolation.spec.mjs", "leaving.spec.mjs", "transactions.spec.mjs", "middleware.spec.mjs", "caching.spec.mjs"],
   workers: 1,
   fullyParallel: false,
   retries: 0,

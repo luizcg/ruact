@@ -7,6 +7,7 @@
 #                         (appends to results/browser.md)
 #   ./run i18n 1.14.7     the middleware-scope scenario with another i18n
 #   ./run rack 2.2.24     the proof and the lifecycle with Rack 2.2
+#   ./run skew            the streamed document read by 0.0.19's bootstrap (production)
 #   ./run pg              the PostgreSQL scenarios (also part of ./run when initdb is on the PATH)
 #   ./run postgres        what suspense_timeout does to a query running in PostgreSQL
 #                         (writes results/postgres.md; needs initdb and pg_ctl)
@@ -204,6 +205,29 @@ other_rack() {
   done
 }
 
+# Story 19-2 (AC22) — the streamed document read by 0.0.19's bootstrap: the
+# assets built with that release's plugin (from `git archive v0.0.19`), the
+# server this checkout, production. Appends to results/browser.md, then builds
+# the assets back with this checkout's plugin.
+skew() {
+  local old=tmp/plugin-0.0.19
+  rm -rf "$old" && mkdir -p "$old"
+  git -C ../../.. archive v0.0.19 vendor/javascript/vite-plugin-ruact | tar -x -C "$old"
+  trap 'build >/dev/null' EXIT
+  HARNESS_PLUGIN_DIR="$PWD/$old/vendor/javascript/vite-plugin-ruact" npx vite build >tmp/build-0.0.19.log
+  table "0.0.19's bootstrap, this server — e2e/skew.spec.mjs"
+  echo "== skew, production"
+  HARNESS_SKEW=1 RAILS_ENV=production npx playwright test 2>&1 | tee tmp/playwright.log
+  local seen
+  seen=$(node -e '
+    const r = require("./results/skew-production.json");
+    const end = r.when_it_ends;
+    const shown = end.b ? "the content shown" : end.fallback_still_shown ? "the fallback stays, the content never shown" : "nothing shown";
+    console.log(`measured: ${shown}; ${r.errors.length} distinct error(s)${r.errors[0] ? ": " + r.errors[0].slice(0, 90) : ""}`);
+  ')
+  echo "| the streamed document read by 0.0.19's bootstrap | production | $seen |" >>"$BROWSER"
+}
+
 case "${1:-all}" in
   # On CI PostgreSQL is required (AC24.1): a runner without it fails the run.
   all)      setup; browser
@@ -213,7 +237,8 @@ case "${1:-all}" in
   pg)       setup; pg ;;
   i18n)     setup; build >/dev/null; other_i18n "${2:?version}" ;;
   rack)     setup; build >/dev/null; other_rack "${2:?version}" ;;
+  skew)     setup; skew ;;
   react)    setup; other_react "${2:?version}" ;;
   postgres) postgres ;;
-  *)        echo "usage: ./run [react VERSION | i18n VERSION | rack VERSION | pg | postgres]" >&2; exit 1 ;;
+  *)        echo "usage: ./run [react VERSION | i18n VERSION | rack VERSION | skew | pg | postgres]" >&2; exit 1 ;;
 esac

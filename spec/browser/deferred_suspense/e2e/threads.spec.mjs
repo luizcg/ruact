@@ -9,9 +9,10 @@ import { resultFile } from "./support.mjs";
 
 const CONTROL = `http://127.0.0.1:${Number(process.env.PORT ?? 4190) + 1}`;
 const control = async (request, path) => (await request.get(`${CONTROL}${path}`)).json();
+const puma = async (request) => (await control(request, "/state")).puma;
 const busyAt = (request, busy, backlog = 0) =>
   expect
-    .poll(async () => { const { puma } = await control(request, "/state"); return [puma.busy, puma.backlog]; },
+    .poll(async () => { const now = await puma(request); return [now.busy, now.backlog]; },
       { timeout: 10_000, intervals: [50, 100, 200] })
     .toEqual([busy, backlog]);
 const waitingAt = (request, gates) =>
@@ -25,19 +26,32 @@ test("AC18.1 — three pages at a gate hold the three threads; a fourth request 
   const pages = await Promise.all([1, 2, 3].map(() => browser.newPage()));
   pages.forEach((page) => page.goto("/two", { waitUntil: "commit" }).catch(() => {}));
   await waitingAt(request, { a: 3 });
-  await busyAt(request, 3);
+  await expect.poll(async () => (await puma(request)).busy).toBe(3);
+  // In production Puma serves the pages' own JavaScript too (no Vite server):
+  // those requests queue behind the three that stream. Read once they settle.
+  let queued = -1;
+  await expect.poll(async () => {
+    const before = (await puma(request)).backlog;
+    const settled = before === queued;
+    queued = before;
+    return settled;
+  }, { timeout: 10_000, intervals: [300] }).toBe(true);
 
   // A page with no <Suspense> at all: it waits for a thread.
   let answered = false;
   const fourth = request.get("/plain").then((response) => { answered = true; return response; });
-  await busyAt(request, 3, 1);
+  await busyAt(request, 3, queued + 1);
   expect(answered).toBe(false);
 
   await control(request, "/open/a");
   await control(request, "/open/b");
   expect((await fourth).status()).toBe(200);
   await busyAt(request, 0);
-  measured["AC18.1"] = { threads: 3, at_the_gate: 3, busy: 3, fourth_request: "queued (backlog 1) until a gate opened" };
+  measured["AC18.1"] = {
+    threads: 3, at_the_gate: 3, busy: 3,
+    queued_behind_them_before_the_fourth: queued,
+    fourth_request: "queued until a gate opened",
+  };
   await Promise.all(pages.map((page) => page.close()));
 });
 
