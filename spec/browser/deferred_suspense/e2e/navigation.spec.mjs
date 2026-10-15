@@ -22,14 +22,23 @@ const count = (list, item) => list.filter((event) => event === item).length;
 
 // The last run's outcomes, and every run's, one line each: an outcome seen
 // once stays on record when the next run does not see it.
+// An outcome counts once its scenario passed; both files are written for a
+// run of every scenario only — a focused or failed run would record part of one.
 const outcomes = {};
+let recorded = [];
+test.beforeEach(() => { recorded = []; });
+test.afterEach(({}, testInfo) => {
+  if (testInfo.status !== "passed") recorded.forEach((name) => delete outcomes[name]);
+});
+const record = (name, outcome) => {
+  outcomes[name] = outcome;
+  recorded.push(name);
+};
 test.afterAll(() => {
+  if (!["AC1", "AC2", "AC4.2"].every((name) => name in outcomes)) return;
   const file = resultFile("navigation");
   fs.writeFileSync(file, JSON.stringify(outcomes, null, 2) + "\n");
-  // A run of every scenario only: a focused run would record part of one.
-  if (["AC1", "AC2", "AC4.2"].every((name) => name in outcomes)) {
-    fs.appendFileSync(file.replace(/\.json$/, ".history.jsonl"), JSON.stringify({ at: new Date().toISOString(), ...outcomes }) + "\n");
-  }
+  fs.appendFileSync(file.replace(/\.json$/, ".history.jsonl"), JSON.stringify({ at: new Date().toISOString(), ...outcomes }) + "\n");
 });
 
 // What the server did with the request the router aborted, once its first
@@ -41,9 +50,14 @@ async function abortedRequestOutcome(request, startsOfB) {
   return (await clientLeft(request)).length > 0 ? "stopped: the client left" : "rendered its next block";
 }
 
-// Once the document has ended and React has rendered what arrived.
+// Once the document has ended and React has rendered what arrived. React
+// holds back a render that only reveals suspended content until 300 ms after
+// the last boundary switched (FALLBACK_THROTTLE_MS in react-dom): the one wait
+// by time here, React's own constant and a margin, so a late row would show.
+const REACT_REVEAL_THROTTLE_MS = 300;
 async function settled(page) {
   await page.waitForFunction(() => document.readyState === "complete");
+  await page.waitForTimeout(REACT_REVEAL_THROTTLE_MS + 100);
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0))));
 }
 
@@ -76,7 +90,7 @@ test("AC1 — a navigation that replaces one still pending: the new page, and th
   await expect(fallback(page, "A")).toHaveCount(0);
 
   await open(request, "a");
-  outcomes.AC1 = await abortedRequestOutcome(request, 1);
+  record("AC1", await abortedRequestOutcome(request, 1));
   await expect(page.locator("#a")).toHaveCount(0);
   await expect(page.locator("#b")).toHaveCount(0);
   await expect(page.locator("#shell")).toHaveText("Plain");
@@ -105,7 +119,7 @@ test("AC2 — the same page twice: the first request is cut, the second renders 
 
   await open(request, "a");
   await expect(page.locator("#a")).toHaveText("open:a");
-  outcomes.AC2 = await abortedRequestOutcome(request, 2);
+  record("AC2", await abortedRequestOutcome(request, 2));
   await expect(page.locator("#a")).toHaveCount(1);
 
   await open(request, "b");
@@ -164,7 +178,7 @@ test("AC4.2 — revalidate() while a navigation's boundary is pending resolves a
 
   await open(request, "a");
   await expect(page.locator("#a")).toHaveText("open:a");
-  outcomes["AC4.2"] = await abortedRequestOutcome(request, 2);
+  record("AC4.2", await abortedRequestOutcome(request, 2));
   await expect(page.locator("#revalidate")).toHaveAttribute("data-state", "pending");
 
   await open(request, "b");

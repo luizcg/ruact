@@ -636,13 +636,73 @@ describe("leaving a document that is still loading", () => {
     expect(stoppedBeforeFetch).toBe(true);
   });
 
-  // Review 19-2a R3 — a `#anchor` on the page still loading: not leaving it.
-  it("leaves the document loading for a popstate that only changes the hash", async () => {
+  // Review 19-2a R3/R4 — a `#anchor` on the page on screen: the browser
+  // scrolls; nothing is fetched, and the document is not left.
+  it("leaves a popstate that only changes the hash to the browser", async () => {
     globalThis.document.readyState = "loading";
     location._set("/products/1#reviews");
     dom.listeners.window.popstate.forEach((fn) => fn({}));
     await settle();
     expect(window.stop).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("leaves a link to this page's #anchor to the browser", async () => {
+    globalThis.document.readyState = "loading";
+    const event = click(dom.listeners, "/products/1#reviews");
+    await settle();
+    expect(event.defaultPrevented).toBe(false);
+    expect(window.stop).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  // Review 19-2a R4 — as a browser does: once stopped, the document no longer
+  // loads, so a later navigation does not stop it again.
+  function stopForReal() {
+    globalThis.document.readyState = "loading";
+    window.stop.mockImplementation(() => { globalThis.document.readyState = "complete"; });
+  }
+
+  it("fetches the page again when the navigation that superseded the one that stopped it fails", async () => {
+    stopForReal();
+    const html500 = respond({ status: 500, contentType: "text/html", body: "<p>boom</p>" });
+    globalThis.fetch
+      .mockImplementationOnce((_url, { signal }) => new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      }))
+      .mockResolvedValueOnce(html500)
+      .mockResolvedValue(respond({ body: '0:"again"\n' }));
+    const form = new dom.FakeForm({ action: "/people", method: "post" });
+    submit(dom.listeners, form);
+    submit(dom.listeners, form);
+    await settle();
+    await settle();
+    expect(window.stop).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual(["/people", "/people", "/products/1"]);
+  });
+
+  it("fetches the page again when the redirect a form was answered with fails", async () => {
+    stopForReal();
+    globalThis.fetch
+      .mockResolvedValueOnce(respond({ body: '0:{"redirectUrl":"/people/9","redirectType":"push"}\n' }))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValue(respond({ body: '0:"again"\n' }));
+    submit(dom.listeners, new dom.FakeForm({ action: "/people", method: "post" }));
+    await settle();
+    await settle();
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual(["/people", "/people/9", "/products/1"]);
+  });
+
+  it("does not fetch the page again once a navigation replaced it", async () => {
+    stopForReal();
+    globalThis.fetch.mockResolvedValue(respond({ body: '0:"next"\n' }));
+    click(dom.listeners, "/products/2");
+    await settle();
+    globalThis.fetch.mockRejectedValue(new TypeError("Failed to fetch"));
+    click(dom.listeners, "/products/3");
+    await settle();
+    await settle();
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual(["/products/2", "/products/3"]);
   });
 
   // Review 19-2a R3 — the navigation that stopped the document failed: the user

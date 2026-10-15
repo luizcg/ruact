@@ -21,11 +21,11 @@ let _onNavigate     = null;
 let _onError        = null;
 let _currentAbort   = null;
 
-// Story 19-2 — how many times the router has handed the page over (a new tree,
-// a full load, a native submit, a redirect it follows), and the path of the
-// document the router started on: what `_leaveOpenDocument` would stop.
-let _handovers      = 0;
-let _documentPath   = null;
+// Story 19-2 — whether the page on screen is a document the router stopped
+// and has not replaced yet (a new tree, a full load, a native submit); and the
+// path of the page on screen, which a `#anchor` does not leave.
+let _pageStopped    = false;
+let _renderedPath   = null;
 
 /**
  * @param {object}   opts
@@ -39,7 +39,8 @@ let _documentPath   = null;
 export function setupRouter({ onNavigate, onError = null, onBoundaryError = null }) {
   _onNavigate     = onNavigate;
   _onError        = onError;
-  _documentPath   = typeof location === "undefined" ? null : location.pathname + location.search;
+  _pageStopped    = false;
+  _renderedPath   = typeof location === "undefined" ? null : location.pathname + location.search;
   setBoundaryErrorHandler((error) => {
     console.error(error.message);
     onBoundaryError?.(error);
@@ -123,9 +124,12 @@ function handleClick(event) {
   const anchor = event.target.closest("a[href]");
   if (!shouldIntercept(anchor)) return;
 
-  event.preventDefault();
-
   const url = new URL(anchor.getAttribute("href"), location.href);
+  // Story 19-2 — this page with a `#anchor`: the browser scrolls; nothing to
+  // fetch, and a page still streaming is not left.
+  if (url.hash && url.pathname + url.search === location.pathname + location.search) return;
+
+  event.preventDefault();
   navigate(url.pathname + url.search + url.hash);
 }
 
@@ -315,7 +319,7 @@ function _isFlight(response) {
 // `response.url` never carries the #fragment (Fetch strips it), so the one
 // the link asked for is put back.
 function _fullLoad(response, targetUrl, { replace = false } = {}) {
-  _handovers++;
+  _pageStopped = false;
   const requested = new URL(targetUrl, location.href);
   const destination = new URL(response.url || requested.href);
   if (!destination.hash && requested.hash) destination.hash = requested.hash;
@@ -352,7 +356,7 @@ const _SUBMITTER_OVERRIDES = [
 ];
 
 function _nativeSubmit(form, submitter) {
-  _handovers++;
+  _pageStopped = false;
   const restore = [];
   const added = [];
 
@@ -418,8 +422,7 @@ async function _submitForm(form, submitter = null) {
   // Rails _method hidden field is included in FormData automatically;
   // Rack::MethodOverride reads it and routes to the correct action.
   _currentAbort?.abort();
-  const handovers = _handovers;
-  const stopped = _leaveOpenDocument();
+  _leaveOpenDocument();
   const controller = (_currentAbort = new AbortController());
 
   const headers = { Accept: "text/x-component", "Ruact-Request": "1" };
@@ -455,7 +458,7 @@ async function _submitForm(form, submitter = null) {
     console.error("[ruact-router] Form submission error:", err);
     _onError?.(err);
   } finally {
-    _recoverStoppedPage(stopped, handovers, controller);
+    _recoverStoppedPage(controller);
   }
 }
 
@@ -466,9 +469,10 @@ async function _submitForm(form, submitter = null) {
 function handlePopstate() {
   // Story 17.0f — `replace`: if this entry turns out not to be a ruact page, the
   // full load must not push a NEW entry into the history being walked.
-  // Story 19-2 — a `#anchor` on the page still loading is not leaving it.
-  const leave = location.pathname + location.search !== _documentPath;
-  navigate(location.pathname + location.search + location.hash, { push: false, scroll: false, replace: true, leave });
+  // Story 19-2 — only the hash changed (a `#anchor`, Back over one): the page
+  // on screen is this one, and the browser scrolls.
+  if (location.pathname + location.search === _renderedPath) return;
+  navigate(location.pathname + location.search + location.hash, { push: false, scroll: false, replace: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -485,23 +489,25 @@ function handlePopstate() {
  * left to load, the part of its layout after `#root` included.
  */
 function _leaveOpenDocument() {
-  if (typeof document === "undefined" || document.readyState !== "loading") return false;
-  if (globalThis.__FLIGHT_DATA?.streaming !== true) return false;
+  if (typeof document === "undefined" || document.readyState !== "loading") return;
+  if (globalThis.__FLIGHT_DATA?.streaming !== true) return;
   // First its rows' stream ends as an aborted navigation: stopped, it would
   // read as a response cut short, which the page being left reports.
   if (typeof document.dispatchEvent === "function") document.dispatchEvent(new Event(LEAVE_EVENT));
   if (typeof window !== "undefined" && typeof window.stop === "function") window.stop();
-  return true;
+  _pageStopped = true;
 }
 
 /**
- * Story 19-2 — the navigation that stopped the document did not hand the page
- * over (a failed fetch, a 403 or a 500 to a form): the user is still on the
- * page it stopped, whose boundaries would keep their fallback. Fetch it again,
- * without stopping anything. Not when a newer navigation took over.
+ * Story 19-2 — a navigation ended without replacing a page the router had
+ * stopped (a failed fetch, a 403 or a 500 to a form — this navigation's, or a
+ * later one's that superseded the one that stopped it): the user is still on
+ * that page, whose boundaries would keep their fallback. Fetch it again,
+ * without stopping anything, once. Not when a newer navigation took over.
  */
-function _recoverStoppedPage(stopped, handovers, controller) {
-  if (!stopped || _handovers !== handovers || controller.signal.aborted) return;
+function _recoverStoppedPage(controller) {
+  if (!_pageStopped || controller.signal.aborted) return;
+  _pageStopped = false;
   navigate(location.pathname + location.search, { push: false, scroll: false, leave: false });
 }
 
@@ -517,8 +523,7 @@ function _recoverStoppedPage(stopped, handovers, controller) {
 async function navigate(url, { push = true, scroll = true, throwOnError = false, replace = false, leave = true } = {}) {
   // Abort any in-flight fetch so we don't apply a stale response
   _currentAbort?.abort();
-  const handovers = _handovers;
-  const stopped = leave && _leaveOpenDocument();
+  if (leave) _leaveOpenDocument();
   const controller = (_currentAbort = new AbortController());
 
   try {
@@ -556,7 +561,7 @@ async function navigate(url, { push = true, scroll = true, throwOnError = false,
     _onError?.(err);
     if (throwOnError) throw err;
   } finally {
-    _recoverStoppedPage(stopped, handovers, controller);
+    _recoverStoppedPage(controller);
   }
 }
 
@@ -642,13 +647,13 @@ async function _processFlightResponse(response, {
       const rurl = new URL(root.redirectUrl, location.href);
       if (rurl.origin !== location.origin) return;
     } catch { return; }
-    _handovers++;
     navigate(root.redirectUrl, { push: root.redirectType !== "replace" });
     return;
   }
 
   if (pushEntry) history.pushState(null, "", finalPath);
-  _handovers++;
+  _pageStopped = false;
+  _renderedPath = location.pathname + location.search;
   _onNavigate(root);
   if (scroll) window.scrollTo(0, 0);
 

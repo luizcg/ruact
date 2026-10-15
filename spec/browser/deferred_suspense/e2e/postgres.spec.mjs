@@ -114,6 +114,7 @@ test("AC15.1/15.2 — two load_async queries run at once while the shell is on s
   await expect(page.locator("#first")).toHaveText("2 first");
   await expect(page.locator("#second")).toHaveText("2 second");
   await expect.poll(async () => (await state(request)).pool.busy).toBe(0);
+  await expect.poll(async () => (await events(request)).includes("action done:pg_async")).toBe(true);
   fs.writeFileSync(resultFile("load-async"), JSON.stringify({ with_the_shell_on_screen: overlap, events: await events(request) }, null, 2) + "\n");
 });
 

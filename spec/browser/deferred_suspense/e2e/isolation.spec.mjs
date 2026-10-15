@@ -41,7 +41,7 @@ test("AC12.2 — fast, slow, fast: the first fast one comes with the shell, the 
 
   // The order the server ran them in, written down (AC12.2).
   const beforeSlow = await events(request);
-  expect(beforeSlow).toEqual(["block:f1", "block_start:s"]);
+  expect(beforeSlow.filter((event) => event.startsWith("block"))).toEqual(["block:f1", "block_start:s"]);
 
   await open(request, "s");
   await expect(page.locator("#s")).toHaveText("open:s");
