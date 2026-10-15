@@ -21,6 +21,9 @@ const read = (page, id) =>
 test("AC17 — a middleware's scope holds for the shell and is gone for a block that runs later", async ({ page, request }) => {
   page.goto("/context_mw", { waitUntil: "commit" });
   await waitingAt(request, { a: 1 });
+  // The shell in the browser: the middleware stack has returned, so its scope
+  // has ended before the block runs.
+  await expect(page.locator("#in-shell")).toBeVisible();
   await open(request, "a");
   await expect(page.locator("#in-block")).toBeVisible();
   const shell = await read(page, "in-shell");
@@ -50,6 +53,7 @@ for (const [path, name] of [["/role", "selector"], ["/role_fixed", "controller"]
   test(`AC17.1 — the database role, chosen by the ${name}`, async ({ page, request }) => {
     page.goto(path, { waitUntil: "commit" });
     await waitingAt(request, { a: 1 });
+    await expect(page.locator("#shell-role")).toBeVisible();
     await open(request, "a");
     await expect(page.locator("#block-role")).toBeVisible();
     roles[name] = { shell: await page.locator("#shell-role").textContent(), block: await page.locator("#block-role").textContent() };

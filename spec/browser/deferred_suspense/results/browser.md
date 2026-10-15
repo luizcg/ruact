@@ -6,9 +6,9 @@ Written by `./run`: one row per Playwright run, Chromium, one worker, against th
 
 | what ran | environment | outcome |
 | --- | --- | --- |
-| the scenarios | development | 45 passed |
+| the scenarios | development | 49 passed |
 | every `<Suspense>` in place: `deferred.spec.mjs` | development | 2 failed, as it must: at the shell's text and at the URL |
-| the scenarios | production | 1 skipped, 44 passed |
+| the scenarios | production | 1 skipped, 48 passed |
 | every `<Suspense>` in place: `deferred.spec.mjs` | production | 2 failed, as it must: at the shell's text and at the URL |
 
 ## PostgreSQL 14.19 — e2e/postgres.spec.mjs, suspense_timeout 5 s
@@ -24,8 +24,8 @@ Written by `./run`: one row per Playwright run, Chromium, one worker, against th
 
 | what ran | environment | outcome |
 | --- | --- | --- |
-| the scenarios | development | 45 passed |
-| the scenarios | production | 1 skipped, 44 passed |
+| the scenarios | development | 49 passed |
+| the scenarios | production | 1 skipped, 48 passed |
 
 ## i18n 1.14.7 — e2e/middleware.spec.mjs
 

@@ -12,13 +12,17 @@ module Ruact
     def self.take(view)
       return nil unless view.respond_to?(:view_flow) && view.view_flow.respond_to?(:content)
 
-      view.view_flow.content.transform_values(&:to_s)
+      # Copies: the record keeps a SafeBuffer per name, which `content_for`
+      # appends to in place (and whose `to_s` is itself).
+      view.view_flow.content.transform_values { |content| String.new(content.to_s) }
     end
 
-    # Raises when +view+ declared more than +before+.
+    # Raises when +view+ declared more than +before+. A name only read
+    # (`content_for?`, `yield :name`) appears in the record empty: Rails'
+    # record defaults every name it is asked for to "".
     def self.check!(view, before)
       after = view.view_flow.content
-      changed = after.keys.reject { |name| name == :layout || after[name].to_s == before[name] }
+      changed = after.keys.reject { |name| name == :layout || after[name].to_s == before.fetch(name, "") }
       return if changed.empty?
 
       raise Ruact::Error,

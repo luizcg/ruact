@@ -48,7 +48,7 @@ test("two boundaries: opening the second gate first changes nothing until the fi
   await expect(page.locator("#b")).toHaveText("open:b");
   await expect
     .poll(() => events(request))
-    .toEqual(["block_start:a", "block_end:a", "block_start:b", "block_end:b"]);
+    .toEqual(["block_start:a", "block_end:a", "block_start:b", "block_end:b", "action done:two"]);
 });
 
 test("a boundary inside a boundary: the inner one is found when the outer block runs", async ({ page, request }) => {

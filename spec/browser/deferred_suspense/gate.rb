@@ -19,7 +19,9 @@ module Gate
   def self.wait(name)
     deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + LIMIT
     @mutex.synchronize do
-      generation = @generation
+      # A request of an earlier scenario (stamped by ThreadMarker) does not
+      # wait again: its next block would hold the next scenario's gate.
+      generation = Thread.current[:harness_generation] || @generation
       @waiting[name] += 1
       begin
         until @open[name]
@@ -52,6 +54,11 @@ module Gate
       @generation += 1
       @cond.broadcast
     end
+  end
+
+  # The scenario now running: a reset starts the next one.
+  def self.generation
+    @mutex.synchronize { @generation }
   end
 
   # How many are blocked at each gate right now.

@@ -150,6 +150,9 @@ module Ruact
       it "refuses another render's marker and drops a comment that only looks like one", :aggregate_failures do
         expect { convert.call("<!-- __RUACT_0a1b2c3d_0__ -->") }
           .to raise_error(Ruact::HtmlConverterError, /came out of a `cache` block/)
+        # Review 19-2a R2 — what 0.0.20 cached, read after an upgrade.
+        expect { convert.call("<!-- __RUACT_0__ -->") }
+          .to raise_error(Ruact::HtmlConverterError, /came out of a `cache` block/)
         expect(convert.call("<p>a<!-- __RUACT_x__ --></p>").props["children"]).to eq("a")
       end
     end

@@ -58,11 +58,15 @@ export function setupRouter({ onNavigate, onError = null, onBoundaryError = null
   // what link clicks and form submits want, but a programmatic
   // `revalidate()` caller HAS to be able to branch on success vs.
   // failure.
+  // `leave: false` (Story 19-2): revalidate() stays on the page, so a
+  // document still streaming is not stopped — stopping it would also fail the
+  // page's other requests in flight (a server function, a useQuery).
   globalThis.__ruact_revalidate = (target) =>
     navigate(target ?? location.pathname + location.search, {
       push: false,
       scroll: false,
       throwOnError: true,
+      leave: false,
     });
 }
 
@@ -484,10 +488,10 @@ function _leaveOpenDocument() {
  * REJECTS on a failed Flight fetch — without this, callers cannot
  * branch on success vs. failure of a programmatic refetch.
  */
-async function navigate(url, { push = true, scroll = true, throwOnError = false, replace = false } = {}) {
+async function navigate(url, { push = true, scroll = true, throwOnError = false, replace = false, leave = true } = {}) {
   // Abort any in-flight fetch so we don't apply a stale response
   _currentAbort?.abort();
-  _leaveOpenDocument();
+  if (leave) _leaveOpenDocument();
   const controller = (_currentAbort = new AbortController());
 
   try {

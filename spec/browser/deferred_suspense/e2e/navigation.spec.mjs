@@ -59,6 +59,7 @@ test("AC1 — a navigation that replaces one still pending: the new page, and th
   await page.click("#to-two");
   await waitingAt(request, { a: 1 });
   await expect(fallback(page, "A")).toBeVisible();
+  expect((await state(request)).pool.busy).toBe(1);
 
   await page.click("#to-plain");
   await expect(page).toHaveURL(/\/plain$/);
@@ -84,6 +85,7 @@ test("AC2 — the same page twice: the first request is cut, the second renders 
 
   await page.click("#to-two-again");
   await waitingAt(request, { a: 2 });
+  expect((await state(request)).pool.busy).toBe(2);
 
   await open(request, "a");
   await expect(page.locator("#a")).toHaveText("open:a");
@@ -155,6 +157,9 @@ test("AC4.2 — revalidate() while a navigation's boundary is pending resolves a
   await expect(page.locator("#revalidate")).toHaveAttribute("data-state", "resolved");
 });
 
+// revalidate() stays on the page and does not stop the document (stopping it
+// would also fail the page's other requests in flight): the document renders
+// its blocks too, so b starts twice; its late rows do not reach the new tree.
 test("AC4.3 — revalidate() while the first load's document is open", async ({ page, request }) => {
   const errors = watchErrors(page);
   await page.goto("/two", { waitUntil: "commit" });
@@ -167,7 +172,9 @@ test("AC4.3 — revalidate() while the first load's document is open", async ({ 
   await open(request, "b");
   await expect(page.locator("#b")).toHaveText("open:b");
   await expect(page.locator("#revalidate")).toHaveAttribute("data-state", "resolved");
-  expect(count(await events(request), "block_start:b")).toBe(1);
+  await expect(page.locator("#b")).toHaveCount(1);
+  await expect.poll(async () => count(await events(request), "block_start:b")).toBe(2);
+  expect(await events(request)).not.toContain(expect.stringContaining("the client left"));
   expect(errors.join("\n")).not.toContain("[ruact] Server error");
 });
 

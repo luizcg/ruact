@@ -624,10 +624,13 @@ describe("leaving a document that is still loading", () => {
     expect(fetch).toHaveBeenCalled();
   });
 
-  it("stops it for revalidate() too", async () => {
+  // revalidate() stays on the page: stopping the document would also fail the
+  // page's other requests in flight (a server function, a useQuery).
+  it("leaves the document loading for revalidate()", async () => {
     globalThis.document.readyState = "loading";
     await globalThis.__ruact_revalidate();
-    expect(window.stop).toHaveBeenCalledTimes(1);
+    expect(window.stop).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   // Stopped, the document's rows would read as a response cut short, which
@@ -639,7 +642,8 @@ describe("leaving a document that is still loading", () => {
       told.push([event.type, window.stop.mock.calls.length]);
       return true;
     });
-    await globalThis.__ruact_revalidate();
+    click(dom.listeners, "/products/2");
+    await settle();
     expect(told).toEqual([[LEAVE_EVENT, 0]]);
     expect(window.stop).toHaveBeenCalledTimes(1);
   });

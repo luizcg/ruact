@@ -131,6 +131,33 @@ RSpec.describe Ruact::QueryWatch do
     expect(watch.cancelled?).to be(true)
   end
 
+  # Review 19-2a R2 — a cancel opens a connection to the database: not under
+  # the pool's lock, which is every thread's checkout; one that fails does not
+  # keep the others.
+  it "cancels outside the pool's lock, each query on its own", :aggregate_failures do
+    locked = false
+    pool = Struct.new(:connections) do
+      define_method(:synchronize) do |&block|
+        locked = true
+        block.call
+      ensure
+        locked = false
+      end
+    end
+    failing = fake_pg.new(active)
+    failing.define_singleton_method(:cancel) { raise IOError, "the database is unreachable" }
+    seen = []
+    other = fake_pg.new(active)
+    other.define_singleton_method(:cancel) { seen << locked }
+    allow(ActiveRecord::Base).to receive(:connection_handler)
+      .and_return(fake_handler.new([pool.new([connection(block_thread, failing), connection(block_thread, other)])]))
+    watch = described_class.start(block_thread, 60)
+    watch.cancel_now(block_thread)
+    watch.stop
+    expect(seen).to eq([false])
+    expect(watch.cancelled?).to be(true)
+  end
+
   it "watches nothing without PostgreSQL's driver" do
     hide_const("PG::Connection")
     expect(described_class.start(block_thread, 1)).to be_nil

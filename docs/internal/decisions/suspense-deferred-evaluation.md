@@ -504,10 +504,10 @@ today: `Cache-Control: no-cache` and `X-Accel-Buffering: no`.
   connection no longer waits; a `statement_timeout` cancels it with
   `ActiveRecord::QueryCanceled`, an error of the block; two `load_async`
   queries were active at once with the executor while the shell was on
-  screen, and without it the controller held the shell until both ran. A
-  query `load_async` runs is not cancelled at the limit (the executor's
-  thread holds its connection): the statement timeout is its limit. MySQL is
-  still not measured.
+  screen, and without it the controller held the shell until both ran. By
+  design, not measured: a query `load_async` runs is not cancelled at the
+  limit (the executor's thread holds its connection), so the statement
+  timeout is its limit. MySQL is still not measured.
 - **The writes that race**, on a machine under real load.
 
 ## The wire and the two clients
@@ -670,8 +670,9 @@ What 19-2 changed, from the lifecycle cases:
   render that wrote it; read back, they named another component or another
   boundary's block. Now a component read from the cache raises, and a
   `<Suspense>` read from the cache gets an error row for its boundary.
-- **Leaving an open document.** The router stops a document it leaves while
-  it still streams (`window.stop()`; the server marks such a document), so its
+- **Leaving an open document.** The router stops a document it leaves — a
+  link, a form; not `revalidate()`, which stays on the page — while it still
+  streams (`window.stop()`; the server marks such a document), so its
   connection closes and the server starts no further block; the rows of the
   page being left end as an aborted navigation, not as a response cut short.
   Stopping it stops the rest of what the document was loading — measured in

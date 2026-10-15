@@ -6,6 +6,8 @@
 <Revalidate />
 <Suspense fallback="Loading A…">
   <% Harness::Events.add("block_start:a") %>
+  <%# Story 19-2 — the block holds a connection while it waits, so the pool says whether it went back. %>
+  <% Item.connection.select_value("SELECT 1") %>
   <p id="a"><%= Gate.wait("a") %></p>
   <% Harness::Events.add("block_end:a") %>
 </Suspense>

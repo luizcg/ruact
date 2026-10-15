@@ -59,38 +59,48 @@ module Ruact
     # (`ActiveRecord::QueryCanceled`) is the timeout's, not the content's. The
     # watcher can get there before `Timeout` does.
     def cancelled?
-      @lock.synchronize { @cancelled }
+      @cancelled
     end
 
-    # The block ended (or was ended): nothing to cancel any more.
+    # The block ended (or was ended): nothing to cancel any more. Does not wait
+    # for a cancel under way, which opens a connection to the database.
     def stop
-      @lock.synchronize { @done = true }
+      @done = true
       @watcher.kill
     end
 
     private
 
+    # The queries are found under each pool's lock and cancelled outside it: a
+    # cancel opens a connection to the database, and the pool's lock is every
+    # thread's checkout. A connection nobody holds could be handed to another
+    # request in between and have that request's query cancelled; the window
+    # is the time a cancel takes to reach the server, on the timeout path only.
     def cancel_queries_of(owner)
-      ::ActiveRecord::Base.connection_handler.connection_pool_list(:all).each do |pool|
-        # Under the pool's lock: a connection nobody holds is not handed to
-        # another request between the check and the cancel.
-        pool.synchronize { pool.connections.each { |connection| cancel_query_on(connection, owner) } }
+      in_flight(owner).each do |raw|
+        raw.cancel
+        @cancelled = true
+      rescue StandardError
+        nil
       end
-    rescue StandardError
-      nil
+    end
+
+    def in_flight(owner)
+      ::ActiveRecord::Base.connection_handler.connection_pool_list(:all).flat_map do |pool|
+        pool.synchronize { pool.connections.filter_map { |connection| query_of(connection, owner) } }
+      rescue StandardError
+        []
+      end
     end
 
     # The owner's own connection, or one already back in the pool: unwinding a
     # `with_connection` gives the connection back with its query still running.
     # A query in flight on a connection nobody holds is one nobody waits for.
-    def cancel_query_on(connection, owner)
+    def query_of(connection, owner)
       return unless connection.owner.nil? || connection.owner.equal?(owner)
 
       raw = connection.instance_variable_get(:@raw_connection)
-      return unless raw.is_a?(::PG::Connection) && raw.transaction_status == ::PG::PQTRANS_ACTIVE
-
-      raw.cancel
-      @cancelled = true
+      raw if raw.is_a?(::PG::Connection) && raw.transaction_status == ::PG::PQTRANS_ACTIVE
     end
   end
 end

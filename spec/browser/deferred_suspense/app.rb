@@ -57,7 +57,12 @@ module Harness
     @mutex = Mutex.new
     @all = []
 
+    # What a request of an earlier scenario, woken by the reset, records is
+    # left out.
     def self.add(event)
+      generation = Thread.current[:harness_generation]
+      return nil if generation && generation != Gate.generation
+
       @mutex.synchronize { @all << event }
       nil
     end
@@ -184,6 +189,8 @@ class ThreadMarker
 
   def call(env)
     env["harness.thread"] = Thread.current.object_id
+    # The scenario this request belongs to (a Live thread gets a copy).
+    Thread.current[:harness_generation] = Gate.generation
     Thread.current[:harness_fiber_local] = "set"
     Thread.current.thread_variable_set(:harness_thread_variable, "set")
     return @app.call(env) unless env["PATH_INFO"] == "/context_mw"
@@ -354,6 +361,15 @@ class PagesController < ApplicationController
   end
   after_action(only: :context) { Harness::Events.add("after_action") }
 
+  # The end of the action, after ruact's own `ensure` (the check of what was
+  # written after the page was sent, the connections given back): a barrier
+  # for what a test reads of a request that has finished.
+  def process_action(*)
+    super
+  ensure
+    Harness::Events.add("action done:#{action_name}")
+  end
+
   def home; end
   def plain; end
   def slow; end
@@ -407,6 +423,9 @@ class PagesController < ApplicationController
   # and in a block; then with the role set in the controller.
   def role; end
   def role_fixed; end
+  def cache_inside; end
+  def partials; end
+  def content_for_block; end
 
   # Story 19-2 (AC12) — who, where and when come from the request, so two at
   # once can differ.
@@ -527,7 +546,8 @@ end
 Rails.application.routes.draw do
   root "pages#home"
   %w[plain slow two nested error context db late_cookie leased flaky errors after_write inside mixed pg_slow pg_statement pg_transaction
-     pg_async tx_around tx_block tx_left_open tx_left_open_plain leased_block context_mw cached role role_fixed].each do |page|
+     pg_async tx_around tx_block tx_left_open tx_left_open_plain leased_block context_mw cached role role_fixed cache_inside partials
+     content_for_block].each do |page|
     get page, to: "pages##{page}"
   end
   post "__gate/reset", to: "probe#reset"

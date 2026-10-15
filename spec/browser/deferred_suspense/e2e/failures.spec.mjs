@@ -58,12 +58,15 @@ for (const how of ["first load", "navigation"]) {
     } else {
       page.goto("/after_write");
     }
+    const sent = page.waitForResponse((response) => new URL(response.url()).pathname === "/after_write");
     await waitingAt(request, { a: 1 });
     await open(request, "a");
     await expect(page.locator("#a")).toHaveText("open:a");
+    // Nor the header: the response had started.
+    expect((await sent).headers()["x-after"]).toBeUndefined();
 
-    // The after_action has run, and ruact has compared what it wrote.
-    await expect.poll(async () => (await events(request)).includes("after_write ran")).toBe(true);
+    // The action has ended: ruact has compared what the after_action wrote.
+    await expect.poll(async () => (await events(request)).includes("action done:after_write")).toBe(true);
     const names = (await page.context().cookies()).map((cookie) => cookie.name);
     expect(names).not.toContain("after");
     const line = async () => (await events(request)).find((event) => event.includes("code after the page was sent")) ?? "";
@@ -110,4 +113,18 @@ test("AC7 — several failures in one overlay, with the template's file and line
   }
   await expect(fallback(page, "A")).toBeVisible();
   await expect(fallback(page, "C")).toBeVisible();
+});
+
+// Story 19-2 (AC10.2) — `content_for` inside a block runs after the layout was
+// sent: in development, an error of that block; in production, lost (the block
+// renders).
+test("AC10.2 — content_for inside a block", async ({ page }) => {
+  await page.goto("/content_for_block");
+  if (ENV === "development") {
+    await expect(page.locator("#ruact-dev-overlay [data-overlay-message]")).toContainText("content_for :late_title");
+    await expect(fallback(page, "A")).toBeVisible();
+  } else {
+    await expect(page.locator("#a")).toHaveText("the block ran");
+    await expect(page.locator("#ruact-dev-overlay")).toHaveCount(0);
+  }
 });

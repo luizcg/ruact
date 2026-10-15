@@ -103,6 +103,9 @@ test("AC15.1/15.2 — two load_async queries run at once while the shell is on s
   // The second query has ended; its boundary still waits for the first (D2).
   await release(request, 2);
   await atGates(request, 1, 0);
+  // Its block has not even started: blocks run in page order.
+  expect(await events(request)).toContain("block_start:first");
+  expect(await events(request)).not.toContain("block_start:second");
   await expect(page.locator("#second")).toHaveCount(0);
   await release(request, 1);
   await expect(page.locator("#first")).toHaveText("2 first");

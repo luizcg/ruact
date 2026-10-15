@@ -36,8 +36,9 @@ module Ruact
     }.freeze
 
     # A client component's marker (`__RUACT_<render>_<n>__`, the render's id
-    # being eight hex digits, {RenderContext}).
-    TOKEN = /\A__RUACT_\h{8}_\d+__\z/
+    # being eight hex digits, {RenderContext}), or one 0.0.20 and before wrote
+    # (`__RUACT_<n>__`), which a `cache` block may still hold.
+    TOKEN = /\A__RUACT_(?:\h{8}_)?\d+__\z/
 
     # Tags whose `value` attribute maps to React's `defaultValue` (uncontrolled).
     DEFAULT_VALUE_TAGS = %w[textarea select].freeze

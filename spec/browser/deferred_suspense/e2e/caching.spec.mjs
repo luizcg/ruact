@@ -2,7 +2,7 @@
 // cache: its marker belongs to the render that wrote it. That boundary gets an
 // error; the other one shows its own content, once.
 import { test, expect } from "@playwright/test";
-import { ENV, reset } from "./support.mjs";
+import { ENV, reset, waitingAt, open, events } from "./support.mjs";
 
 test.beforeEach(async ({ request }) => reset(request));
 
@@ -24,4 +24,24 @@ test("AC9 — a <Suspense> read from the cache errors alone, never with another 
   } else {
     await expect.poll(() => errors.join("\n")).toContain("[ruact] Server error: An error occurred in a <Suspense>");
   }
+});
+
+// Story 19-2 (AC9.2) — a `cache` inside a <Suspense>: the fragment is written
+// when the block runs, and read when it runs again — still after the shell.
+test("AC9.2 — a cache inside a <Suspense>: written when the block runs, read on the next load, still deferred", async ({ page, request }) => {
+  page.goto("/cache_inside", { waitUntil: "commit" });
+  await waitingAt(request, { a: 1 });
+  await expect(page.getByText("Loading inside…", { exact: true })).toBeVisible();
+  await open(request, "a");
+  await expect(page.locator("#inside")).toHaveText("open:a");
+
+  // Warm: the block runs again, after the shell, and reads the fragment.
+  const body = await (await request.get("/cache_inside")).text();
+  expect(body).toContain(".streaming=true");
+  expect(body.indexOf("open:a")).toBeGreaterThan(body.indexOf(".streaming=true"));
+  await page.goto("/cache_inside");
+  await expect(page.locator("#inside")).toHaveText("open:a");
+  const seen = await events(request);
+  expect(seen.filter((event) => event === "block_start:inside")).toHaveLength(3);
+  expect(seen.filter((event) => event === "cache_miss")).toHaveLength(1);
 });

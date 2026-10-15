@@ -1398,6 +1398,12 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         read_streamed(path, "HTTP_ACCEPT" => "text/x-component").body
       end
 
+      it "says nothing of a page that does not stream when nothing came out of a cache" do
+        allow(Rails.error).to receive(:report).and_call_original
+        get "/caching-demo/suspense_in_place", {}, { "HTTP_ACCEPT" => "text/x-component" }
+        expect(Rails.error).not_to have_received(:report)
+      end
+
       it "fails loudly on a client component read from the cache, naming the cache" do
         get "/caching-demo/components", {}, { "HTTP_ACCEPT" => "text/x-component" }
         expect { get "/caching-demo/components", {}, { "HTTP_ACCEPT" => "text/x-component" } }
@@ -1420,6 +1426,15 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(last_response.status).to eq(200)
         expect(last_response.body).to include("inside `cache`")
         expect(last_response.body.scan("second boundary").length).to eq(1)
+      end
+
+      # Review 19-2a R2 — the server says so too, as it does when it streams.
+      it "reports a <Suspense> read from the cache by a page that does not stream" do
+        flight_body("/caching-demo/suspense?visit=1")
+        allow(Rails.error).to receive(:report).and_call_original
+        get "/caching-demo/suspense_in_place", {}, { "HTTP_ACCEPT" => "text/x-component" }
+        expect(Rails.error).to have_received(:report)
+          .with(an_object_having_attributes(message: /inside `cache`/), hash_including(source: "ruact.suspense"))
       end
 
       it "shows the cached content when a page that streams reads what one that does not cached" do

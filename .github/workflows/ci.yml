@@ -236,7 +236,11 @@ jobs:
         run: ./run
       - name: What ran
         if: always()
-        run: cat results/browser.md || true
+        # The outcomes measured rather than required (what the server did with
+        # an aborted fetch, what stopping a document stops) on this runner.
+        run: |
+          cat results/browser.md || true
+          for f in results/navigation-*.json results/leaving-*.json; do echo "== $f"; cat "$f"; done || true
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

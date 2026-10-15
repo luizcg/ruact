@@ -32,6 +32,7 @@
   "events": [
     "block_start:a",
     "block_end:a",
-    "after_action"
+    "after_action",
+    "action done:context"
   ]
 }
