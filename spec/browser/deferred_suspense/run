@@ -126,7 +126,7 @@ pg() {
   pg_ctl -D "$PG_DIR/data" -o "-p 5498 -k $PG_DIR -c listen_addresses=''" -l "$PG_DIR/log" -w start >/dev/null
   trap 'pg_ctl -D "$PG_DIR/data" -m immediate stop >/dev/null; rm -rf "$PG_DIR"' EXIT
   export DATABASE_URL="postgres:///postgres?host=$PG_DIR&port=5498&pool=10"
-  table "PostgreSQL $(postgres --version | awk '{print $3}') — e2e/postgres.spec.mjs, suspense_timeout 3 s"
+  table "PostgreSQL $(pg_ctl --version | awk '{print $NF}') — e2e/postgres.spec.mjs, suspense_timeout 3 s"
   for env in development production; do
     scenarios "PostgreSQL" "$env" HARNESS_DB=postgres HARNESS_TIMEOUT=3
     scenarios "PostgreSQL, async query executor" "$env" HARNESS_DB=postgres HARNESS_TIMEOUT=3 HARNESS_ASYNC=1

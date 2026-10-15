@@ -186,6 +186,8 @@ class HarnessApp < Rails::Application
   config.enable_reloading = Rails.env.development?
   config.consider_all_requests_local = Rails.env.development?
   config.cache_store = :memory_store
+  # Story 19-2 (AC9) — fragment caching on, for the page with `cache` around a <Suspense>.
+  config.action_controller.perform_caching = true
   if Rails.env.development?
     config.server_timing = true
     config.assets.quiet = true
@@ -339,6 +341,7 @@ class PagesController < ApplicationController
   # Story 19-2 (AC17) — the context page, scoped by a middleware and not by
   # the controller.
   def context_mw; end
+  def cached; end
   def tx_block; end
 
   # Story 19-2 (AC16.3) — a transaction begun on the connection and never
@@ -402,6 +405,7 @@ class ProbeController < ActionController::API
     Harness::Once.clear
     Harness::FailStream.clear
     Harness::PgGate.reset
+    Rails.cache.clear
     head :no_content
   end
 
@@ -466,7 +470,7 @@ end
 Rails.application.routes.draw do
   root "pages#home"
   %w[plain slow two nested error context db late_cookie leased flaky errors after_write inside mixed pg_slow pg_statement pg_transaction
-     pg_async tx_around tx_block tx_left_open tx_left_open_plain leased_block context_mw].each do |page|
+     pg_async tx_around tx_block tx_left_open tx_left_open_plain leased_block context_mw cached].each do |page|
     get page, to: "pages##{page}"
   end
   post "__gate/reset", to: "probe#reset"

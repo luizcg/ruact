@@ -33,7 +33,7 @@ const vite = {
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: process.env.HARNESS_IN_PLACE ? ["deferred.spec.mjs"] : process.env.HARNESS_DB === "postgres" ? ["postgres.spec.mjs"] : ["deferred.spec.mjs", "lifecycle.spec.mjs", "navigation.spec.mjs", "failures.spec.mjs", "placement.spec.mjs", "forms.spec.mjs", "isolation.spec.mjs", "transactions.spec.mjs", "middleware.spec.mjs"],
+  testMatch: process.env.HARNESS_IN_PLACE ? ["deferred.spec.mjs"] : process.env.HARNESS_DB === "postgres" ? ["00-warm-up.spec.mjs", "postgres.spec.mjs"] : ["00-warm-up.spec.mjs", "deferred.spec.mjs", "lifecycle.spec.mjs", "navigation.spec.mjs", "failures.spec.mjs", "placement.spec.mjs", "forms.spec.mjs", "isolation.spec.mjs", "transactions.spec.mjs", "middleware.spec.mjs", "caching.spec.mjs"],
   workers: 1,
   fullyParallel: false,
   retries: 0,

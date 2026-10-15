@@ -467,7 +467,13 @@ today: `Cache-Control: no-cache` and `X-Accel-Buffering: no`.
   the Rails it loads, and 8.1 is in it. Before 7.2 is no longer a case.
 - **i18n before 1.15**, which kept the locale in a thread variable: by D3's
   second bullet a Live action would then not see a locale set outside it at
-  all.
+  all. *Since 19-2 (`e2e/middleware.spec.mjs`, `./run i18n 1.14.7`):* with
+  1.14.7 a block loses the locale a middleware set; with 1.15 it kept it one
+  request at a time, but even the shell showed another value once the pool's
+  threads had served other requests. A database role a middleware set
+  (`connected_to(prevent_writes: true)`, what DatabaseSelector does) is gone
+  for a block; a tenant kept in Rails' execution state is copied to the
+  action's thread. Scopes belong in the controller.
 - **Rack 2.2**, whose `ETag` buffers any body unless it sees
   `Cache-Control: no-cache` or `Last-Modified`.
 - **A reverse proxy.** By its documentation nginx buffers a proxied response by
@@ -486,6 +492,13 @@ today: `Cache-Control: no-cache` and `X-Accel-Buffering: no`.
   (`ActiveRecord::QueryCanceled`, nothing left running).
   `spec/browser/deferred_suspense/results/postgres.md`, `./run postgres`.
   MySQL and overlapping `load_async` queries are still not measured.
+  *Since 19-2 (`./run pg`, `e2e/postgres.spec.mjs`):* ruact cancels the
+  query in flight at the limit (`QueryWatch`), so the next query on that
+  connection no longer waits; a `statement_timeout` cancels it with
+  `ActiveRecord::QueryCanceled`, an error of the block; two `load_async`
+  queries were active at once with the executor while the shell was on
+  screen, and without it the controller held the shell until both ran.
+  MySQL is still not measured.
 - **The writes that race**, on a machine under real load.
 
 ## The wire and the two clients
@@ -637,6 +650,31 @@ What the gem does, where it differs from the prototype of 19-0:
   is not the request's.
 - **The proof** is `spec/browser/deferred_suspense/` against the gem, in CI;
   this ADR's experiment stays the record of 19-0, against `v0.0.19`.
+
+What 19-2 changed, from the lifecycle cases:
+
+- **Locals.** A block that runs later read a local as it was then — every
+  block of a `for` loop showed its last item. The helper keeps the locals the
+  block sees when the tag is met; `DeferredRender` gives them back while it
+  runs. Instance variables are read when the block runs.
+- **Markers carry the render's id.** A `cache` block stores markers of the
+  render that wrote it; read back, they named another component or another
+  boundary's block. Now a component read from the cache raises, and a
+  `<Suspense>` read from the cache gets an error row for its boundary.
+- **Leaving an open document.** The router stops a document it leaves while
+  it still loads (`window.stop()`), so its connection closes and the server
+  starts no further block. A *fetch* the router aborts is different: Chrome
+  sometimes keeps reading an aborted response to reuse its connection, and
+  the server then renders its next block — measured, not preventable from
+  either side (`results/navigation-*.json`).
+- **`no-store`** on a streamed Flight response: Chrome held a second request
+  for the same URL (`revalidate()`) while the first, storable, streamed.
+- **A query past the timeout is cancelled** (PostgreSQL, `QueryWatch`).
+- **After the response started:** an `after_action` that raises is reported
+  to `Rails.error`; `content_for` inside a block is an error in development.
+- **Errors' positions:** the error row's frames are the six fields React's
+  development client reads, and a component tag over several lines keeps
+  them, so the template lines are right.
 
 ## Decided by Luiz
 
