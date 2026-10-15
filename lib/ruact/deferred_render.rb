@@ -99,14 +99,24 @@ module Ruact
     def content(element)
       return element unless element.is_a?(Flight::DeferredContent)
 
-      block = @render_context.block(element.index)
+      block = @render_context.block(element.key)
+      raise Ruact::Error, Flight::DeferredContent::STALE if block.nil?
+
       html = @guard ? @guard.call { evaluate(block) } : evaluate(block)
       convert(html)
     end
 
-    # Runs the block in its view, with the template path restored, and returns
-    # what it wrote. Only what it writes: a value it ends on is not content.
+    # Runs the block in its view, with the template path and its local
+    # variables as they were when the tag was met, and returns what it wrote.
+    # Only what it writes: a value it ends on is not content.
     def evaluate(pending)
+      declared = DeclaredContent.take(pending.view) if @development
+      html = with_locals(pending.block, pending.locals) { run_in_view(pending) }
+      DeclaredContent.check!(pending.view, declared) if declared
+      html
+    end
+
+    def run_in_view(pending)
       pending.view.instance_exec(pending) do |entry|
         saved = [@virtual_path, @current_template]
         @virtual_path = entry.virtual_path
@@ -119,6 +129,22 @@ module Ruact
         ensure
           @virtual_path, @current_template = saved
         end
+      end
+    end
+
+    # Sets the block's local variables to +locals+ while it runs, and back
+    # after. A block shares them with the template and with the blocks met
+    # after it.
+    def with_locals(block, locals)
+      return yield if locals.nil? || locals.empty?
+
+      scope = block.binding
+      now = locals.keys.to_h { |name| [name, scope.local_variable_get(name)] }
+      locals.each { |name, value| scope.local_variable_set(name, value) }
+      begin
+        yield
+      ensure
+        now.each { |name, value| scope.local_variable_set(name, value) }
       end
     end
 
@@ -153,14 +179,29 @@ module Ruact
       raise Expired, "the delay (#{delay}s) is longer than suspense_timeout" if delay && delay > limit
 
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      # A query still running at the limit is cancelled on the server, so its
+      # connection is free again (Story 19-2, QueryWatch).
+      owner = QueryWatch.current_owner
+      watch = QueryWatch.start(owner, limit)
       begin
         Timeout.timeout(limit) { wait_then(delay, &) }
-      rescue Timeout::Error => e
-        # Ours only when the limit has passed; earlier, it is the content's.
-        raise if Process.clock_gettime(Process::CLOCK_MONOTONIC) - started < limit
+      rescue StandardError => e
+        raise unless expired?(e, started, limit, watch)
 
+        watch&.cancel_now(owner)
         raise Expired, "ran past suspense_timeout (#{limit}s)", cause: e
+      ensure
+        watch&.stop
       end
+    end
+
+    # A `Timeout::Error` is ours only when the limit has passed; earlier, it is
+    # the content's. Any other error is ours when the watch cancelled a query
+    # at the limit: what the cancelled query raised.
+    def expired?(error, started, limit, watch)
+      return watch&.cancelled? || false unless error.is_a?(Timeout::Error)
+
+      Process.clock_gettime(Process::CLOCK_MONOTONIC) - started >= limit
     end
 
     def wait_then(delay)
@@ -181,11 +222,16 @@ module Ruact
       payload
     end
 
-    # React's development client reads `stack` as `[function, file, line, column]`.
+    # React's development client reads each frame of `stack` as
+    # `[function, file, line, column, enclosing line, enclosing column]` and
+    # rebuilds the server's call stack from it. A four-element frame (what this
+    # sent before Story 19-2) left the last two undefined, and every frame came
+    # out at line 2. Ruby has no column and no enclosing function: column 1,
+    # enclosing 0 (none).
     def development_stack(error)
       Array(error.backtrace).first(STACK_FRAMES).filter_map do |frame|
         match = frame.match(/\A(.+?):(\d+)(?::in [`'](.+)')?\z/)
-        match && [match[3] || "(ruby)", match[1], Integer(match[2], 10), 0]
+        match && [match[3] || "(ruby)", match[1], Integer(match[2], 10), 1, 0, 0]
       end
     end
 
@@ -201,7 +247,7 @@ module Ruact
       element = boundary[:element]
       return "" unless element.is_a?(Flight::DeferredContent)
 
-      location = @render_context.block(element.index).location
+      location = @render_context.block(element.key)&.location
       location ? " at #{location.path}:#{location.lineno}" : ""
     end
   end

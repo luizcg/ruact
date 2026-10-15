@@ -21,7 +21,7 @@ module Ruact
         ctx = @ruact_render_context
         if ctx&.deferring?
           index = ctx.defer_block(RenderContext::Block.new(self, block, @virtual_path, @current_template,
-                                                           caller_locations(1, 1).first))
+                                                           caller_locations(1, 1).first, __ruact_locals(block)))
           return "#{Markers.suspense_open(fallback, delay, block: index)}#{Markers::SUSPENSE_CLOSE}".html_safe
         end
 
@@ -31,6 +31,14 @@ module Ruact
           nil
         end
         "#{Markers.suspense_open(fallback, delay)}#{content}#{Markers::SUSPENSE_CLOSE}".html_safe
+      end
+
+      # Story 19-2 (AC8.3) — the local variables +block+ sees, as they are when
+      # the tag is met. The block runs later; without these it would see a local
+      # as it is then — the last item of a `for` loop, a value reassigned below.
+      def __ruact_locals(block)
+        scope = block.binding
+        scope.local_variables.to_h { |name| [name, scope.local_variable_get(name)] }
       end
 
       # Story 19-1 — a `<Suspense>` in an action that does not stream renders its
@@ -56,7 +64,7 @@ module Ruact
         )
       end
 
-      private :__ruact_note_unstreamed_suspense
+      private :__ruact_note_unstreamed_suspense, :__ruact_locals
     end
   end
 end

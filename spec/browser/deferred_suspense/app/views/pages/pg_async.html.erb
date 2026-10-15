@@ -1,0 +1,3 @@
+<h1 id="shell">Two queries at once</h1>
+<Suspense fallback="Loading first…"><% Harness::Events.add("block_start:first") %><p id="first"><%= @first.size %> first</p></Suspense>
+<Suspense fallback="Loading second…"><% Harness::Events.add("block_start:second") %><p id="second"><%= @second.size %> second</p></Suspense>

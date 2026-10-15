@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import net from "node:net";
 import { test, expect } from "@playwright/test";
-import { ENV, state, events, waitingAt, open, reset, fallback, clicker } from "./support.mjs";
+import { ENV, state, events, waitingAt, open, reset, fallback, clicker, resultFile } from "./support.mjs";
 
 test.beforeEach(async ({ request }) => reset(request));
 
@@ -48,7 +48,7 @@ test("two boundaries: opening the second gate first changes nothing until the fi
   await expect(page.locator("#b")).toHaveText("open:b");
   await expect
     .poll(() => events(request))
-    .toEqual(["block_start:a", "block_end:a", "block_start:b", "block_end:b"]);
+    .toEqual(["block_start:a", "block_end:a", "block_start:b", "block_end:b", "action done:two"]);
 });
 
 test("a boundary inside a boundary: the inner one is found when the outer block runs", async ({ page, request }) => {
@@ -127,8 +127,9 @@ test("what a deferred block sees of the request", async ({ page, request }) => {
   const shell = await read("in-shell");
   const block = await read("in-block");
   const lazy = { shell: await page.locator("#shell-lazy").textContent(), block: await page.locator("#block-lazy").textContent() };
+  await expect.poll(async () => (await events(request)).includes("action done:context")).toBe(true);
   const order = await events(request);
-  fs.writeFileSync(`results/context-${ENV}.json`, JSON.stringify({ shell, block, lazy, events: order }, null, 2) + "\n");
+  fs.writeFileSync(resultFile("context"), JSON.stringify({ shell, block, lazy, events: order }, null, 2) + "\n");
 
   expect(shell).toMatchObject({ locale: "pt", t: "olá", zone: "Tokyo", tenant: "acme", current: '"ada"' });
   expect(lazy).toEqual({ shell: "lazy lookup (pt)", block: "lazy lookup (pt)" });

@@ -36,8 +36,8 @@ RSpec.describe Ruact::Markers do
 
   it "reads back the block a Suspense rendered later carries, and none when its content is in it",
      :aggregate_failures do
-    later = parse("#{described_class.suspense_open('x', '1', block: 3)}#{described_class::SUSPENSE_CLOSE}")
-    expect(described_class.suspense_block(later)).to eq(3)
+    later = parse("#{described_class.suspense_open('x', '1', block: 'a1b2c3d4-3')}#{described_class::SUSPENSE_CLOSE}")
+    expect(described_class.suspense_block(later)).to eq("a1b2c3d4-3")
     expect(described_class.suspense_delay(later)).to eq(1.0)
     expect(described_class.suspense_block(parse(described_class.suspense_open("x", nil)))).to be_nil
   end

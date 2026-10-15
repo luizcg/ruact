@@ -66,7 +66,8 @@ module Ruact
     #
     # @example Pre-rendered HTML, streaming output
     #   ctx = Ruact::RenderContext.new
-    #   pipeline.render({ html: "<!-- __RUACT_0__ -->", render_context: ctx }, mode: :stream)
+    #   html = Ruact::Markers.component(ctx.register("NavBar", {}))
+    #   pipeline.render({ html: html, render_context: ctx }, mode: :stream)
     #   # => #<Enumerator: ...>  (yields Flight rows lazily)
     def render(input, mode: :string)
       validate_mode!(mode)
@@ -232,6 +233,7 @@ module Ruact
     # the caller may discard the RenderContext immediately after `render` returns — the
     # returned Enumerator does not reference the RenderContext.
     def render_html_enum(html, render_context, streaming:)
+      CachedBlocks.report(html, @logger) unless render_context.deferring?
       registry = render_context.resolve(@manifest, controller_path: @controller_path)
       strict     = Ruact.config.strict_serialization
       warning_cb = as_json_warning_callback

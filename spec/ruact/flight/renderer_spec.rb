@@ -125,7 +125,7 @@ module Ruact
           let(:later) do
             ReactElement.new(type: "main", props: {
                                "children" => SuspenseElement.new(fallback: ReactElement.new(type: "span"),
-                                                                 children: DeferredContent.new(4))
+                                                                 children: DeferredContent.new("a1b2c3d4-4"))
                              })
           end
 
@@ -133,7 +133,7 @@ module Ruact
             renderer = described_class.new(later, manifest_with_button)
             renderer.shell
             boundary = renderer.take_boundary
-            expect(boundary[:element]).to be_a(DeferredContent).and have_attributes(index: 4)
+            expect(boundary[:element]).to be_a(DeferredContent).and have_attributes(key: "a1b2c3d4-4")
             expect(boundary[:delay]).to be_nil
 
             rows = renderer.boundary_rows(boundary[:id], [ReactElement.new(type: button), tree])
@@ -159,10 +159,13 @@ module Ruact
             expect(renderer.pending?).to be(false)
           end
 
-          it "refuses content still to be rendered in a render that walks itself" do
+          # Story 19-2 (AC9) — a block this render cannot run: its marker came
+          # out of a `cache` block a render that streamed wrote.
+          it "gives content it cannot render an error row saying it came out of a cache" do
             renderer = described_class.new(later, manifest_with_button)
             renderer.shell
-            expect { renderer.next_boundary(streaming: false) }.to raise_error(Ruact::Error, /cannot render a block/)
+            rows = renderer.next_boundary(streaming: false)
+            expect(rows.last).to match(/\A1:E\{"digest":"ruact:suspense-error"/).and include("inside `cache`")
           end
         end
       end

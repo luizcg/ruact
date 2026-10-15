@@ -8,7 +8,9 @@
     "current": "\"ada\"",
     "fiber_local": "\"set\"",
     "thread_variable": "nil",
-    "thread": "other thread"
+    "thread": "other thread",
+    "role": "writing",
+    "prevent_writes": "false"
   },
   "block": {
     "locale": "pt",
@@ -19,7 +21,9 @@
     "current": "\"ada\"",
     "fiber_local": "\"set\"",
     "thread_variable": "nil",
-    "thread": "other thread"
+    "thread": "other thread",
+    "role": "writing",
+    "prevent_writes": "false"
   },
   "lazy": {
     "shell": "lazy lookup (pt)",
@@ -28,6 +32,7 @@
   "events": [
     "block_start:a",
     "block_end:a",
-    "after_action"
+    "after_action",
+    "action done:context"
   ]
 }

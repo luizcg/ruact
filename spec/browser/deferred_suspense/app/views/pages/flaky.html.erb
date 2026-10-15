@@ -1,0 +1,6 @@
+<h1 id="shell">Flaky</h1>
+<Revalidate />
+<Suspense fallback="Loading A…">
+  <% raise "the first time only" if Harness::Once.first?("flaky") %>
+  <p id="a">second time</p>
+</Suspense>

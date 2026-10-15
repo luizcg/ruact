@@ -1,0 +1,7 @@
+<main>
+  <Suspense fallback="self closing" />
+  <Suspense fallback="only space">   </Suspense>
+  <Suspense fallback="only code"><% unused = 1 %></Suspense>
+  <Suspense fallback="only a value"><% "a value the block does not write" %></Suspense>
+  <Suspense fallback="last"><p>the last boundary</p></Suspense>
+</main>

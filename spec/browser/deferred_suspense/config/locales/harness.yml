@@ -1,10 +1,18 @@
 en:
   greeting: "hello"
   pages:
+    item_block:
+      label: "(the partial's label)"
     context:
+      lazy: "lazy lookup (en)"
+    context_mw:
       lazy: "lazy lookup (en)"
 pt:
   greeting: "olá"
   pages:
+    item_block:
+      label: "(the partial's label)"
     context:
+      lazy: "lazy lookup (pt)"
+    context_mw:
       lazy: "lazy lookup (pt)"

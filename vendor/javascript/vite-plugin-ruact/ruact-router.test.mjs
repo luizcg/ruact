@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { setupRouter, teardownRouter } from "./runtime/ruact-router.js";
+import { LEAVE_EVENT } from "./runtime/page-stream.js";
 
 const ORIGIN = "http://localhost:3000";
 
@@ -568,3 +569,187 @@ describe("ruact-router — dates and big integers in a navigation (Story 17-0c)"
   });
 });
 
+
+// Story 19-2 — leaving a page whose document is still arriving (a page that
+// streams) stops loading it, so the server starts no further block for it.
+describe("leaving a document that is still loading", () => {
+  let dom;
+
+  beforeEach(() => {
+    dom = installDom();
+    globalThis.fetch = vi.fn().mockResolvedValue(respond({ body: '0:"next"\n' }));
+    globalThis.window.stop = vi.fn();
+    globalThis.__FLIGHT_DATA = Object.assign([], { streaming: true });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    setupRouter({ onNavigate: vi.fn(), moduleRegistry: {}, onError: vi.fn() });
+  });
+
+  afterEach(() => {
+    teardownRouter();
+    delete globalThis.__FLIGHT_DATA;
+    vi.restoreAllMocks();
+  });
+
+  // A slow network, a long layout: the rest of the document after `#root`
+  // (which a navigation does not replace) still has to arrive.
+  it("leaves a loading document alone when it does not stream, or its rows are all in", async () => {
+    globalThis.document.readyState = "loading";
+    globalThis.__FLIGHT_DATA = [];
+    click(dom.listeners, "/products/2");
+    await settle();
+    globalThis.__FLIGHT_DATA = Object.assign([], { streaming: false });
+    click(dom.listeners, "/products/3");
+    await settle();
+    expect(window.stop).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops the document before it fetches the next page", async () => {
+    globalThis.document.readyState = "loading";
+    let stoppedBeforeFetch = null;
+    globalThis.fetch.mockImplementation(async () => {
+      stoppedBeforeFetch = window.stop.mock.calls.length === 1;
+      return respond({ body: '0:"next"\n' });
+    });
+    click(dom.listeners, "/products/2");
+    await settle();
+    expect(stoppedBeforeFetch).toBe(true);
+  });
+
+  it("leaves a document that has finished alone", async () => {
+    globalThis.document.readyState = "complete";
+    click(dom.listeners, "/products/2");
+    await settle();
+    expect(window.stop).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalled();
+  });
+
+  it("stops it for a form the router submits", async () => {
+    globalThis.document.readyState = "loading";
+    let stoppedBeforeFetch = null;
+    globalThis.fetch.mockImplementation(async () => {
+      stoppedBeforeFetch = window.stop.mock.calls.length === 1;
+      return respond({ body: '0:"next"\n' });
+    });
+    submit(dom.listeners, new dom.FakeForm({ action: "/people", method: "post" }));
+    await settle();
+    expect(stoppedBeforeFetch).toBe(true);
+  });
+
+  // Review 19-2a R3/R4 — a `#anchor` on the page on screen: the browser
+  // scrolls; nothing is fetched, and the document is not left.
+  it("leaves a popstate that only changes the hash to the browser", async () => {
+    globalThis.document.readyState = "loading";
+    location._set("/products/1#reviews");
+    dom.listeners.window.popstate.forEach((fn) => fn({}));
+    await settle();
+    expect(window.stop).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("leaves a link to this page's #anchor to the browser", async () => {
+    globalThis.document.readyState = "loading";
+    const event = click(dom.listeners, "/products/1#reviews");
+    await settle();
+    expect(event.defaultPrevented).toBe(false);
+    expect(window.stop).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  // Review 19-2a R4 — as a browser does: once stopped, the document no longer
+  // loads, so a later navigation does not stop it again.
+  function stopForReal() {
+    globalThis.document.readyState = "loading";
+    window.stop.mockImplementation(() => { globalThis.document.readyState = "complete"; });
+  }
+
+  it("fetches the page again when the navigation that superseded the one that stopped it fails", async () => {
+    stopForReal();
+    const html500 = respond({ status: 500, contentType: "text/html", body: "<p>boom</p>" });
+    globalThis.fetch
+      .mockImplementationOnce((_url, { signal }) => new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      }))
+      .mockResolvedValueOnce(html500)
+      .mockResolvedValue(respond({ body: '0:"again"\n' }));
+    const form = new dom.FakeForm({ action: "/people", method: "post" });
+    submit(dom.listeners, form);
+    submit(dom.listeners, form);
+    await settle();
+    await settle();
+    expect(window.stop).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual(["/people", "/people", "/products/1"]);
+  });
+
+  it("fetches the page again when the redirect a form was answered with fails", async () => {
+    stopForReal();
+    globalThis.fetch
+      .mockResolvedValueOnce(respond({ body: '0:{"redirectUrl":"/people/9","redirectType":"push"}\n' }))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValue(respond({ body: '0:"again"\n' }));
+    submit(dom.listeners, new dom.FakeForm({ action: "/people", method: "post" }));
+    await settle();
+    await settle();
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual(["/people", "/people/9", "/products/1"]);
+  });
+
+  it("does not fetch the page again once a navigation replaced it", async () => {
+    stopForReal();
+    globalThis.fetch.mockResolvedValue(respond({ body: '0:"next"\n' }));
+    click(dom.listeners, "/products/2");
+    await settle();
+    globalThis.fetch.mockRejectedValue(new TypeError("Failed to fetch"));
+    click(dom.listeners, "/products/3");
+    await settle();
+    await settle();
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual(["/products/2", "/products/3"]);
+  });
+
+  // Review 19-2a R3 — the navigation that stopped the document failed: the user
+  // is still on that page, whose boundaries would keep their fallback.
+  it("fetches the page again when the navigation that stopped it fails", async () => {
+    globalThis.document.readyState = "loading";
+    globalThis.fetch
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValue(respond({ body: '0:"again"\n' }));
+    submit(dom.listeners, new dom.FakeForm({ action: "/people", method: "post" }));
+    await settle();
+    await settle();
+    expect(window.stop).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[1][0]).toBe("/products/1");
+  });
+
+  it("does not fetch the page again after a failure when nothing was stopped", async () => {
+    globalThis.document.readyState = "complete";
+    globalThis.fetch.mockRejectedValue(new TypeError("Failed to fetch"));
+    submit(dom.listeners, new dom.FakeForm({ action: "/people", method: "post" }));
+    await settle();
+    await settle();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  // revalidate() stays on the page: stopping the document would also fail the
+  // page's other requests in flight (a server function, a useQuery).
+  it("leaves the document loading for revalidate()", async () => {
+    globalThis.document.readyState = "loading";
+    await globalThis.__ruact_revalidate();
+    expect(window.stop).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  // Stopped, the document's rows would read as a response cut short, which
+  // the page being left reports: they are told first.
+  it("tells the document's rows it is left before it stops it", async () => {
+    globalThis.document.readyState = "loading";
+    const told = [];
+    globalThis.document.dispatchEvent = vi.fn((event) => {
+      told.push([event.type, window.stop.mock.calls.length]);
+      return true;
+    });
+    click(dom.listeners, "/products/2");
+    await settle();
+    expect(told).toEqual([[LEAVE_EVENT, 0]]);
+    expect(window.stop).toHaveBeenCalledTimes(1);
+  });
+});

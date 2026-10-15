@@ -1,0 +1,8 @@
+<h1 id="shell">A block's own transaction</h1>
+<Suspense fallback="Loading A…">
+  <% Item.transaction do %>
+    <% Item.create!(name: "from the block") %>
+    <% raise "the block's transaction fails" if params[:fail] %>
+  <% end %>
+  <p id="a">committed</p>
+</Suspense>

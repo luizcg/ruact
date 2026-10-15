@@ -1,0 +1,5 @@
+<h1 id="shell">Cached</h1>
+<% cache "harness-cached" do %>
+  <Suspense fallback="Loading cached…"><p id="cached">written on visit <%= params[:visit] %></p></Suspense>
+<% end %>
+<Suspense fallback="Loading other…"><p id="other">the other boundary</p></Suspense>

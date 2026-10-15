@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "securerandom"
+
 module Ruact
   # Per-render mutable state holding the components encountered during ERB
   # evaluation, and — in an action that streams — the `<Suspense>` blocks whose
@@ -14,13 +16,19 @@ module Ruact
   # Internal API: not part of the public compatibility contract.
   class RenderContext
     # A `<Suspense>` block waiting to be rendered: the view it was written in,
-    # the block, and the template Rails was rendering when it met the tag
-    # (`t(".key")` and error messages read it).
-    Block = Struct.new(:view, :block, :virtual_path, :template, :location)
+    # the block, the template Rails was rendering when it met the tag
+    # (`t(".key")` and error messages read it), and the local variables the
+    # block can see, as they were then (Story 19-2: a `for` loop reuses one
+    # variable, a local can be reassigned below the tag).
+    Block = Struct.new(:view, :block, :virtual_path, :template, :location, :locals)
 
     # @param deferring [Boolean] whether a `<Suspense>`'s content is rendered
     #   after the shell (an action that streams) instead of in place
     def initialize(deferring: false)
+      # Story 19-2 — every marker this render writes carries it, so a marker a
+      # `cache` block stored in another render never passes for one of this
+      # render's: it would name another component, or another boundary's block.
+      @id = SecureRandom.hex(4)
       @components = []
       @deferring  = deferring
       @blocks     = []
@@ -35,25 +43,29 @@ module Ruact
 
     def register(name, props)
       # Frozen: the converter keys a Hash by it, which would copy an unfrozen one.
-      token = "__RUACT_#{@components.length}__".freeze
+      token = "__RUACT_#{@id}_#{@components.length}__".freeze
       @components << { token: token, name: name, props: props }
       token
     end
 
-    # Keeps a `<Suspense>` block for later and returns its index.
+    # Keeps a `<Suspense>` block for later and returns its key.
     #
     # @param block [Block]
-    # @return [Integer]
+    # @return [String]
     def defer_block(block)
       @blocks << block
-      @blocks.length - 1
+      "#{@id}-#{@blocks.length - 1}".freeze
     end
 
-    # The block registered under +index+.
+    # The block registered under +key+, or nil when the key is not this
+    # render's — a marker that came out of a `cache` block another render wrote.
     #
-    # @return [Block]
-    def block(index)
-      @blocks.fetch(index)
+    # @return [Block, nil]
+    def block(key)
+      id, index = key.to_s.split("-", 2)
+      return nil unless id == @id && index.to_s.match?(/\A\d+\z/)
+
+      @blocks[Integer(index, 10)]
     end
 
     # Whether the development message for a `<Suspense>` in an action that

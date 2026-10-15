@@ -26,9 +26,9 @@ module Ruact
 
       it "makes a wrapper that carries a block a Suspense whose content is that block (Story 19-1)",
          :aggregate_failures do
-        html = %(<ruact-suspense data-ruact-fallback="loading" data-ruact-block="2"></ruact-suspense>)
+        html = %(<ruact-suspense data-ruact-fallback="loading" data-ruact-block="a1b2c3d4-2"></ruact-suspense>)
         result = convert.call(html)
-        expect(result.children).to be_a(Ruact::Flight::DeferredContent).and have_attributes(index: 2)
+        expect(result.children).to be_a(Ruact::Flight::DeferredContent).and have_attributes(key: "a1b2c3d4-2")
         expect(result.fallback.props).to eq("children" => "loading")
       end
 
@@ -143,6 +143,17 @@ module Ruact
         child = result.props["children"]
         expect(child).to be_a(Flight::ReactElement)
         expect(child.type).to eq(ref)
+      end
+
+      # Story 19-2 — a marker of another render (out of a `cache` block) is an
+      # error; a comment that only looks like one (the page's own text) is not.
+      it "refuses another render's marker and drops a comment that only looks like one", :aggregate_failures do
+        expect { convert.call("<!-- __RUACT_0a1b2c3d_0__ -->") }
+          .to raise_error(Ruact::HtmlConverterError, /came out of a `cache` block/)
+        # Review 19-2a R2 — what 0.0.20 cached, read after an upgrade.
+        expect { convert.call("<!-- __RUACT_0__ -->") }
+          .to raise_error(Ruact::HtmlConverterError, /came out of a `cache` block/)
+        expect(convert.call("<p>a<!-- __RUACT_x__ --></p>").props["children"]).to eq("a")
       end
     end
 

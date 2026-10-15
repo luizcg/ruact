@@ -56,12 +56,20 @@ describe("showDevOverlay", () => {
     expect(document.getElementById("ruact-dev-overlay")).toBeNull();
   });
 
-  it("shows the latest failure in the one overlay", () => {
+  // Story 19-2 (AC7) — every failure, in the one overlay.
+  it("shows each failure in the one overlay, and opens again after it was closed", () => {
     showDevOverlay(new Error("first"));
     showDevOverlay(new Error("second"));
     const overlays = document.querySelectorAll("#ruact-dev-overlay");
     expect(overlays).toHaveLength(1);
-    expect(overlays[0].querySelector("[data-overlay-message]").textContent).toBe("second");
+    const messages = [...overlays[0].querySelectorAll("[data-overlay-message]")].map((el) => el.textContent);
+    expect(messages).toEqual(["first", "second"]);
+    expect(overlays[0].querySelector("[data-overlay-title]").textContent).toBe("[ruact] 2 <Suspense> failed on the server");
     overlays[0].click();
+
+    showDevOverlay(new Error("third"));
+    const reopened = document.getElementById("ruact-dev-overlay");
+    expect([...reopened.querySelectorAll("[data-overlay-message]")].map((el) => el.textContent)).toEqual(["third"]);
+    reopened.click();
   });
 });

@@ -118,12 +118,16 @@ module ControllerRequestSpecSupport
         get "/suspense-demo/show", to: "controller_request_spec_support/suspense_demo#show"
         get "/suspense-live-demo/show", to: "controller_request_spec_support/suspense_live_demo#show"
         # Story 19-1 — `ruact_streaming`.
-        %w[show edit plain raising slow delayed late_write leased quiet].each do |action|
+        (%w[edit] + ControllerRequestSpecSupport::STREAMING_DEMO_PAGES).each do |action|
           get "/streaming-demo/#{action}", to: "controller_request_spec_support/streaming_demo##{action}"
         end
         # An endpoint whose route names no action.
         get "/streaming-direct", to: ControllerRequestSpecSupport::StreamingDemoController.action(:show)
         get "/streaming-direct-edit", to: ControllerRequestSpecSupport::StreamingDemoController.action(:edit)
+        # Story 19-2 — fragment caching.
+        %w[components suspense suspense_in_place].each do |action|
+          get "/caching-demo/#{action}", to: "controller_request_spec_support/caching_demo##{action}"
+        end
       end
       app_class.instance.initialize!
       @booted = true
@@ -278,12 +282,16 @@ module ControllerRequestSpecSupport
     nil
   end
 
+  # Story 19-1/19-2 — the pages of StreamingDemoController that stream.
+  STREAMING_DEMO_PAGES = %w[show plain raising slow delayed late_write leased quiet after_raises positions
+                            capture empty content_for partials].freeze
+
   # Story 19-1 — `ruact_streaming`: the declared actions send their page as it
   # renders; `edit` (the same template) does not.
   class StreamingDemoController < ActionController::Base
     include Ruact::Controller
 
-    ruact_streaming only: %i[show plain raising slow delayed late_write leased quiet]
+    ruact_streaming only: STREAMING_DEMO_PAGES
 
     append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
 
@@ -300,12 +308,39 @@ module ControllerRequestSpecSupport
     def delayed = ruact_render
     def late_write = ruact_render
     def quiet = ruact_render
+    def positions = ruact_render
+    def capture = ruact_render
+    def empty = ruact_render
+    def content_for = ruact_render
+    def partials = ruact_render
+
+    # Story 19-2 (AC6) — an after_action that raises once the page was sent.
+    after_action(only: :after_raises) { raise ArgumentError, "after the page" }
+
+    def after_raises = ruact_render(template: "controller_request_spec_support/streaming_demo/quiet")
 
     # A connection taken outside a block, as `Model.connection` takes one.
     def leased
       ::ActiveRecord::Base.lease_connection.select_value("SELECT 1")
       ruact_render(template: "controller_request_spec_support/streaming_demo/plain")
     end
+  end
+
+  # Story 19-2 (AC9) — fragment caching around client components and
+  # <Suspense>: the cached HTML holds markers of the render that wrote it.
+  class CachingDemoController < ActionController::Base
+    include Ruact::Controller
+
+    ruact_streaming only: :suspense
+
+    self.perform_caching = true
+    self.cache_store = ActiveSupport::Cache::MemoryStore.new
+
+    append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
+
+    def components = ruact_render
+    def suspense = ruact_render
+    def suspense_in_place = ruact_render(template: "controller_request_spec_support/caching_demo/suspense")
   end
 
   # Story 10.0 — an implicit-`default_render` page controller: an EMPTY GET
@@ -948,7 +983,8 @@ module Ruact # rubocop:disable Style/OneClassPerFile
       before do
         events.clear
         I18n.backend.store_translations(
-          :en, controller_request_spec_support: { streaming_demo: { show: { lazy: "Lazy text" } } }
+          :en, controller_request_spec_support: { streaming_demo: { show: { lazy: "Lazy text" },
+                                                                    item: { label: "Item" } } }
         )
       end
 
@@ -977,6 +1013,9 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(response.status).to eq(200)
         expect(events).to eq([[:shell, false], [:one, true], [:two, true], [:inner, true]])
         expect(response.headers["X-Accel-Buffering"]).to eq("no")
+        # Story 19-2 — not stored: a stored response holds its cache entry while
+        # it streams, and the browser holds a second request for the same URL.
+        expect(response.headers["Cache-Control"]).to eq("no-store")
         body = response.body
         expect(body).to include('"fallback":["$","p",null,{"children":"Loading one"}')
         expect(body.index("Loading two")).to be < body.index("Lazy text")
@@ -994,12 +1033,29 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(response.status).to eq(200)
         expect(events).to eq([[:shell, false], [:one, true], [:two, true], [:inner, true]])
         expect(response.headers["Content-Type"]).to eq("text/html; charset=utf-8")
+        # The document stays out of no-store: it would leave the back/forward cache.
+        expect(response.headers["Cache-Control"]).to eq("no-cache")
         body = response.body
         pushes = body.scan("<script>(self.__FLIGHT_DATA=self.__FLIGHT_DATA||[]).push(")
         expect(pushes.length).to eq(3)
         expect(body.index("Lazy text")).to be < body.rindex("</body>")
         expect(body.index("Lazy text")).to be > body.index("__FLIGHT_DATA")
         expect(body).not_to match(%r{</script(?!>)}i)
+      end
+
+      # Story 19-2 — what tells the client router this document has rows to
+      # come (it stops only such a document when it leaves the page): set
+      # before the first boundary's rows, cleared after the last.
+      it "marks the streamed document as streaming from the shell to the last boundary", :aggregate_failures do
+        body = document("/streaming-demo/show").body
+        open = body.index(".streaming=true</script>")
+        done = body.index(".streaming=false</script>")
+        push = "(self.__FLIGHT_DATA=self.__FLIGHT_DATA||[]).push("
+        pushes = body.enum_for(:scan, push).map { Regexp.last_match.begin(0) }
+        expect(open).to be < pushes.first
+        expect(done).to be > pushes.last
+        expect(done).to be < body.rindex("</body>")
+        expect(document("/streaming-demo/plain").body).not_to include(".streaming=")
       end
 
       # The rows of a <Suspense> arrive in a script of their own: the matcher an
@@ -1138,6 +1194,27 @@ module Ruact # rubocop:disable Style/OneClassPerFile
           end
         end
 
+        # Story 19-2 (AC7.2) — React's development client rebuilds the server's
+        # stack from six-element frames; four left every frame at line 2.
+        it "gives the error row frames React reads, with the template's file and line", :aggregate_failures do
+          body = flight("/streaming-demo/positions").body
+          row = body.lines.find { |line| line.include?("on line 8") }
+          frames = JSON.parse(row.sub(/\A\h+:E/, ""))["stack"]
+          expect(frames).to all(have_attributes(length: 6))
+          template = frames.find { |frame| frame[1].end_with?("streaming_demo/positions.html.erb") }
+          expect(template[2..]).to eq([8, 1, 0, 0])
+        end
+
+        # Story 19-2 (AC10.2) — the layout was sent before the block ran: what
+        # it declares with content_for never shows. Reading it still works.
+        it "makes content_for inside a block an error of that block, and lets it read", :aggregate_failures do
+          body = flight("/streaming-demo/content_for").body
+          expect(body).to include("set before")
+          expect(body).to match(/^\h+:E\{"digest":"ruact:suspense-error"/)
+          expect(body).to include("content_for :sidebar")
+          expect(body).not_to include("wrote content_for")
+        end
+
         it "names the line to add when an action that does not stream renders a <Suspense>, once",
            :aggregate_failures do
           log = with_log { flight("/streaming-demo/edit") }
@@ -1146,6 +1223,52 @@ module Ruact # rubocop:disable Style/OneClassPerFile
           expect(log).to include("streaming_demo/show.html.erb:4")
           expect(log).to include("ruact_streaming only: :edit")
         end
+      end
+
+      # Story 19-2 (AC6.2) — the page was sent whole; Live only logs an error
+      # raised after the response started, so the app's error reporting would
+      # never hear of it.
+      it "reports an after_action that raises once the page was sent", :aggregate_failures do
+        allow(Rails.error).to receive(:report).and_call_original
+        response = document("/streaming-demo/after_raises")
+        expect(response.status).to eq(200)
+        expect(response.body).to include("a slow block that writes nothing")
+        expect(response.body).not_to include("500.html")
+        expect(Rails.error).to have_received(:report)
+          .with(an_instance_of(ArgumentError), hash_including(source: "ruact.stream"))
+      end
+
+      # Story 19-2 (AC8.3) — a block runs after the rest of the template. Its
+      # local variables are as they were when the tag was met — a local
+      # reassigned below it, and `for`, which reuses one variable for every
+      # item, showed the later value; an instance variable is read when the
+      # block runs.
+      it "gives a block its locals as they were at the tag, and instance variables as they are",
+         :aggregate_failures do
+        body = flight("/streaming-demo/capture").body
+        seen = ->(kase) { body.scan(/"data-case":"#{kase}","children":"([^"]*)"/).flatten }
+        expect(seen.call("local")).to eq(["1"])
+        expect(seen.call("each")).to eq(%w[1 2 3])
+        expect(seen.call("for")).to eq(%w[1 2 3])
+        expect(seen.call("ivar")).to eq(["after"])
+      end
+
+      # Story 19-2 (AC10.1) — a block that renders nothing empties its boundary.
+      it "renders a block that writes nothing as an empty boundary, and goes on", :aggregate_failures do
+        body = flight("/streaming-demo/empty").body
+        expect(body).not_to include(":E{")
+        expect(body).not_to include("a value the block does not write")
+        expect(body).to include("the last boundary")
+        expect(body.lines.grep(/\A\h+:null\n\z/).length).to eq(4)
+      end
+
+      # Story 19-2 (AC8.4) — a <Suspense> in a partial, with its locals, in a
+      # collection: each block sees its own item, and t(".key") the partial's scope.
+      it "renders a <Suspense> in a partial and a collection with each one's own locals", :aggregate_failures do
+        body = flight("/streaming-demo/partials").body
+        expect(body.scan(/"data-item":"(\w+)","children":"Item (\w+)"/)).to eq(
+          [%w[solo solo], %w[one one], %w[two two], %w[three three]]
+        )
       end
 
       it "says nothing about an action that does not stream outside development" do
@@ -1262,6 +1385,62 @@ module Ruact # rubocop:disable Style/OneClassPerFile
           sleep 0.02 while pool.stat[:busy].positive? && Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
           expect(pool.stat[:busy]).to eq(0)
         end
+      end
+    end
+
+    # Story 19-2 (AC9) — a `cache` block stores HTML with the markers of the
+    # render that wrote it. Read back in another render, a marker used to pass
+    # for one of that render's: another component, another boundary's block.
+    describe "fragment caching (Story 19-2, AC9)" do
+      before { ControllerRequestSpecSupport::CachingDemoController.cache_store.clear }
+
+      def flight_body(path)
+        read_streamed(path, "HTTP_ACCEPT" => "text/x-component").body
+      end
+
+      it "says nothing of a page that does not stream when nothing came out of a cache" do
+        allow(Rails.error).to receive(:report).and_call_original
+        get "/caching-demo/suspense_in_place", {}, { "HTTP_ACCEPT" => "text/x-component" }
+        expect(Rails.error).not_to have_received(:report)
+      end
+
+      it "fails loudly on a client component read from the cache, naming the cache" do
+        get "/caching-demo/components", {}, { "HTTP_ACCEPT" => "text/x-component" }
+        expect { get "/caching-demo/components", {}, { "HTTP_ACCEPT" => "text/x-component" } }
+          .to raise_error(Ruact::HtmlConverterError, /came out of a `cache` block/)
+      end
+
+      it "gives a <Suspense> read from the cache an error row, never another boundary's content",
+         :aggregate_failures do
+        flight_body("/caching-demo/suspense?visit=1")
+        body = flight_body("/caching-demo/suspense?visit=2")
+        expect(body).to match(/^\h+:E\{"digest":"ruact:suspense-error"/)
+        expect(body).to include("inside `cache`")
+        expect(body.scan("second boundary").length).to eq(1)
+      end
+
+      it "gives an error row too when a page that does not stream reads what one that streams cached",
+         :aggregate_failures do
+        flight_body("/caching-demo/suspense?visit=1")
+        get "/caching-demo/suspense_in_place", {}, { "HTTP_ACCEPT" => "text/x-component" }
+        expect(last_response.status).to eq(200)
+        expect(last_response.body).to include("inside `cache`")
+        expect(last_response.body.scan("second boundary").length).to eq(1)
+      end
+
+      # Review 19-2a R2 — the server says so too, as it does when it streams.
+      it "reports a <Suspense> read from the cache by a page that does not stream" do
+        flight_body("/caching-demo/suspense?visit=1")
+        allow(Rails.error).to receive(:report).and_call_original
+        get "/caching-demo/suspense_in_place", {}, { "HTTP_ACCEPT" => "text/x-component" }
+        expect(Rails.error).to have_received(:report)
+          .with(an_object_having_attributes(message: /inside `cache`/), hash_including(source: "ruact.suspense"))
+      end
+
+      it "shows the cached content when a page that streams reads what one that does not cached" do
+        get "/caching-demo/suspense_in_place?visit=1", {}, { "HTTP_ACCEPT" => "text/x-component" }
+        body = flight_body("/caching-demo/suspense?visit=2")
+        expect(body).to include("first boundary, 1")
       end
     end
 

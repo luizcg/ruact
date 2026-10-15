@@ -18,15 +18,21 @@ module Ruact
 
       include DocumentRendering
 
-      # The headers of a Flight body written row by row: no caching, and no
+      # The headers of a Flight body written row by row: not stored, and no
       # buffering by a proxy that honours `X-Accel-Buffering` (nginx).
+      # `no-store`, not `no-cache` (Story 19-2): a response the browser may
+      # store holds its cache entry while it streams, and Chrome then holds a
+      # second request for the same URL — a `revalidate()`, the same link
+      # clicked again — until the first one ends.
       STREAM_HEADERS = {
         "Content-Type" => "#{RequestKind::FLIGHT_MIME}; charset=utf-8",
-        "Cache-Control" => "no-cache",
+        "Cache-Control" => "no-store",
         "X-Accel-Buffering" => "no"
       }.freeze
 
-      # The same, for a document written in parts.
+      # The same, for a document written in parts — `no-cache`: `no-store`
+      # would keep the page out of the browser's back/forward cache, and the
+      # router stops a document it leaves while it still loads.
       DOCUMENT_STREAM_HEADERS = {
         "Content-Type" => "text/html; charset=utf-8",
         "Cache-Control" => "no-cache",
@@ -47,6 +53,13 @@ module Ruact
       # Where a streamed document is cut: the rows of each `<Suspense>` are
       # pushed before it, as they are ready.
       BODY_CLOSE = "</body>"
+
+      # Story 19-2 — written around the pushed rows of a streamed document, so
+      # the client router knows a document still loading has rows to come: it
+      # stops such a document when it leaves the page, and only such a one (a
+      # document that is still being parsed, its rows all in, is left alone).
+      STREAMING_OPEN = "<script>(self.__FLIGHT_DATA=self.__FLIGHT_DATA||[]).streaming=true</script>"
+      STREAMING_DONE = "<script>self.__FLIGHT_DATA.streaming=false</script>"
 
       private
 
@@ -86,7 +99,8 @@ module Ruact
 
         document = ruact_document_html(shell)
         cut = document.rindex(BODY_CLOSE) || document.length
-        __ruact_stream(run, DOCUMENT_STREAM_HEADERS, document[0...cut], document[cut..]) do |rows|
+        __ruact_stream(run, DOCUMENT_STREAM_HEADERS, "#{document[0...cut]}#{STREAMING_OPEN}",
+                       "#{STREAMING_DONE}#{document[cut..]}") do |rows|
           __ruact_flight_push(rows)
         end
       end
@@ -97,6 +111,7 @@ module Ruact
       # not sent stays pending, for the browser's transport to label.
       def __ruact_stream(run, headers, first, last = nil)
         headers.each { |name, value| response.headers[name] = value }
+        @__ruact_streamed = true
         stream = response.stream
         begin
           stream.write(first)

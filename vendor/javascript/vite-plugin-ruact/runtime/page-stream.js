@@ -9,11 +9,20 @@ import { createFromReadableStream } from "virtual:ruact/flight-client";
 import { labelledStream } from "./transport.js";
 
 /**
+ * What the router dispatches on the document before it stops one it leaves
+ * while it still loads (Story 19-2).
+ */
+export const LEAVE_EVENT = "ruact:leave";
+
+/**
  * The rows the document pushes onto `__FLIGHT_DATA`, as a byte stream that
  * stays open while the document does (Story 19-1): the rows already in the
  * queue, then each one pushed later — a page that streams pushes one script per
  * `<Suspense>` — until the document has finished loading. A row pushed before
  * this runs is in the queue, and read first.
+ *
+ * A document the router leaves ({@link LEAVE_EVENT}) ends the stream as an
+ * aborted navigation does: the page being left reports no response cut short.
  */
 export function documentRows(queue, doc = globalThis.document) {
   const encoder = new TextEncoder();
@@ -27,12 +36,23 @@ export function documentRows(queue, doc = globalThis.document) {
         if (open) rows.forEach(read);
         return 0;
       };
-      const close = () => {
+      const close = (error) => {
+        if (!open) return;
         open = false;
-        controller.close();
+        doc?.removeEventListener?.("readystatechange", atEnd);
+        doc?.removeEventListener?.(LEAVE_EVENT, left);
+        if (error) controller.error(error);
+        else controller.close();
       };
+      // Closed when the document stops loading: its end (`interactive`, just
+      // before DOMContentLoaded), or the router stopping it (Story 19-2).
+      const atEnd = () => {
+        if (doc.readyState !== "loading") close();
+      };
+      const left = () => close(new DOMException("the page was left while it loaded", "AbortError"));
       if (doc?.readyState === "loading") {
-        doc.addEventListener("DOMContentLoaded", close, { once: true });
+        doc.addEventListener("readystatechange", atEnd);
+        doc.addEventListener(LEAVE_EVENT, left);
       } else {
         close();
       }

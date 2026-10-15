@@ -1,0 +1,7 @@
+<h1 id="shell">A query in a transaction</h1>
+<Suspense fallback="Loading A…">
+  <% Item.transaction do %>
+    <p id="a"><%= Item.where("harness_gate(1)").count %> items</p>
+  <% end %>
+</Suspense>
+<Suspense fallback="Loading B…"><p id="b">b</p></Suspense>

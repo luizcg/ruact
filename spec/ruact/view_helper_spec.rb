@@ -17,7 +17,7 @@ module Ruact
     describe "#__ruact_component__" do
       it "registers the component in the render context and returns an HTML comment" do
         result = helper_obj.__ruact_component__("NavBar", { "currentUser" => 1 })
-        expect(result).to match(/<!-- __RUACT_\d+__ -->/)
+        expect(result).to match(/<!-- __RUACT_\h+_\d+__ -->/)
         expect(render_context.components.length).to eq(1)
         expect(render_context.components.first[:name]).to eq("NavBar")
         expect(render_context.components.first[:props]).to eq({ "currentUser" => 1 })
@@ -31,8 +31,8 @@ module Ruact
       it "uses incrementing token numbers for successive registrations" do
         token0 = helper_obj.__ruact_component__("Foo", {})
         token1 = helper_obj.__ruact_component__("Bar", {})
-        expect(token0).to include("__RUACT_0__")
-        expect(token1).to include("__RUACT_1__")
+        expect(token0).to match(/__RUACT_\h+_0__/)
+        expect(token1).to match(/__RUACT_\h+_1__/)
       end
 
       it "passes props through to the registry entry" do

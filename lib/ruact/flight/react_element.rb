@@ -31,14 +31,19 @@ module Ruact
     end
 
     # The content of a Suspense boundary that has not been rendered yet: the
-    # index of its block in the render context. The serializer never sees one —
+    # key of its block in the render context. The serializer never sees one —
     # it defers a boundary's children without looking at them, and the caller
     # of {Renderer#take_boundary} renders it.
     class DeferredContent
-      attr_reader :index
+      # Story 19-2 — what a boundary says when its marker came out of a `cache`
+      # block another render wrote: its content was never in the fragment.
+      STALE = "A <Suspense> inside `cache` was read from the cache, and its content is not in the " \
+              "cached fragment: put the <Suspense> outside the `cache` block (cache what is inside it)."
 
-      def initialize(index)
-        @index = index
+      attr_reader :key
+
+      def initialize(key)
+        @key = key
       end
     end
 

@@ -5,6 +5,8 @@
 #                         and the perturbation that must fail (writes results/browser.md)
 #   ./run react 19.2.8    the same scenarios with the app's own react-server-dom-webpack
 #                         (appends to results/browser.md)
+#   ./run i18n 1.14.7     the middleware-scope scenario with another i18n
+#   ./run pg              the PostgreSQL scenarios (also part of ./run when initdb is on the PATH)
 #   ./run postgres        what suspense_timeout does to a query running in PostgreSQL
 #                         (writes results/postgres.md; needs initdb and pg_ctl)
 #
@@ -98,7 +100,7 @@ other_react() {
   npm install --silent "react@$version" "react-dom@$version" "react-server-dom-webpack@$version"
   table "React $(node -p "require('react/package.json').version") — $(build)"
   for env in development production; do
-    scenarios "the scenarios" "$env"
+    scenarios "the scenarios" "$env" HARNESS_VARIANT="react-$version"
   done
 }
 
@@ -114,9 +116,57 @@ postgres() {
   bundle exec ruby measure/postgres.rb "$PG_DIR" 5498
 }
 
+# Story 19-2 (AC13) — the same app on a throwaway PostgreSQL: the scenarios of
+# e2e/postgres.spec.mjs, without and with the async query executor. Needs
+# initdb and pg_ctl on the PATH.
+pg() {
+  build >/dev/null
+  PG_DIR=$(mktemp -d)
+  initdb -D "$PG_DIR/data" --auth=trust >/dev/null
+  pg_ctl -D "$PG_DIR/data" -o "-p 5498 -k $PG_DIR -c listen_addresses=''" -l "$PG_DIR/log" -w start >/dev/null
+  trap 'pg_ctl -D "$PG_DIR/data" -m immediate stop >/dev/null; rm -rf "$PG_DIR"' EXIT
+  export DATABASE_URL="postgres:///postgres?host=$PG_DIR&port=5498&pool=10"
+  table "PostgreSQL $(pg_ctl --version | awk '{print $3}') — e2e/postgres.spec.mjs, suspense_timeout 5 s"
+  for env in development production; do
+    scenarios "PostgreSQL" "$env" HARNESS_DB=postgres HARNESS_TIMEOUT=5
+    scenarios "PostgreSQL, async query executor" "$env" HARNESS_DB=postgres HARNESS_TIMEOUT=5 HARNESS_ASYNC=1
+  done
+}
+
+# Story 19-2 (AC17) — the middleware scenario with another i18n (the ADR's
+# "i18n before 1.15"): ./run i18n 1.14.7. Appends to results/browser.md.
+other_i18n() {
+  local version=$1
+  cp Gemfile tmp/Gemfile.keep
+  cp Gemfile.lock tmp/Gemfile.lock.keep
+  restore_gems() {
+    cp tmp/Gemfile.keep Gemfile
+    cp tmp/Gemfile.lock.keep Gemfile.lock
+    bundle install --quiet
+  }
+  trap restore_gems EXIT
+  echo "gem \"i18n\", \"$version\"" >>Gemfile
+  bundle install --quiet
+  table "i18n $version — e2e/middleware.spec.mjs"
+  for env in development production; do
+    echo "== i18n $version, $env"
+    HARNESS_VARIANT="i18n-$version" RAILS_ENV=$env npx playwright test middleware.spec.mjs 2>&1 | tee tmp/playwright.log
+    row "middleware scopes" "$env" tmp/playwright.log
+  done
+}
+
+# What this run wrote is newer than this stamp (CI prints only that).
+mkdir -p tmp && touch tmp/run-started
+
 case "${1:-all}" in
-  all)      setup; browser ;;
+  # On CI PostgreSQL is required (AC24.1): a runner without it fails the run.
+  all)      setup; browser
+            if command -v initdb >/dev/null; then pg
+            elif [ -n "${CI:-}" ]; then echo "PostgreSQL is required on CI: no initdb on the PATH" >&2; exit 1
+            else echo "| PostgreSQL | — | not run: no initdb on the PATH |" >>"$BROWSER"; fi ;;
+  pg)       setup; pg ;;
+  i18n)     setup; build >/dev/null; other_i18n "${2:?version}" ;;
   react)    setup; other_react "${2:?version}" ;;
   postgres) postgres ;;
-  *)        echo "usage: ./run [react VERSION | postgres]" >&2; exit 1 ;;
+  *)        echo "usage: ./run [react VERSION | i18n VERSION | pg | postgres]" >&2; exit 1 ;;
 esac

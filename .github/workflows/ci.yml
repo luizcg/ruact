@@ -227,11 +227,20 @@ jobs:
           node-version: "20"
       - name: Chromium and the libraries it needs
         run: npm ci && npx playwright install --with-deps chromium
+      # Story 19-2 (AC13) — ./run also runs the PostgreSQL scenarios, on a
+      # throwaway server of its own (initdb, pg_ctl): the runner has the
+      # binaries, not on the PATH.
+      - name: PostgreSQL's binaries on the PATH
+        run: echo "$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)" >> "$GITHUB_PATH"
       - name: The proof, in development and production, and the perturbation
         run: ./run
       - name: What ran
         if: always()
-        run: cat results/browser.md || true
+        # The outcomes measured rather than required (what the server did with
+        # an aborted fetch, what stopping a document stops) on this runner.
+        run: |
+          cat results/browser.md || true
+          for f in $(find results -name '*.json' -newer tmp/run-started | sort); do echo "== $f"; cat "$f"; done || true
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

@@ -434,12 +434,12 @@ what 0.0.19 does, plus the message.
 
 | Event | The response | The database connection | The request's state | Reported |
 | --- | --- | --- | --- | --- |
-| A block raises | *Measured:* stays 200; the fallback stays; later blocks run; development shows the class, the message and a backtrace that names the template, and production shows none of them. The row's digest (`ruact:suspense-error`) is the prototype's, read from its code | *Not measured separately* | *Specified:* later blocks run in the same view, with what the controller scoped still in force | *Measured:* `Rails.error`, source `ruact.suspense` |
+| A block raises | *Measured:* stays 200; the fallback stays; later blocks run; development shows the class, the message and a backtrace that names the template, and production shows none of them. The row's digest (`ruact:suspense-error`) is the prototype's, read from its code | *Measured (19-2):* a block's own transaction is rolled back when it raises (`e2e/transactions.spec.mjs`, AC16.2); the pool is not read after it | *Specified:* later blocks run in the same view, with what the controller scoped still in force | *Measured:* `Rails.error`, source `ruact.suspense` |
 | A block passes `suspense_timeout` | *Measured, for work that waits in Ruby:* an `E` row with `ruact:suspense-timeout`; later blocks run. *Measured:* a query running inside SQLite is not interrupted | *Measured:* back in the pool; a later page reads its rows | *Specified:* as above | *Measured:* `Rails.error` |
 | The client leaves while a block waits | *Measured:* nothing is written; the server does not notice | *Measured:* held until the block ends or times out, then returned | *Specified:* unchanged, the action is still running | *Measured:* nothing until then; the timeout, if it comes to that |
 | The client left, the next block is due | *Measured:* with the socket check, not started and the response ends; without it, started | — | *Specified:* the action's `after_action` filters still run | Nothing in the prototype; 19-1 decides what a response cut short logs |
-| A navigation is superseded | *Specified:* the router aborts its fetch; the server sees a client that left | as above | as above | — |
-| An exception after the first write, outside a block | *Specified:* the gem closes the stream; the browser's transport labels the rows still pending (`ruact:connection-closed`) and their boundaries keep the fallback | — | — | The exception |
+| A navigation is superseded | *Measured (19-2):* the router aborts its fetch; the server usually sees a client that left and starts no further block, but Chrome sometimes keeps reading the aborted response and the server renders the next one (`results/navigation-*.history.jsonl`). A document still streaming is stopped by the router (`window.stop()`), and its server ends at the next block | *Measured:* back in the pool (AC1, AC2) | as above | The log line "the client left" |
+| An exception after the first write, outside a block | *Measured (19-2, `e2e/failures.spec.mjs`):* the gem closes the stream; the browser's transport labels the rows still pending (`ruact:connection-closed`) and their boundaries keep the fallback | — | — | *Measured:* `Rails.error`, source `ruact.stream`, and the log |
 
 ## Buffering
 
@@ -467,7 +467,19 @@ today: `Cache-Control: no-cache` and `X-Accel-Buffering: no`.
   the Rails it loads, and 8.1 is in it. Before 7.2 is no longer a case.
 - **i18n before 1.15**, which kept the locale in a thread variable: by D3's
   second bullet a Live action would then not see a locale set outside it at
-  all.
+  all. *Since 19-2 (`e2e/middleware.spec.mjs`, `./run i18n 1.14.7`):* with
+  1.14.7 a block loses the locale a middleware set; with 1.15.2 the shell
+  and the block showed `pt` in some runs and `en` in others (the committed
+  `results/middleware-*.json` of different runs), the cause not established.
+  The locale a middleware set is not to be relied on with either.
+  Rails' `DatabaseSelector` (primary and replica, `/role`): the shell reads as
+  `reading`, a block that runs later as `writing` — the selector's
+  `connected_to` ended when the response started; with the role set in the
+  controller (`around_action { connected_to(role: :reading) { … } }`) the
+  block reads as `reading` too (`results/database-selector-*.json`). A
+  `prevent_writes` a middleware set is gone for a block the same way. A tenant
+  kept in Rails' execution state is copied to the action's thread. Scopes
+  belong in the controller.
 - **Rack 2.2**, whose `ETag` buffers any body unless it sees
   `Cache-Control: no-cache` or `Last-Modified`.
 - **A reverse proxy.** By its documentation nginx buffers a proxied response by
@@ -486,6 +498,15 @@ today: `Cache-Control: no-cache` and `X-Accel-Buffering: no`.
   (`ActiveRecord::QueryCanceled`, nothing left running).
   `spec/browser/deferred_suspense/results/postgres.md`, `./run postgres`.
   MySQL and overlapping `load_async` queries are still not measured.
+  *Since 19-2 (`./run pg`, `e2e/postgres.spec.mjs`):* ruact cancels the
+  query in flight at the limit (`QueryWatch`), so the next query on that
+  connection no longer waits; a `statement_timeout` cancels it with
+  `ActiveRecord::QueryCanceled`, an error of the block; two `load_async`
+  queries were active at once with the executor while the shell was on
+  screen, and without it the controller held the shell until both ran. By
+  design, not measured: a query `load_async` runs is not cancelled at the
+  limit (the executor's thread holds its connection), so the statement
+  timeout is its limit. MySQL is still not measured.
 - **The writes that race**, on a machine under real load.
 
 ## The wire and the two clients
@@ -638,6 +659,38 @@ What the gem does, where it differs from the prototype of 19-0:
 - **The proof** is `spec/browser/deferred_suspense/` against the gem, in CI;
   this ADR's experiment stays the record of 19-0, against `v0.0.19`.
 
+What 19-2 changed, from the lifecycle cases:
+
+- **Locals.** A block that runs later read a local as it was then — every
+  block of a `for` loop showed its last item. The helper keeps the locals the
+  block sees when the tag is met; `DeferredRender` gives them back while it
+  runs. Instance variables are read when the block runs.
+- **Markers carry the render's id.** A `cache` block stores markers of the
+  render that wrote it; read back, they named another component or another
+  boundary's block. Now a component read from the cache raises, and a
+  `<Suspense>` read from the cache gets an error row for its boundary.
+- **Leaving an open document.** The router stops a document it leaves — a
+  link, a form; not `revalidate()`, which stays on the page — while it still
+  streams (`window.stop()`; the server marks such a document), so its
+  connection closes and the server starts no further block; the rows of the
+  page being left end as an aborted navigation, not as a response cut short.
+  Stopping it stops the rest of what the document was loading — measured in
+  Chrome (`e2e/leaving.spec.mjs`, `results/leaving-*.json`): an image still
+  loading stays broken, a `fetch` in flight fails with `TypeError`, a module
+  `import()` in flight fails and importing it again works. A *fetch* the
+  router aborts is different: Chrome sometimes keeps reading an aborted
+  response to reuse its connection, and the server then renders its next
+  block — seen in production on 2026-10-15
+  (`results/navigation-*.history.jsonl`), not preventable from either side.
+- **`no-store`** on a streamed Flight response: Chrome held a second request
+  for the same URL (`revalidate()`) while the first, storable, streamed.
+- **A query past the timeout is cancelled** (PostgreSQL, `QueryWatch`).
+- **After the response started:** an `after_action` that raises is reported
+  to `Rails.error`; `content_for` inside a block is an error in development.
+- **Errors' positions:** the error row's frames are the six fields React's
+  development client reads, and a component tag over several lines keeps
+  them, so the template lines are right.
+
 ## Decided by Luiz
 
 On 2026-10-14:
@@ -652,3 +705,16 @@ On 2026-10-14:
 3. **`suspense_timeout` stays at 5 s** once it limits real time. It is a
    backstop: it does not stop a query the driver cannot interrupt, and the
    guide says so.
+
+On 2026-10-15 (Story 19-2a):
+
+4. **A transaction left open at the end of an action is not rolled back by
+   ruact.** The next request inherits it with and without streaming: that is
+   Rails, and ruact does not undo for the app what Rails leaves alone
+   everywhere else. The guide says so.
+5. **The router keeps stopping a document still streaming when it leaves the
+   page by a link or a form**, so the server renders nothing for a page nobody
+   sees. The cost, measured, goes in the guide: what that document was still
+   loading (an image, a `fetch`, an `import()`) fails.
+6. **The browser job is a required check** for merging into the gem's `main`
+   (five green runs in a row, without retry, after the last change of 19-2a).

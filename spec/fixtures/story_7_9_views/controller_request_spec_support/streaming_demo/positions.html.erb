@@ -1,0 +1,11 @@
+<main>
+  <Card
+    title={"multi"}
+  />
+  <%= render "controller_request_spec_support/streaming_demo/note" %>
+  <Suspense fallback="outer">
+    <Suspense fallback="inner">
+      <% raise ArgumentError, "on line 8" %>
+    </Suspense>
+  </Suspense>
+</main>

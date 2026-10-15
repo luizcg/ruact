@@ -1,0 +1,8 @@
+{
+  "AC3.3": {
+    "image": "broken",
+    "fetch": "failed:TypeError: Failed to fetch",
+    "import": "failed:TypeError: Failed to fetch dynamically imported module: http://localhost:4190/__held/module.js",
+    "import_again": "ok:module"
+  }
+}

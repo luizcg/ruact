@@ -1,0 +1,4 @@
+<main>
+  <%= render "controller_request_spec_support/streaming_demo/item", item: "solo" %>
+  <ul><%= render partial: "controller_request_spec_support/streaming_demo/item", collection: %w[one two three], as: :item %></ul>
+</main>

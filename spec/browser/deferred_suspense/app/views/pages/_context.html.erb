@@ -8,4 +8,6 @@
   <li data-k="fiber_local"><%= Thread.current[:harness_fiber_local].inspect %></li>
   <li data-k="thread_variable"><%= Thread.current.thread_variable_get(:harness_thread_variable).inspect %></li>
   <li data-k="thread"><%= Thread.current.object_id == request.env["harness.thread"] ? "request thread" : "other thread" %></li>
+  <li data-k="role"><%= ActiveRecord::Base.current_role %></li>
+  <li data-k="prevent_writes"><%= ActiveRecord::Base.current_preventing_writes %></li>
 </ul>

@@ -1,0 +1,13 @@
+{
+  "with_the_shell_on_screen": {
+    "waiting": 2,
+    "waiting_1": 1,
+    "waiting_2": 1,
+    "active": 2
+  },
+  "events": [
+    "block_start:first",
+    "block_start:second",
+    "action done:pg_async"
+  ]
+}

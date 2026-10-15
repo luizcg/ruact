@@ -14,7 +14,7 @@ module Ruact
   #   <%= __ruact_component__("LikeButton", { "postId" => @post.id, "initialCount" => 5 }) %>
   #
   # The placeholder is replaced by an HTML comment with a unique token:
-  #   <!-- __RUACT_0__ -->
+  #   <!-- __RUACT_a1b2c3d4_0__ -->
   #
   # A component with children (Story 18-2) keeps its content as ERB, inside a
   # wrapper element HtmlConverter turns into the component's `children`:
@@ -399,7 +399,13 @@ module Ruact
       props_ruby = pairs.map { |prop, expr| "#{prop.inspect} => #{expr}" }.join(", ")
       props_hash = props_ruby.empty? ? "{}" : "{ #{props_ruby} }"
       helper = kind == :self_closing ? "__ruact_component__" : "__ruact_component_open__"
-      %(<%= #{helper}(#{name.inspect}, #{props_hash}) %>)
+      # Story 19-2 — a tag written over several lines keeps them, so every
+      # line below it is still the template's own in an error and a backtrace
+      # (the props' own code carries the line breaks it has). Nothing is
+      # allocated for a tag on one line: the guard on allocations counts
+      # every component.
+      missing = match.count("\n") - props_hash.count("\n")
+      %(<%= #{helper}(#{name.inspect}, #{props_hash}) #{"\n" * missing if missing.positive?}%>)
     rescue ComponentContractError, ComponentTagError, UnknownComponentError
       # Already carry file:line and the fix — re-raise AS-IS (do NOT append the
       # generic "at line N: snippet" tail).

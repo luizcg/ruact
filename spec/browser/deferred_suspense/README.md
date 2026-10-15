@@ -11,12 +11,19 @@ Slow work waits at a gate the test opens with a request of its own
 (`gate.rb`): nothing waits by time.
 
 ```sh
-./run                 # install, build, development and production, and the perturbation
-./run react 19.2.8    # the same with the app's own react-server-dom-webpack
-./run postgres        # what suspense_timeout does to a query running in PostgreSQL
+./run                 # install, build, development and production, the perturbation,
+                      # and the PostgreSQL scenarios when initdb is on the PATH (required on CI)
+./run pg              # only the PostgreSQL scenarios (e2e/postgres.spec.mjs), on a throwaway server
+./run react 19.2.8    # the scenarios with the app's own react-server-dom-webpack
+./run i18n 1.14.7     # the middleware scenario with another i18n
+./run postgres        # what suspense_timeout does to a query running in PostgreSQL (19-1)
 ```
 
-`./run` writes `results/browser.md`, one row per run. The perturbation renders
+`./run` writes `results/browser.md`, one row per run. What a scenario measures
+rather than requires goes to `results/<name>-<env>.json`; a run with another
+React or i18n writes `results/<name>-<variant>-<env>.json` and leaves the
+baseline alone. The navigation outcomes are also added, one line per run, to
+`results/navigation-<env>.history.jsonl`. The perturbation renders
 every `<Suspense>` in place, as 0.0.19 did (`HARNESS_IN_PLACE=1`, applied by
 the app, not by the gem): the two scenarios of `e2e/deferred.spec.mjs` must
 fail, at what the browser shows, and the script checks that they do.

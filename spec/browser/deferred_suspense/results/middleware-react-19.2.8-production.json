@@ -1,0 +1,29 @@
+{
+  "i18n": "1.15.2",
+  "shell": {
+    "locale": "en",
+    "t": "hello",
+    "lazy": "lazy lookup (en)",
+    "zone": "UTC",
+    "tenant": "from a middleware",
+    "current": "nil",
+    "fiber_local": "\"set\"",
+    "thread_variable": "nil",
+    "thread": "other thread",
+    "role": "writing",
+    "prevent_writes": "true"
+  },
+  "block": {
+    "locale": "en",
+    "t": "hello",
+    "lazy": "lazy lookup (en)",
+    "zone": "UTC",
+    "tenant": "from a middleware",
+    "current": "nil",
+    "fiber_local": "\"set\"",
+    "thread_variable": "nil",
+    "thread": "other thread",
+    "role": "writing",
+    "prevent_writes": "false"
+  }
+}

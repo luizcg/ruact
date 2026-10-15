@@ -1,0 +1,5 @@
+<h1 id="shell">Around a transaction</h1>
+<Suspense fallback="Loading A…">
+  <% Gate.wait("a") %>
+  <p id="a" data-open="<%= Item.connection.transaction_open? %>">in the transaction</p>
+</Suspense>

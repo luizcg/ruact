@@ -9,7 +9,11 @@
 
 const OVERLAY_ID = "ruact-dev-overlay";
 
-/** Shows +error+ over the page; a click closes it. */
+/**
+ * Shows +error+ over the page, under the ones already shown (Story 19-2: one
+ * entry per failed <Suspense>); a click closes the overlay, and the next
+ * failure opens it again.
+ */
 export function showDevOverlay(error, doc = globalThis.document) {
   const cause = error?.cause ?? error;
   let overlay = doc.getElementById(OVERLAY_ID);
@@ -23,17 +27,27 @@ export function showDevOverlay(error, doc = globalThis.document) {
       "font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;padding:32px;overflow:auto;" +
       "white-space:pre-wrap;cursor:pointer";
     overlay.addEventListener("click", () => overlay.remove());
+    const title = doc.createElement("h2");
+    title.dataset.overlayTitle = "";
+    const hint = doc.createElement("p");
+    hint.dataset.overlayHint = "";
+    hint.textContent = "Development only. Click to close.";
+    overlay.append(title, hint);
     (doc.body ?? doc.documentElement).appendChild(overlay);
   }
-  const title = doc.createElement("h2");
-  title.textContent = "[ruact] A <Suspense> failed on the server";
+
+  const entry = doc.createElement("section");
+  entry.dataset.overlayEntry = "";
   const message = doc.createElement("p");
   message.dataset.overlayMessage = "";
   message.textContent = cause?.message ?? String(cause);
   const stack = doc.createElement("pre");
   stack.dataset.overlayStack = "";
   stack.textContent = cause?.stack ?? "";
-  const hint = doc.createElement("p");
-  hint.textContent = "Development only. Click to close.";
-  overlay.replaceChildren(title, message, stack, hint);
+  entry.append(message, stack);
+  overlay.insertBefore(entry, overlay.querySelector("[data-overlay-hint]"));
+
+  const count = overlay.querySelectorAll("[data-overlay-entry]").length;
+  overlay.querySelector("[data-overlay-title]").textContent =
+    count === 1 ? "[ruact] A <Suspense> failed on the server" : `[ruact] ${count} <Suspense> failed on the server`;
 }

@@ -1,0 +1,8 @@
+<h1 id="shell">A cache inside a Suspense</h1>
+<Suspense fallback="Loading inside…">
+  <% Harness::Events.add("block_start:inside") %>
+  <% cache "harness-inside" do %>
+    <% Harness::Events.add("cache_miss") %>
+    <p id="inside"><%= Gate.wait("a") %></p>
+  <% end %>
+</Suspense>

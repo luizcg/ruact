@@ -804,8 +804,8 @@ module Ruact
     describe "#render contract" do
       let(:erb_source) { "<LikeButton />" }
       let(:erb_binding) { Object.new.instance_eval { binding } }
-      let(:html_input)  { "<!-- __RUACT_0__ -->" }
-      let(:render_ctx)  { RenderContext.new.tap { |c| c.register("LikeButton", {}) } }
+      let(:render_ctx)  { RenderContext.new }
+      let(:html_input)  { "<!-- #{render_ctx.register('LikeButton', {})} -->" }
 
       describe "input validation" do
         it "raises ArgumentError when :erb is given without sibling :binding" do
@@ -915,9 +915,9 @@ module Ruact
       describe "eager-capture invariant (html input)" do
         it "does not reach back into the RenderContext after #render returns" do
           ctx = RenderContext.new
-          ctx.register("LikeButton", { "postId" => 1 })
+          token = ctx.register("LikeButton", { "postId" => 1 })
 
-          enum = pipeline.render({ html: "<!-- __RUACT_0__ -->", render_context: ctx }, mode: :stream)
+          enum = pipeline.render({ html: "<!-- #{token} -->", render_context: ctx }, mode: :stream)
 
           # Mutating the context after #render returns must not affect the captured registry.
           ctx.register("LikeButton", { "postId" => 999 })
