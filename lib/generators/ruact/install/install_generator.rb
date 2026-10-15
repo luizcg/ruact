@@ -265,6 +265,13 @@ module Ruact
       # overwrites, as before.
       def create_vite_config
         vite_config_file = Pathname(destination_root).join("vite.config.js")
+        other = other_vite_config unless vite_config_file.exist? || options[:force]
+        if other
+          # Vite reads vite.config.js first: writing one would set the app's aside.
+          say_status "notice", "#{other} exists — vite.config.js is not written, Vite would read it " \
+                               "instead of yours.", :yellow
+          return show_vite_config_instructions(other)
+        end
         return template("vite.config.js.tt", "vite.config.js") if !vite_config_file.exist? || options[:force]
 
         existing = vite_config_file.binread.force_encoding(Encoding::UTF_8)
@@ -276,6 +283,7 @@ module Ruact
         elsif existing == rendered_vite_config
           say_status "identical", "vite.config.js", :blue
         else
+          say_status "notice", "vite.config.js already exists and has edits of yours — it is left as it is.", :yellow
           show_vite_config_instructions
         end
       end
@@ -456,24 +464,23 @@ module Ruact
         match = content.match(PINNED_IMPORT_LINE)
         return nil unless match
 
-        generated = File.read(PINNED_VITE_CONFIG)
+        generated = File.read(PINNED_VITE_CONFIG, encoding: Encoding::UTF_8)
         normalized = content.sub(PINNED_IMPORT_LINE) { PINNED_VITE_CONFIG_IMPORT }
         normalized.rstrip == generated.rstrip ? match[1] : nil
       end
 
       # vite.config.js as this version of the template renders it.
       def rendered_vite_config
-        source = File.read(File.join(self.class.source_root, "vite.config.js.tt"))
+        source = File.read(File.join(self.class.source_root, "vite.config.js.tt"), encoding: Encoding::UTF_8)
         ERB.new(source, trim_mode: "-").result(binding)
       end
 
       # An existing vite.config.js the install does not touch: how to make it
       # ask Bundler for the plugin, with the template's own lines.
-      def show_vite_config_instructions
+      def show_vite_config_instructions(name = "vite.config.js")
         rendered = rendered_vite_config
         head = rendered[0...rendered.index("export default")]
-        say_status "notice", "vite.config.js already exists and has edits of yours — it is left as it is.", :yellow
-        say "  To load ruact's Vite plugin from the gem Bundler has (so a `bundle update ruact`"
+        say "  In #{name}, to load ruact's Vite plugin from the gem Bundler has (so a `bundle update ruact`"
         say "  needs no edit there):"
         say "  1. Replace the `import ruact from '…'` line, if there is one, with (beside your other imports):"
         say ""
@@ -492,7 +499,14 @@ module Ruact
         say "  3. In it: ruact() in plugins, build.rollupOptions.input '#{Ruact.bootstrap_virtual_id}',"
         say "     and (optional) publicDir: false, so a build does not copy public/ into public/assets/."
         say ""
-        say "  Re-run `rails generate ruact:install --force` to overwrite vite.config.js instead."
+        say "  Re-run `rails generate ruact:install --force` to write vite.config.js instead."
+      end
+
+      # A `vite.config.*` of the app's other than vite.config.js, which Vite
+      # would no longer read once a vite.config.js exists.
+      def other_vite_config
+        (Ruact::BuildSkew::VITE_CONFIGS - ["vite.config.js"])
+          .find { |name| Pathname(destination_root).join(name).exist? }
       end
 
       # What the post-install message says about the layout — true for the

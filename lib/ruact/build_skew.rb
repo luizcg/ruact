@@ -64,9 +64,15 @@ module Ruact
       imported = foreign_plugin_import(root)
       return rebuild unless imported
 
-      "#{imported[:config]} imports ruact's Vite plugin from #{imported[:path]}, another installation of ruact: " \
-        "run `rails generate ruact:install`, which replaces a vite.config.js it generated with one that asks " \
-        "Bundler for the plugin (for one you edited, it prints the change to make), then: #{rebuild}"
+      config = imported[:config]
+      fix = if config == "vite.config.js"
+              "run `rails generate ruact:install`, which replaces a vite.config.js it generated with one that " \
+                "asks Bundler for the plugin (for one you edited, it prints the change to make)"
+            else
+              "load it from the gem Bundler has — `rails generate ruact:install` prints the change to make in #{config}"
+            end
+      "#{config} imports ruact's Vite plugin from #{imported[:path]}, another installation of ruact: " \
+        "#{fix}, then: #{rebuild}"
     end
 
     # The message as a banner across the top of the page, in development.

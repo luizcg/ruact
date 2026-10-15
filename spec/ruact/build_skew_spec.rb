@@ -63,6 +63,13 @@ RSpec.describe Ruact::BuildSkew, :story_19_3 do
         expect(described_class.message(nil, root: root)).to include("vite.config.ts imports")
       end
 
+      it "does not say the install replaces a vite.config that is not vite.config.js", :aggregate_failures do
+        config("import ruact from '/old/vite-plugin-ruact/index.js';\n", "vite.config.ts")
+        text = described_class.message(nil, root: root)
+        expect(text).not_to include("replaces")
+        expect(text).to include("`rails generate ruact:install` prints the change to make in vite.config.ts")
+      end
+
       it "says nothing of an import built in JavaScript" do
         config("import ruact from `${gem}/vendor/javascript/vite-plugin-ruact/index.js`;\n")
         expect(described_class.message(nil, root: root)).not_to include("imports ruact's Vite plugin")

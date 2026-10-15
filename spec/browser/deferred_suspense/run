@@ -295,12 +295,14 @@ upgrade() {
   trap 'rm -f vite.config.js; rm -rf "$UPGRADE_DIR"; build >/dev/null' EXIT
   git -C ../../.. archive v0.0.21 | tar -x -C "$old"
   sed "s#path: \"../../..\"#path: \"$old\"#" Gemfile >tmp/Gemfile.0.0.21
+  grep -qF "path: \"$old\"" tmp/Gemfile.0.0.21 || { echo "tmp/Gemfile.0.0.21 does not point ruact at $old" >&2; exit 1; }
   cp Gemfile.lock tmp/Gemfile.0.0.21.lock
   BUNDLE_GEMFILE="$PWD/tmp/Gemfile.0.0.21" bundle install --quiet
   bundle exec ruby -e 'require "generators/ruact/install/install_generator"
     Ruact::Generators::InstallGenerator.new([], {}, destination_root: ARGV[0]).create_vite_config' tmp/generated
   local plugin="$old/vendor/javascript/vite-plugin-ruact/index.js"
   sed "s#__RUACT_VITE_PLUGIN_PATH__#$plugin#" ../../../lib/generators/ruact/install/legacy/vite.config.pinned.js >tmp/vite.config.pinned.js
+  grep -qF "import ruact from '$plugin';" tmp/vite.config.pinned.js || { echo "tmp/vite.config.pinned.js does not import $plugin" >&2; exit 1; }
   recorded() { node -p 'JSON.stringify(JSON.parse(require("fs").readFileSync("public/react-client-manifest.json", "utf8")).__ruact__?.version ?? null)'; }
 
   table "the vite.config.js ruact:install writes, across an upgrade — e2e/upgrade.spec.mjs"

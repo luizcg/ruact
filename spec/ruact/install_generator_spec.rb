@@ -1988,6 +1988,17 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         end
       end
 
+      it "recognizes a generated one whatever Ruby's default encoding" do
+        FileUtils.cp(File.join(fixtures, "generated-0.0.13.js"), config_path)
+        original = Encoding.default_external
+        Encoding.default_external = Encoding::US_ASCII
+        run_create_vite_config
+        Encoding.default_external = original
+        expect(File.read(config_path, encoding: Encoding::UTF_8)).to eq(fresh_config)
+      ensure
+        Encoding.default_external = original
+      end
+
       it "tolerates a different end of file on a generated one" do
         File.write(config_path, "#{File.read(File.join(fixtures, 'generated-0.0.16.js')).rstrip}\n\n\n")
         run_create_vite_config
@@ -2026,6 +2037,17 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(File.read(config_path)).to eq(after_first)
         expect(output).to match(/identical\s+vite\.config\.js/)
         expect(output).not_to include("function ruactPluginPath()")
+      end
+
+      it "writes no vite.config.js beside another vite.config of the app's, and prints the change",
+         :aggregate_failures do
+        File.write(File.join(app_root, "vite.config.ts"), "// the app's, renamed and edited\n")
+
+        output = run_create_vite_config
+
+        expect(File).not_to exist(config_path)
+        expect(output).to include("vite.config.ts")
+        expect(output).to include("function ruactPluginPath()")
       end
 
       it "overwrites an edited one under --force, as before" do

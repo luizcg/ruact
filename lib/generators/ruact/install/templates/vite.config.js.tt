@@ -7,11 +7,12 @@ import react from '@vitejs/plugin-react';
 // gem is each time Vite starts, so after `bundle update ruact` the next build
 // (or bin/dev) uses the new plugin: no path to refresh in this file.
 function ruactPluginPath() {
+  let out;
   try {
-    return execSync(`bundle exec ruby -e "require 'ruact'; print Ruact.vite_plugin_path"`, {
+    out = execSync(`bundle exec ruby -e "require 'ruact'; print Ruact.vite_plugin_path"`, {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
+    });
   } catch (error) {
     throw new Error(
       "[ruact] could not ask Bundler where the ruact gem is. Run Vite from the app's root, " +
@@ -19,6 +20,10 @@ function ruactPluginPath() {
         (error.stderr || error.message),
     );
   }
+  // The last line only: anything a gem prints while loading comes before it.
+  const path = out.trim().split(/\r?\n/).pop();
+  if (!path) throw new Error('[ruact] Bundler gave no path for the ruact gem.');
+  return path;
 }
 
 export default defineConfig(async () => {
