@@ -18,15 +18,21 @@ module Ruact
 
       include DocumentRendering
 
-      # The headers of a Flight body written row by row: no caching, and no
+      # The headers of a Flight body written row by row: not stored, and no
       # buffering by a proxy that honours `X-Accel-Buffering` (nginx).
+      # `no-store`, not `no-cache` (Story 19-2): a response the browser may
+      # store holds its cache entry while it streams, and Chrome then holds a
+      # second request for the same URL — a `revalidate()`, the same link
+      # clicked again — until the first one ends.
       STREAM_HEADERS = {
         "Content-Type" => "#{RequestKind::FLIGHT_MIME}; charset=utf-8",
-        "Cache-Control" => "no-cache",
+        "Cache-Control" => "no-store",
         "X-Accel-Buffering" => "no"
       }.freeze
 
-      # The same, for a document written in parts.
+      # The same, for a document written in parts — `no-cache`: `no-store`
+      # would keep the page out of the browser's back/forward cache, and the
+      # router stops a document it leaves while it still loads.
       DOCUMENT_STREAM_HEADERS = {
         "Content-Type" => "text/html; charset=utf-8",
         "Cache-Control" => "no-cache",

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Leaving a page whose document is still arriving stops loading it.** A page that streams keeps its document open until its last `<Suspense>`; when the router navigates away (a link, a form, `revalidate()`) before that, it now calls `window.stop()` first, so the connection closes and the server, which asks before each block, starts no further block for a page nobody will see. Only while the document itself is loading — a page that has finished is not touched.
+- **A streamed Flight response is `Cache-Control: no-store`** (it was `no-cache`). A response the browser may store holds its cache entry while it streams, and Chrome then held a second request for the same URL — `revalidate()` on a page still streaming, the same link clicked again — until the first one ended. The streamed document keeps `no-cache`, so the page can still enter the back/forward cache.
+
 ### Fixed
 
 - **A client component or a `<Suspense>` inside a `cache` block no longer comes back as another one.** A fragment cache stores the HTML a render produced, with the markers that render gave its components and blocks; read back in another render, a marker could name one of *that* render's components (the page showed the wrong component, with its props) or another boundary's block (a `<Suspense>` showed another one's content). Every marker now carries the id of the render that wrote it. A client component read from the cache raises `Ruact::HtmlConverterError`, naming the `cache` and what to do (keep the component outside it); a `<Suspense>` read from the cache gets an error row for that boundary only, saying the same, and the rest of the page renders.

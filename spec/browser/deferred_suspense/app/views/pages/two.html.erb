@@ -1,4 +1,9 @@
 <h1 id="shell">Two</h1>
+<nav>
+  <a id="to-plain" href="/plain">plain</a>
+  <a id="to-two-again" href="/two">two again</a>
+</nav>
+<Revalidate />
 <Suspense fallback="Loading A…">
   <% Harness::Events.add("block_start:a") %>
   <p id="a"><%= Gate.wait("a") %></p>

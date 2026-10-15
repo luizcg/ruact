@@ -9,7 +9,7 @@ const port = Number(process.env.PORT ?? 4190);
 const vitePort = Number(process.env.VITE_PORT ?? 5199);
 
 const rails = {
-  command: `bundle exec puma -t 3:3 -p ${port} config.ru`,
+  command: `bundle exec puma -t 6:6 -p ${port} config.ru`,
   url: `http://localhost:${port}/up`,
   env: {
     RAILS_ENV: env,
@@ -30,7 +30,7 @@ const vite = {
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: process.env.HARNESS_IN_PLACE ? ["deferred.spec.mjs"] : ["deferred.spec.mjs", "lifecycle.spec.mjs"],
+  testMatch: process.env.HARNESS_IN_PLACE ? ["deferred.spec.mjs"] : ["deferred.spec.mjs", "lifecycle.spec.mjs", "navigation.spec.mjs"],
   workers: 1,
   fullyParallel: false,
   retries: 0,

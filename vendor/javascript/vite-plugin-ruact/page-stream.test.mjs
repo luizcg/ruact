@@ -57,9 +57,10 @@ describe("documentRows", () => {
     return {
       readyState: "loading",
       addEventListener(type, listener) { listeners[type] = listener; },
-      finish() {
-        this.readyState = "interactive";
-        listeners.DOMContentLoaded?.();
+      removeEventListener(type) { delete listeners[type]; },
+      finish(state = "interactive") {
+        this.readyState = state;
+        listeners.readystatechange?.();
       },
     };
   }
@@ -91,6 +92,15 @@ describe("documentRows", () => {
     doc.finish();
     await next;
     expect(closed).toBe(true);
+  });
+
+  // Story 19-2 — the router stops a document it leaves while it still loads.
+  it("closes when the document is stopped while loading", async () => {
+    const doc = openDocument();
+    const reader = documentRows(['0:"x"\n'], doc).getReader();
+    await reader.read();
+    doc.finish("complete");
+    await expect(reader.read()).resolves.toMatchObject({ done: true });
   });
 
   it("closes at once when the document has already ended", async () => {

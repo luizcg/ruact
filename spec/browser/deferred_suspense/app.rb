@@ -9,7 +9,7 @@
 #   RAILS_ENV=development|production
 #   HARNESS_IN_PLACE=1    the perturbation: every <Suspense> renders in place,
 #                         as in 0.0.19 — the proof must fail at what the browser shows
-#   HARNESS_TIMEOUT=secs  Ruact.config.suspense_timeout
+#   HARNESS_TIMEOUT=secs  Ruact.config.suspense_timeout (default 30: scenarios hold blocks at gates)
 
 require "bundler/setup"
 require "rails"
@@ -24,7 +24,7 @@ require_relative "gate"
 
 %w[tmp log results].each { |dir| FileUtils.mkdir_p(File.join(__dir__, dir)) }
 
-ENV["DATABASE_URL"] ||= "sqlite3:#{File.join(__dir__, 'tmp', "harness-#{ENV.fetch('PORT', '0')}.sqlite3")}?pool=5"
+ENV["DATABASE_URL"] ||= "sqlite3:#{File.join(__dir__, 'tmp', "harness-#{ENV.fetch('PORT', '0')}.sqlite3")}?pool=10"
 
 module Harness
   # What happened on the server, in order, for the tests to read: what the
@@ -44,6 +44,25 @@ module Harness
 
     def self.clear
       @mutex.synchronize { @all.clear }
+    end
+  end
+
+  # Something that happens the first time only, until the next reset.
+  module Once
+    @mutex = Mutex.new
+    @seen = []
+
+    def self.first?(name)
+      @mutex.synchronize do
+        next false if @seen.include?(name)
+
+        @seen << name
+        true
+      end
+    end
+
+    def self.clear
+      @mutex.synchronize { @seen.clear }
     end
   end
 
@@ -107,7 +126,10 @@ end
 Ruact.configure do |config|
   config.layout = "ruact"
   config.vite_dev_server = "http://localhost:#{ENV.fetch('VITE_PORT', '5199')}"
-  config.suspense_timeout = Float(ENV["HARNESS_TIMEOUT"]) if ENV["HARNESS_TIMEOUT"]
+  # Scenarios synchronise on gates, not time: the timeout must not end a block
+  # a scenario is still holding at a gate. HARNESS_TIMEOUT sets it for the ones
+  # that measure it.
+  config.suspense_timeout = Float(ENV.fetch("HARNESS_TIMEOUT", "30"))
 end
 
 # A query that waits at a gate: `SELECT … WHERE gate_wait('a') = 1` holds its
@@ -193,6 +215,7 @@ class PagesController < ApplicationController
   def error; end
   def late_cookie; end
   def leased; end
+  def flaky; end
 
   def context
     Current.user = "ada"
@@ -224,6 +247,7 @@ class ProbeController < ActionController::API
   def reset
     Gate.reset
     Harness::Events.clear
+    Harness::Once.clear
     head :no_content
   end
 
@@ -247,7 +271,7 @@ end
 
 Rails.application.routes.draw do
   root "pages#home"
-  %w[plain slow two nested error context db late_cookie leased].each do |page|
+  %w[plain slow two nested error context db late_cookie leased flaky].each do |page|
     get page, to: "pages##{page}"
   end
   post "__gate/reset", to: "probe#reset"

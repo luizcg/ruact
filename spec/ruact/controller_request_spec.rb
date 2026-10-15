@@ -1003,6 +1003,9 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(response.status).to eq(200)
         expect(events).to eq([[:shell, false], [:one, true], [:two, true], [:inner, true]])
         expect(response.headers["X-Accel-Buffering"]).to eq("no")
+        # Story 19-2 — not stored: a stored response holds its cache entry while
+        # it streams, and the browser holds a second request for the same URL.
+        expect(response.headers["Cache-Control"]).to eq("no-store")
         body = response.body
         expect(body).to include('"fallback":["$","p",null,{"children":"Loading one"}')
         expect(body.index("Loading two")).to be < body.index("Lazy text")
@@ -1020,6 +1023,8 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(response.status).to eq(200)
         expect(events).to eq([[:shell, false], [:one, true], [:two, true], [:inner, true]])
         expect(response.headers["Content-Type"]).to eq("text/html; charset=utf-8")
+        # The document stays out of no-store: it would leave the back/forward cache.
+        expect(response.headers["Cache-Control"]).to eq("no-cache")
         body = response.body
         pushes = body.scan("<script>(self.__FLIGHT_DATA=self.__FLIGHT_DATA||[]).push(")
         expect(pushes.length).to eq(3)

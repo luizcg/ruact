@@ -28,11 +28,19 @@ export function documentRows(queue, doc = globalThis.document) {
         return 0;
       };
       const close = () => {
+        if (!open) return;
         open = false;
         controller.close();
       };
+      // Closed when the document stops loading: its end (`interactive`, just
+      // before DOMContentLoaded), or the router stopping it (Story 19-2).
       if (doc?.readyState === "loading") {
-        doc.addEventListener("DOMContentLoaded", close, { once: true });
+        const atEnd = () => {
+          if (doc.readyState === "loading") return;
+          doc.removeEventListener("readystatechange", atEnd);
+          close();
+        };
+        doc.addEventListener("readystatechange", atEnd);
       } else {
         close();
       }

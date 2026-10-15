@@ -405,6 +405,7 @@ async function _submitForm(form, submitter = null) {
   // Rails _method hidden field is included in FormData automatically;
   // Rack::MethodOverride reads it and routes to the correct action.
   _currentAbort?.abort();
+  _leaveOpenDocument();
   const controller = (_currentAbort = new AbortController());
 
   const headers = { Accept: "text/x-component", "Ruact-Request": "1" };
@@ -457,6 +458,18 @@ function handlePopstate() {
 // ---------------------------------------------------------------------------
 
 /**
+ * Story 19-2 — the page being left may be a document still arriving: a page
+ * that streams, whose <Suspense> rows are still to come. Nobody will see them,
+ * so stop loading it: the connection closes, and the server, which asks before
+ * each block, starts no further block for it. Only while the document itself
+ * is loading — not its images, which `readyState` does not count.
+ */
+function _leaveOpenDocument() {
+  if (typeof document === "undefined" || document.readyState !== "loading") return;
+  if (typeof window !== "undefined" && typeof window.stop === "function") window.stop();
+}
+
+/**
  * Story 8.2 review patch R7 (2026-05-17) — `throwOnError` opts a caller
  * out of the swallow-and-forward error mode. The default (false) is the
  * Phase 1 contract: navigation errors are logged + forwarded to the
@@ -468,6 +481,7 @@ function handlePopstate() {
 async function navigate(url, { push = true, scroll = true, throwOnError = false, replace = false } = {}) {
   // Abort any in-flight fetch so we don't apply a stale response
   _currentAbort?.abort();
+  _leaveOpenDocument();
   const controller = (_currentAbort = new AbortController());
 
   try {

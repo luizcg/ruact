@@ -8,7 +8,9 @@ export async function state(request) {
 
 /** Resolves when the server is blocked at exactly these gates. */
 export async function waitingAt(request, gates) {
-  await expect.poll(async () => (await state(request)).waiting, { timeout: 10_000 }).toEqual(gates);
+  await expect
+    .poll(async () => (await state(request)).waiting, { timeout: 10_000, intervals: [50, 100, 200] })
+    .toEqual(gates);
 }
 
 export async function open(request, name) {

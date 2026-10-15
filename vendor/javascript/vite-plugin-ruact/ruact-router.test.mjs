@@ -568,3 +568,48 @@ describe("ruact-router — dates and big integers in a navigation (Story 17-0c)"
   });
 });
 
+
+// Story 19-2 — leaving a page whose document is still arriving (a page that
+// streams) stops loading it, so the server starts no further block for it.
+describe("leaving a document that is still loading", () => {
+  let dom;
+
+  beforeEach(() => {
+    dom = installDom();
+    globalThis.fetch = vi.fn().mockResolvedValue(respond({ body: '0:"next"\n' }));
+    globalThis.window.stop = vi.fn();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    setupRouter({ onNavigate: vi.fn(), moduleRegistry: {}, onError: vi.fn() });
+  });
+
+  afterEach(() => {
+    teardownRouter();
+    vi.restoreAllMocks();
+  });
+
+  it("stops the document before it fetches the next page", async () => {
+    globalThis.document.readyState = "loading";
+    let stoppedBeforeFetch = null;
+    globalThis.fetch.mockImplementation(async () => {
+      stoppedBeforeFetch = window.stop.mock.calls.length === 1;
+      return respond({ body: '0:"next"\n' });
+    });
+    click(dom.listeners, "/products/2");
+    await settle();
+    expect(stoppedBeforeFetch).toBe(true);
+  });
+
+  it("leaves a document that has finished alone", async () => {
+    globalThis.document.readyState = "complete";
+    click(dom.listeners, "/products/2");
+    await settle();
+    expect(window.stop).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalled();
+  });
+
+  it("stops it for revalidate() too", async () => {
+    globalThis.document.readyState = "loading";
+    await globalThis.__ruact_revalidate();
+    expect(window.stop).toHaveBeenCalledTimes(1);
+  });
+});
