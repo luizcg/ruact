@@ -122,6 +122,35 @@ RSpec.describe Ruact::Railtie do
     end
   end
 
+  describe ".note_build_skew! (Story 19-3)", :story_19_3 do
+    let(:fake_logger) { instance_double(Logger, warn: nil, info: nil, error: nil) }
+    let(:entries) { { "LikeButton" => { "id" => "/LikeButton.jsx", "name" => "LikeButton", "chunks" => [] } } }
+
+    before { Ruact::BuildSkew.reset! }
+    after { Ruact::BuildSkew.reset! }
+
+    it "logs one error line, in any environment, when the build is another ruact's — and does not raise" do
+      Rails.env = ActiveSupport::StringInquirer.new("production")
+      manifest = Ruact::ClientManifest.from_hash({ "__ruact__" => { "version" => "0.0.1" } }.merge(entries))
+      expect { 2.times { described_class.note_build_skew!(manifest) } }.not_to raise_error
+      expect(fake_logger).to have_received(:error)
+        .with(a_string_starting_with("[ruact] The page's JavaScript was built by ruact 0.0.1")).once
+    ensure
+      Rails.env = ActiveSupport::StringInquirer.new("development")
+    end
+
+    it "logs for a build that records no version" do
+      described_class.note_build_skew!(Ruact::ClientManifest.from_hash(entries))
+      expect(fake_logger).to have_received(:error).with(a_string_including("did not record its version"))
+    end
+
+    it "says nothing when the build is this ruact's" do
+      manifest = Ruact::ClientManifest.from_hash({ "__ruact__" => { "version" => Ruact::VERSION } }.merge(entries))
+      described_class.note_build_skew!(manifest)
+      expect(fake_logger).not_to have_received(:error)
+    end
+  end
+
   describe ".check_vite!" do
     context "when Vite is running (AC#4)" do
       before do

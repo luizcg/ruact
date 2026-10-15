@@ -10,6 +10,8 @@
 #   HARNESS_IN_PLACE=1    the perturbation: every <Suspense> renders in place,
 #                         as in 0.0.19 — the proof must fail at what the browser shows
 #   HARNESS_TIMEOUT=secs  Ruact.config.suspense_timeout (default 30: scenarios hold blocks at gates)
+#   HARNESS_NO_SKEW_CHECK=1  the Story 19-3 perturbation: every build taken for this
+#                         ruact's — `./run skew` must fail at the log, the doctor and the banner
 
 require "bundler/setup"
 require "rails"
@@ -169,6 +171,22 @@ module Harness
     end
   end
 
+  # Story 19-3 — what ruact logged about a build of another ruact's. Kept
+  # across resets: the line is logged at boot, before any scenario.
+  module SkewLog
+    @mutex = Mutex.new
+    @lines = []
+
+    def self.add(line)
+      @mutex.synchronize { @lines << line }
+      nil
+    end
+
+    def self.all
+      @mutex.synchronize { @lines.dup }
+    end
+  end
+
   # The `[ruact]` lines of the log, as events.
   class RuactLog < ::Logger
     def initialize
@@ -178,6 +196,7 @@ module Harness
     def add(_severity, message = nil, progname = nil) # rubocop:disable Naming/PredicateMethod -- Logger#add's contract
       text = message || (block_given? ? yield : progname)
       Events.add("log:#{text}") if text.to_s.include?("[ruact]")
+      SkewLog.add(text.to_s) if text.to_s.include?("[ruact] The page's JavaScript was built by")
       true
     end
   end
@@ -284,6 +303,15 @@ module GateFunction
 end
 
 ActiveSupport.on_load(:active_record_sqlite3adapter) { prepend GateFunction }
+
+# Story 19-3 — the perturbation: every build is taken for this ruact's, so
+# nothing is said of one by another. Before `initialize!`: the boot's
+# `to_prepare` reads the manifest.
+if ENV["HARNESS_NO_SKEW_CHECK"] == "1"
+  Ruact::ClientManifest.prepend(Module.new do
+    def build_version = Ruact::VERSION
+  end)
+end
 
 Rails.application.initialize!
 
@@ -513,7 +541,17 @@ class ProbeController < ActionController::API
       events: Harness::Events.all,
       pool: ActiveRecord::Base.connection_pool.stat,
       i18n: I18n::VERSION,
-      pg: Harness::PgGate.activity
+      pg: Harness::PgGate.activity,
+      build_skew_log: Harness::SkewLog.all
+    }
+  end
+
+  # Story 19-3 — `rails ruact:doctor -- --json`'s manifest check, run against
+  # this app (`Ruact::Doctor` is what the rake task runs).
+  def doctor
+    require "ruact/doctor"
+    render json: Ruact::Doctor.new.send(:check_manifest).then { |status, message, remediation|
+      { status: status, message: message, remediation: remediation }
     }
   end
 
@@ -589,6 +627,7 @@ Rails.application.routes.draw do
   post "__gate/reset", to: "probe#reset"
   post "__gate/:name/open", to: "probe#open"
   get "__state", to: "probe#state"
+  get "__doctor", to: "probe#doctor"
   get "__session", to: "probe#session_probe"
   get "up", to: "probe#up"
   post "__fail_stream", to: "probe#fail_stream"

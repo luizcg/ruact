@@ -80,6 +80,7 @@ module Ruact
 
       if manifest_path.exist?
         Ruact.manifest = Ruact::ClientManifest.load(manifest_path)
+        Ruact::Railtie.note_build_skew!(Ruact.manifest)
       else
         Ruact::Railtie.check_manifest!(manifest_path)
       end
@@ -207,6 +208,19 @@ module Ruact
       true
     rescue FrozenError
       false
+    end
+
+    # Story 19-3 — the built JavaScript is another ruact's: one error line in
+    # the log, in every environment, once per process for each version the
+    # build recorded (`to_prepare` runs again on every reload in development).
+    # It does not stop the boot: pages without a `<Suspense>` that streams may
+    # well work, and stopping was not decided.
+    #
+    # @param manifest [Ruact::ClientManifest]
+    # @return [void]
+    def self.note_build_skew!(manifest)
+      Ruact::BuildSkew.note(manifest.build_version, logger: Rails.logger, level: :error)
+      nil
     end
 
     # Checks whether the manifest exists and either warns (dev) or raises (prod).

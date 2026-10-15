@@ -44,6 +44,20 @@ every `<Suspense>` in place, as 0.0.19 did (`HARNESS_IN_PLACE=1`, applied by
 the app, not by the gem): the two scenarios of `e2e/deferred.spec.mjs` must
 fail, at what the browser shows, and the script checks that they do.
 
+`./run skew` (Story 19-2 AC22, Story 19-3) builds the assets with 0.0.19's
+plugin, extracted with `git archive v0.0.19` — it needs the repository with its
+tags, not an archive, and does not run on CI. It measures what that runtime
+does with a streamed document (`results/skew-<env>.json`), and requires that
+the server says the build is another ruact's (`e2e/skew.spec.mjs`,
+`results/skew-detected-<env>.json`): the log once, the doctor's manifest
+check failing (`GET /__doctor`), and in development — Vite's dev server
+running 0.0.19's plugin — a banner on the page. Then the perturbation
+(`HARNESS_NO_SKEW_CHECK=1`, every build taken for this ruact's) must fail it, in
+both environments, at the log, the doctor and — in development — the banner;
+its results go to `results/skew-*-no-skew-check-<env>.json`.
+Every other run requires the opposite (`e2e/00-warm-up.spec.mjs`): no banner,
+nothing logged, the doctor passing.
+
 Rails' test support runs `ActionController::Live` inline, in the whole
 process, so the streaming itself is only observable against a server started
 on its own, as here. The gem's CI runs `./run` (job "Browser (deferred

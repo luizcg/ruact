@@ -1,0 +1,14 @@
+{
+  "while_the_document_is_open": {
+    "mounted": true,
+    "fallback": true
+  },
+  "when_it_ends": {
+    "a": null,
+    "b": null,
+    "fallback_still_shown": true
+  },
+  "errors": [
+    "Error: [ruact] Server error: the response ended before the whole page arrived"
+  ]
+}

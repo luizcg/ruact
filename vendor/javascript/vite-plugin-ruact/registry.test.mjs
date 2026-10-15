@@ -20,6 +20,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "vite";
 import {
+  BUILD_KEY,
+  readRuactVersion,
   buildManifest,
   generateRegistrySource,
   REGISTRY_VIRTUAL_ID,
@@ -143,9 +145,13 @@ describe("prod id-match invariant — real vite build (Story 10.1b AC2, LOAD-BEA
     });
 
     // The manifest the gem will read (ids === Flight moduleIds).
-    const manifest = JSON.parse(
+    const written = JSON.parse(
       fs.readFileSync(path.join(dir, "public/react-client-manifest.json"), "utf8")
     );
+    // Story 19-3 — the build's record comes first, and is not a component.
+    const { [BUILD_KEY]: build19_3, ...manifest } = written;
+    expect(Object.keys(written)[0]).toBe(BUILD_KEY);
+    expect(build19_3).toEqual({ version: readRuactVersion() });
     const manifestIds = new Set(Object.values(manifest).map((e) => e.id));
 
     // Prod ids stay source-relative (eager-inlined components → no facade chunk

@@ -1,0 +1,11 @@
+{
+  "banner": null,
+  "doctor": {
+    "status": "fail",
+    "message": "Manifest at /Users/luiz/workspace/ruact/gem/spec/browser/deferred_suspense/public/react-client-manifest.json was built by a ruact that did not record its version (0.0.21 or before); this app runs ruact 0.0.21",
+    "remediation": "Rebuild the JavaScript with this ruact (npm run build, or restart bin/dev in development) and deploy it together with the server."
+  },
+  "log": [
+    "[ruact] The page's JavaScript was built by an older ruact, one that did not record its version, and this server is ruact 0.0.21: pages that stream keep their <Suspense> fallbacks, and other pages may break. Rebuild the JavaScript with this ruact (npm run build, or restart bin/dev in development) and deploy it together with the server."
+  ]
+}

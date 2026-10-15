@@ -8,9 +8,15 @@
 // ran when the document ended and showed the page whole. Since 19-1 the entry
 // is `async`, so the old bootstrap runs early, reads the shell's rows only,
 // and closes its stream.
+//
+// Story 19-3 — DETECTED, and required: ruact logs once that the page's
+// JavaScript was built by another ruact (0.0.19's records no version), the
+// doctor's manifest check fails, and in development the page says so in a
+// banner. In development the assets come from Vite's dev server running
+// 0.0.19's plugin — what a `vite.config.js` importing an old gem's plugin does.
 import fs from "node:fs";
 import { test, expect } from "@playwright/test";
-import { waitingAt, open, reset, fallback, resultFile } from "./support.mjs";
+import { waitingAt, open, reset, fallback, resultFile, state, ENV } from "./support.mjs";
 
 test.beforeEach(async ({ request }) => reset(request));
 
@@ -36,4 +42,29 @@ test("AC22 — 0.0.19's bootstrap reads the streamed document", async ({ page, r
     while_the_document_is_open: whileOpen, when_it_ends: atTheEnd, errors: [...new Set(errors)],
   }, null, 2) + "\n");
   expect(whileOpen.mounted).toBe(true);
+});
+
+test("19-3 — the server says the page's JavaScript is another ruact's", async ({ page, request }) => {
+  await page.goto("/plain");
+  const banner = page.locator("[data-ruact-build-skew]");
+  const doctor = await (await request.get("/__doctor")).json();
+  const log = (await state(request)).build_skew_log;
+  fs.writeFileSync(resultFile("skew-detected"), JSON.stringify({
+    banner: (await banner.count()) ? await banner.textContent() : null, doctor, log,
+  }, null, 2) + "\n");
+
+  // Logged once, whatever the number of pages: at boot (every environment)
+  // or at the first render (development).
+  // Soft: the perturbation (`./run skew`) must fail at each of them, and the
+  // script checks that every one did.
+  expect.soft(log, "the log of the build's version").toHaveLength(1);
+  expect.soft(log[0] ?? "").toContain("an older ruact, one that did not record its version");
+  expect.soft(doctor.status, "the doctor's manifest check").toBe("fail");
+  expect.soft(doctor.message).toContain("did not record its version");
+  if (ENV === "development") {
+    await expect.soft(banner, "the banner on the page").toBeVisible();
+    await expect.soft(banner).toContainText("did not record its version");
+  } else {
+    await expect(banner).toHaveCount(0);
+  }
 });

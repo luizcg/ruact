@@ -140,8 +140,8 @@ duration, or a deliberate `expires_in: nil` for a non-expiring token.
 
 ## Verify your work
 
-- `bin/rails ruact:doctor` — checks install/config health; exits 1 on failure.
-  Append `-- --json` for the same checks as a machine-readable report.
+- `bin/rails ruact:doctor` — install/config health, and that the JS was built by
+  this ruact (run it after a gem upgrade); exits 1 on failure. Append `-- --json` for JSON.
 - `bin/rails ruact:routes -- --json` — the accessor/route table (each accessor's
   name, kind, verb, path, params) as JSON, from the same route table codegen
   reads; bare `ruact:routes` prints a compact human table.
