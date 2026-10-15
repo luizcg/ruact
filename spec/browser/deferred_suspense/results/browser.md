@@ -19,3 +19,17 @@ Written by `./run`: one row per Playwright run, Chromium, one worker, against th
 | PostgreSQL, async query executor | development | 5 skipped, 2 passed |
 | PostgreSQL | production | 1 skipped, 6 passed |
 | PostgreSQL, async query executor | production | 5 skipped, 2 passed |
+
+## React 19.2.8 — Flight client: react-server-dom-webpack 19.2.8 from the app (production)
+
+| what ran | environment | outcome |
+| --- | --- | --- |
+| the scenarios | development | 42 passed |
+| the scenarios | production | 1 skipped, 41 passed |
+
+## i18n 1.14.7 — e2e/middleware.spec.mjs
+
+| what ran | environment | outcome |
+| --- | --- | --- |
+| middleware scopes | development | 1 passed |
+| middleware scopes | production | 1 passed |

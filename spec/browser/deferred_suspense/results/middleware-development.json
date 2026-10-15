@@ -1,9 +1,9 @@
 {
   "i18n": "1.15.2",
   "shell": {
-    "locale": "en",
-    "t": "hello",
-    "lazy": "lazy lookup (en)",
+    "locale": "pt",
+    "t": "olá",
+    "lazy": "lazy lookup (pt)",
     "zone": "UTC",
     "tenant": "from a middleware",
     "current": "nil",
@@ -14,9 +14,9 @@
     "prevent_writes": "true"
   },
   "block": {
-    "locale": "en",
-    "t": "hello",
-    "lazy": "lazy lookup (en)",
+    "locale": "pt",
+    "t": "olá",
+    "lazy": "lazy lookup (pt)",
     "zone": "UTC",
     "tenant": "from a middleware",
     "current": "nil",
