@@ -9,3 +9,4 @@ node_modules/
 /results/*.raw
 /.bundle/
 /results/overlay.png
+/vite.config.js

@@ -30,8 +30,12 @@ const rails = {
   reuseExistingServer: false,
   timeout: 120_000,
 };
+// Story 19-4 — HARNESS_VITE_CONFIG: Vite's dev server runs that config instead
+// of this harness's (`./run upgrade`: the one `ruact:install` writes, which
+// listens on 5173 — pass VITE_PORT=5173 with it). Named either way: a
+// vite.config.js left here must never be taken for the harness's.
 const vite = {
-  command: "npx vite",
+  command: `npx vite --config ${process.env.HARNESS_VITE_CONFIG || "vite.config.mjs"}`,
   url: `http://localhost:${vitePort}/@vite/client`,
   env: { VITE_PORT: String(vitePort) },
   reuseExistingServer: false,
@@ -40,7 +44,7 @@ const vite = {
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: process.env.HARNESS_IN_PLACE ? ["deferred.spec.mjs"] : process.env.HARNESS_SKEW ? ["skew.spec.mjs"] : process.env.HARNESS_NGINX ? ["00-warm-up.spec.mjs", "nginx.spec.mjs"] : process.env.HARNESS_THREADS ? ["00-warm-up.spec.mjs", "threads.spec.mjs"] : process.env.HARNESS_CSP ? ["00-warm-up.spec.mjs", "csp.spec.mjs"] : process.env.HARNESS_DB === "postgres" ? ["00-warm-up.spec.mjs", "postgres.spec.mjs"] : ["00-warm-up.spec.mjs", "deferred.spec.mjs", "lifecycle.spec.mjs", "navigation.spec.mjs", "failures.spec.mjs", "placement.spec.mjs", "forms.spec.mjs", "isolation.spec.mjs", "leaving.spec.mjs", "transactions.spec.mjs", "middleware.spec.mjs", "caching.spec.mjs"],
+  testMatch: process.env.HARNESS_UPGRADE ? ["upgrade.spec.mjs"] : process.env.HARNESS_IN_PLACE ? ["deferred.spec.mjs"] : process.env.HARNESS_SKEW ? ["skew.spec.mjs"] : process.env.HARNESS_NGINX ? ["00-warm-up.spec.mjs", "nginx.spec.mjs"] : process.env.HARNESS_THREADS ? ["00-warm-up.spec.mjs", "threads.spec.mjs"] : process.env.HARNESS_CSP ? ["00-warm-up.spec.mjs", "csp.spec.mjs"] : process.env.HARNESS_DB === "postgres" ? ["00-warm-up.spec.mjs", "postgres.spec.mjs"] : ["00-warm-up.spec.mjs", "deferred.spec.mjs", "lifecycle.spec.mjs", "navigation.spec.mjs", "failures.spec.mjs", "placement.spec.mjs", "forms.spec.mjs", "isolation.spec.mjs", "leaving.spec.mjs", "transactions.spec.mjs", "middleware.spec.mjs", "caching.spec.mjs"],
   workers: 1,
   fullyParallel: false,
   retries: 0,

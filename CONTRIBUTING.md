@@ -14,8 +14,8 @@ request, and everything it asks you to run, you can run — with this repository
 | `vendor/javascript/ruact-server-functions-runtime/` | the browser-side runtime those generated accessors call |
 
 The two JavaScript packages are **bundled, not published**. A host app never installs them from npm:
-`rails generate ruact:install` writes a `vite.config.js` that imports the plugin by absolute path off the
-installed gem. That has one consequence worth stating up front, because it is what makes the rest of this
+`rails generate ruact:install` writes a `vite.config.js` that asks Bundler where the ruact gem is, each time
+Vite starts, and loads the plugin from there. That has one consequence worth stating up front, because it is what makes the rest of this
 document short — **pointing a Rails app at your checkout of the gem points it at your checkout of the Vite
 plugin too.** There is nothing to link separately, and nothing else to clone. This repository has no
 submodules.

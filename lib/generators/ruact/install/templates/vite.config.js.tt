@@ -1,28 +1,58 @@
+import { execSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-// Bundled Vite plugin — path resolved from the installed ruact gem.
-// Re-run `rails generate ruact:install` after gem upgrades to refresh this path.
-import ruact from '<%= Ruact.vite_plugin_path %>';
 
-export default defineConfig({
-  plugins: [
-    react(),
-    ruact(), // scans app/javascript/components/ for "use client", emits react-client-manifest.json
-  ],
+// ruact's Vite plugin ships inside the ruact gem. Bundler is asked where that
+// gem is each time Vite starts, so after `bundle update ruact` the next build
+// (or bin/dev) uses the new plugin: no path to refresh in this file.
+function ruactPluginPath() {
+  let out;
+  try {
+    out = execSync(`bundle exec ruby -e "require 'ruact'; print Ruact.vite_plugin_path"`, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    throw new Error(
+      "[ruact] could not ask Bundler where the ruact gem is. Run Vite from the app's root, " +
+        'where `bundle exec` works (bin/dev, npm run build).\n' +
+        (error.stderr || error.message),
+    );
+  }
+  // The last line only: anything a gem prints while loading comes before it.
+  const path = out.trim().split(/\r?\n/).pop();
+  if (!path) throw new Error('[ruact] Bundler gave no path for the ruact gem.');
+  return path;
+}
 
-  build: {
-    outDir: 'public/assets',
-    manifest: true,
-    rollupOptions: {
-      // ruact's bootstrap entry is a virtual module served by the plugin above
-      // (Story 14.2) — there is no app/javascript/application.jsx to point at.
-      input: '<%= Ruact.bootstrap_virtual_id %>',
+export default defineConfig(async () => {
+  const { default: ruact } = await import(pathToFileURL(ruactPluginPath()).href);
+
+  return {
+    // ruact puts nothing in Vite's public dir, and Rails serves public/: without
+    // this, every build copies public/ into public/assets/.
+    publicDir: false,
+
+    plugins: [
+      react(),
+      ruact(), // scans app/javascript/components/ for "use client", emits react-client-manifest.json
+    ],
+
+    build: {
+      outDir: 'public/assets',
+      manifest: true,
+      rollupOptions: {
+        // ruact's bootstrap entry is a virtual module served by the plugin above
+        // (Story 14.2) — there is no app/javascript/application.jsx to point at.
+        input: '<%= Ruact.bootstrap_virtual_id %>',
+      },
     },
-  },
 
-  server: {
-    port: 5173,
-    strictPort: true,
-    origin: 'http://localhost:5173',
-  },
+    server: {
+      port: 5173,
+      strictPort: true,
+      origin: 'http://localhost:5173',
+    },
+  };
 });

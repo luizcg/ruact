@@ -59,3 +59,13 @@ Written by `./run`: one row per Playwright run, Chromium, one worker, against th
 | the streamed document read by 0.0.19's bootstrap | development | measured: the fallback stays, the content never shown; 1 distinct error(s): Error: [ruact] Server error: the response ended before the whole page arrived. Detected (19-3): logged 1x, doctor fail, banner on the page |
 | every build taken for this ruact's: `skew.spec.mjs` | production | 1 failed, as it must: at the log and the doctor |
 | every build taken for this ruact's: `skew.spec.mjs` | development | 1 failed, as it must: at the log, the doctor and the banner |
+
+## the vite.config.js ruact:install writes, across an upgrade — e2e/upgrade.spec.mjs
+
+| what ran | environment | outcome |
+| --- | --- | --- |
+| before: Bundler has 0.0.21, `vite build` | — | built by 0.0.21's plugin (no version recorded) |
+| after: this ruact, the same file, rebuilt — the detection says nothing | production | 1 passed (built by 0.0.21) |
+| after: this ruact, the same file, rebuilt — the detection says nothing | development | 1 passed (built by 0.0.21) |
+| the perturbation: the config pinned on 0.0.21 (built by no version) | production | the detection fires and names the import; the quiet assertions fail, as they must: at the log and the doctor |
+| the perturbation: the config pinned on 0.0.21 (built by no version) | development | the detection fires and names the import; the quiet assertions fail, as they must: at the log, the doctor and the banner |

@@ -9,6 +9,8 @@
 #   ./run rack 2.2.24     the proof and the lifecycle with Rack 2.2
 #   ./run skew            the streamed document read by 0.0.19's bootstrap, and the server
 #                         saying so (Story 19-3): production, development, the perturbation
+#   ./run upgrade         the vite.config.js ruact:install writes, across an upgrade of the
+#                         gem: a rebuild uses the new plugin (Story 19-4); the perturbation
 #   ./run pg              the PostgreSQL scenarios (also part of ./run when initdb is on the PATH)
 #   ./run postgres        what suspense_timeout does to a query running in PostgreSQL
 #                         (writes results/postgres.md; needs initdb and pg_ctl)
@@ -32,7 +34,7 @@ setup() {
 }
 
 build() {
-  npx vite build >tmp/build.log
+  npx vite build --config vite.config.mjs >tmp/build.log
   grep -o "Flight client: .*" tmp/build.log
 }
 
@@ -232,7 +234,7 @@ skew() {
   git -C ../../.. archive v0.0.19 vendor/javascript/vite-plugin-ruact | tar -x -C "$old"
   trap 'unset HARNESS_PLUGIN_DIR; build >/dev/null' EXIT
   export HARNESS_PLUGIN_DIR="$PWD/$old/vendor/javascript/vite-plugin-ruact"
-  npx vite build >tmp/build-0.0.19.log
+  npx vite build --config vite.config.mjs >tmp/build-0.0.19.log
   table "0.0.19's bootstrap, this server — e2e/skew.spec.mjs"
   local env
   for env in production development; do
@@ -271,6 +273,86 @@ skew() {
   done
 }
 
+# Story 19-4 — the vite.config.js `ruact:install` writes asks Bundler for the
+# plugin, so after `bundle update ruact` a rebuild uses the new one. With
+# 0.0.21 extracted beside this checkout (`git archive v0.0.21`, from the gem's
+# root) as the gem installed before the upgrade:
+#   before   tmp/Gemfile.0.0.21 (ruact from 0.0.21): the generated config builds
+#            with 0.0.21's plugin, whose manifest records no version
+#   after    this harness's Gemfile, the same config file unedited: the build
+#            is this ruact's, and Story 19-3's detection says nothing
+#   pinned   the perturbation — the config `ruact:install` wrote before 19-4,
+#            importing 0.0.21's plugin by its path: the detection fires
+# The config is the app's ./vite.config.js (where the detection reads its
+# import), written by the generator itself, and listens on the template's 5173.
+upgrade() {
+  if lsof -ti tcp:5173 >/dev/null 2>&1; then echo "port 5173 is in use" >&2; exit 1; fi
+  # Outside the gem's tree: the gem's own rspec and rubocop would take 0.0.21's
+  # specs for this checkout's.
+  UPGRADE_DIR=$(mktemp -d)
+  local old="$UPGRADE_DIR/ruact-0.0.21"
+  rm -rf tmp/generated vite.config.js && mkdir -p "$old"
+  trap 'rm -f vite.config.js; rm -rf "$UPGRADE_DIR"; build >/dev/null' EXIT
+  git -C ../../.. archive v0.0.21 | tar -x -C "$old"
+  sed "s#path: \"../../..\"#path: \"$old\"#" Gemfile >tmp/Gemfile.0.0.21
+  grep -qF "path: \"$old\"" tmp/Gemfile.0.0.21 || { echo "tmp/Gemfile.0.0.21 does not point ruact at $old" >&2; exit 1; }
+  cp Gemfile.lock tmp/Gemfile.0.0.21.lock
+  BUNDLE_GEMFILE="$PWD/tmp/Gemfile.0.0.21" bundle install --quiet
+  bundle exec ruby -e 'require "generators/ruact/install/install_generator"
+    Ruact::Generators::InstallGenerator.new([], {}, destination_root: ARGV[0]).create_vite_config' tmp/generated
+  local plugin="$old/vendor/javascript/vite-plugin-ruact/index.js"
+  sed "s#__RUACT_VITE_PLUGIN_PATH__#$plugin#" ../../../lib/generators/ruact/install/legacy/vite.config.pinned.js >tmp/vite.config.pinned.js
+  grep -qF "import ruact from '$plugin';" tmp/vite.config.pinned.js || { echo "tmp/vite.config.pinned.js does not import $plugin" >&2; exit 1; }
+  recorded() { node -p 'JSON.stringify(JSON.parse(require("fs").readFileSync("public/react-client-manifest.json", "utf8")).__ruact__?.version ?? null)'; }
+
+  table "the vite.config.js ruact:install writes, across an upgrade — e2e/upgrade.spec.mjs"
+  cp tmp/generated/vite.config.js vite.config.js
+  echo "== upgrade: before, ruact from 0.0.21"
+  BUNDLE_GEMFILE="$PWD/tmp/Gemfile.0.0.21" npx vite build --config vite.config.js >tmp/build-upgrade-before.log
+  local before
+  before=$(recorded)
+  [ "$before" = null ] || { echo "before the upgrade the build recorded $before: the config did not follow Bundler" >&2; exit 1; }
+  echo "| before: Bundler has 0.0.21, \`vite build\` | — | built by 0.0.21's plugin (no version recorded) |" >>"$BROWSER"
+
+  echo "== upgrade: after, ruact from this checkout, the same file"
+  cmp -s tmp/generated/vite.config.js vite.config.js || { echo "vite.config.js changed between the builds" >&2; exit 1; }
+  npx vite build --config vite.config.js >tmp/build-upgrade-after.log
+  local after
+  after=$(recorded)
+  local version
+  version=$(ruby -e 'require "../../../lib/ruact/version"; print Ruact::VERSION.dump')
+  [ "$after" = "$version" ] || { echo "after the upgrade the build recorded $after, not $version" >&2; exit 1; }
+  local env
+  for env in production development; do
+    echo "== upgrade, the generated config: quiet, $env"
+    HARNESS_UPGRADE=quiet HARNESS_VITE_CONFIG=vite.config.js VITE_PORT=5173 RAILS_ENV=$env npx playwright test 2>&1 | tee tmp/playwright.log
+    echo "| after: this ruact, the same file, rebuilt — the detection says nothing | $env | $(grep -E "^ +[0-9]+ (passed|failed)" tmp/playwright.log | sed -E 's/^ +//; s/ \([0-9.]+m?s\)//') (built by ${after//\"/}) |" >>"$BROWSER"
+  done
+
+  cp tmp/vite.config.pinned.js vite.config.js
+  npx vite build --config vite.config.js >tmp/build-upgrade-pinned.log
+  local pinned
+  pinned=$(recorded)
+  for env in production development; do
+    echo "== upgrade, the config pinned on 0.0.21: the detection fires, $env"
+    HARNESS_UPGRADE=pinned HARNESS_VITE_CONFIG=vite.config.js VITE_PORT=5173 RAILS_ENV=$env npx playwright test 2>&1 | tee tmp/upgrade-pinned.log
+    echo "== upgrade, the config pinned on 0.0.21, quiet: must FAIL, $env"
+    if HARNESS_UPGRADE=quiet HARNESS_VARIANT=pinned HARNESS_VITE_CONFIG=vite.config.js VITE_PORT=5173 RAILS_ENV=$env npx playwright test >tmp/upgrade-pinned-quiet.log 2>&1; then
+      echo "the quiet assertions passed with the config pinned on 0.0.21: they prove nothing" >&2
+      exit 1
+    fi
+    local what
+    local -a musts=("Error: the log of the build's version" "Error: the doctor's manifest check")
+    [ "$env" = development ] && musts+=("Error: the banner on the page")
+    for what in "${musts[@]}"; do
+      grep -qF "$what" tmp/upgrade-pinned-quiet.log || { echo "with the pinned config, quiet did not fail at: $what (tmp/upgrade-pinned-quiet.log)" >&2; exit 1; }
+    done
+    local at="the log and the doctor"
+    [ "$env" = development ] && at="the log, the doctor and the banner"
+    echo "| the perturbation: the config pinned on 0.0.21 (built by ${pinned/null/no version}) | $env | the detection fires and names the import; the quiet assertions fail, as they must: at $at |" >>"$BROWSER"
+  done
+}
+
 case "${1:-all}" in
   # On CI PostgreSQL is required (AC24.1): a runner without it fails the run.
   all)      setup; browser
@@ -281,7 +363,8 @@ case "${1:-all}" in
   i18n)     setup; build >/dev/null; other_i18n "${2:?version}" ;;
   rack)     setup; build >/dev/null; other_rack "${2:?version}" ;;
   skew)     setup; skew ;;
+  upgrade)  setup; upgrade ;;
   react)    setup; other_react "${2:?version}" ;;
   postgres) postgres ;;
-  *)        echo "usage: ./run [react VERSION | i18n VERSION | rack VERSION | skew | pg | postgres]" >&2; exit 1 ;;
+  *)        echo "usage: ./run [react VERSION | i18n VERSION | rack VERSION | skew | upgrade | pg | postgres]" >&2; exit 1 ;;
 esac

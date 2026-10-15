@@ -693,7 +693,7 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
       end
 
       it "does NOT list the bundled ruact Vite plugin as an npm dependency " \
-         "(vite.config imports it by absolute path)" do
+         "(vite.config loads it from the gem, asking Bundler)" do
         gen = build_generator(app_root)
         silently { gen.create_package_json }
         expect(File.read(File.join(app_root, "package.json"))).not_to include("vite-plugin-ruact")
@@ -1918,6 +1918,144 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
       run_install(shadcn: true)
 
       expect(File.read(path)).to eq(stock_layout)
+    end
+  end
+
+  # Story 19.4 — the generated vite.config.js asks Bundler where the ruact gem
+  # is when Vite starts (no path written), and re-running the install replaces
+  # a vite.config.js it generated before, while it was not edited.
+  describe "install generator — vite.config.js asks Bundler (Story 19.4)", :story_19_4 do
+    require "generators/ruact/install/install_generator"
+
+    let(:app_root) { Dir.mktmpdir("ruact_install_1904") }
+    let(:config_path) { File.join(app_root, "vite.config.js") }
+    let(:fixtures) { File.expand_path("../fixtures/install/vite_configs", __dir__) }
+
+    after { FileUtils.rm_rf(app_root) }
+
+    def build_generator(root, opts = {})
+      Ruact::Generators::InstallGenerator.new([], opts, destination_root: root)
+    end
+
+    def run_create_vite_config(opts = {})
+      original = $stdout
+      $stdout = StringIO.new
+      build_generator(app_root, opts).create_vite_config
+      $stdout.string
+    ensure
+      $stdout = original
+    end
+
+    def fresh_config
+      Dir.mktmpdir("ruact_install_1904_fresh") do |root|
+        original = $stdout
+        $stdout = StringIO.new
+        build_generator(root).create_vite_config
+        $stdout = original
+        File.read(File.join(root, "vite.config.js"))
+      end
+    end
+
+    describe "the generated file" do
+      it "writes no path: the plugin is asked of Bundler, by Ruact.vite_plugin_path", :aggregate_failures do
+        run_create_vite_config
+        generated = File.read(config_path)
+        expect(generated).not_to include(described_class.vite_plugin_path)
+        expect(generated).not_to include(described_class.gem_path)
+        expect(generated).not_to match(/from\s+['"][^'"]*vite-plugin-ruact/)
+        expect(generated).to include(%(bundle exec ruby -e "require 'ruact'; print Ruact.vite_plugin_path"))
+        expect(generated).to include("await import(pathToFileURL(ruactPluginPath()).href)")
+        expect(generated).to include("export default defineConfig(async () =>")
+      end
+
+      it "keeps Vite's public dir out of the build" do
+        run_create_vite_config
+        expect(File.read(config_path)).to include("publicDir: false,")
+      end
+    end
+
+    describe "an existing vite.config.js" do
+      %w[0.0.6 0.0.9 0.0.13 0.0.16].each do |version|
+        it "replaces the one #{version} generated, never edited, and says why", :aggregate_failures do
+          FileUtils.cp(File.join(fixtures, "generated-#{version}.js"), config_path)
+          pinned = File.read(config_path)[/^import ruact from '([^']+)';$/, 1]
+
+          output = run_create_vite_config
+
+          expect(File.read(config_path)).to eq(fresh_config)
+          expect(output).to match(/update\s+vite\.config\.js/)
+          expect(output).to include(pinned)
+        end
+      end
+
+      it "recognizes a generated one whatever Ruby's default encoding" do
+        FileUtils.cp(File.join(fixtures, "generated-0.0.13.js"), config_path)
+        original = Encoding.default_external
+        Encoding.default_external = Encoding::US_ASCII
+        run_create_vite_config
+        Encoding.default_external = original
+        expect(File.read(config_path, encoding: Encoding::UTF_8)).to eq(fresh_config)
+      ensure
+        Encoding.default_external = original
+      end
+
+      it "tolerates a different end of file on a generated one" do
+        File.write(config_path, "#{File.read(File.join(fixtures, 'generated-0.0.16.js')).rstrip}\n\n\n")
+        run_create_vite_config
+        expect(File.read(config_path)).to eq(fresh_config)
+      end
+
+      it "leaves an edited one as it is and prints the change to make", :aggregate_failures do
+        FileUtils.cp(File.join(fixtures, "edited-0.0.16.js"), config_path)
+        before = File.binread(config_path)
+
+        output = run_create_vite_config
+
+        expect(File.binread(config_path)).to eq(before)
+        expect(output).to include("function ruactPluginPath()")
+        expect(output).to include("export default defineConfig(async () =>")
+        expect(output).to include("await import(pathToFileURL(ruactPluginPath()).href)")
+        expect(output).to include("publicDir: false")
+        expect(output).to include("--force")
+        expect(output).not_to include(described_class.vite_plugin_path)
+      end
+
+      it "prints the same change for one with no ruact import, and leaves it" do
+        File.write(config_path, "// hand-written\n")
+        output = run_create_vite_config
+        expect(File.read(config_path)).to eq("// hand-written\n")
+        expect(output).to include("function ruactPluginPath()")
+      end
+
+      it "is identical on a second run (the install is idempotent)", :aggregate_failures do
+        FileUtils.cp(File.join(fixtures, "generated-0.0.9.js"), config_path)
+        run_create_vite_config
+        after_first = File.read(config_path)
+
+        output = run_create_vite_config
+
+        expect(File.read(config_path)).to eq(after_first)
+        expect(output).to match(/identical\s+vite\.config\.js/)
+        expect(output).not_to include("function ruactPluginPath()")
+      end
+
+      it "writes no vite.config.js beside another vite.config of the app's, and prints the change",
+         :aggregate_failures do
+        File.write(File.join(app_root, "vite.config.ts"), "// the app's, renamed and edited\n")
+
+        output = run_create_vite_config
+
+        expect(File).not_to exist(config_path)
+        expect(output).to include("vite.config.ts")
+        expect(output).to include("function ruactPluginPath()")
+        expect(output).not_to include("--force")
+      end
+
+      it "overwrites an edited one under --force, as before" do
+        FileUtils.cp(File.join(fixtures, "edited-0.0.16.js"), config_path)
+        run_create_vite_config(force: true)
+        expect(File.read(config_path)).to eq(fresh_config)
+      end
     end
   end
 end

@@ -20,7 +20,9 @@ module Ruact
     #    (`config.layout = true` or another name) gets the missing lines PRINTED,
     #    never written. See Ruact::Configuration#layout.
     # 4. Creates app/javascript/components/.keep
-    # 5. Creates vite.config.js (or shows manual instructions if one exists)
+    # 5. Creates vite.config.js, which asks Bundler for the plugin (Story 19.4);
+    #    replaces one it generated before 19.4 and the app never edited, and
+    #    shows manual instructions for any other existing one
     # 6. Creates package.json (react/react-dom/vite/@vitejs/plugin-react) so a
     #    fresh app has JS deps to install (Story 14.6, FR101).
     # 7. Creates Procfile.dev + bin/dev (foreman) so the single `bin/dev`
@@ -247,22 +249,42 @@ module Ruact
         rake "ruact:server_functions:generate"
       end
 
+      # Story 19.4 — what the install wrote from Story 14.2 to 0.0.21, with
+      # the plugin's import as a placeholder: an existing vite.config.js equal
+      # to it, but for that import, was generated and never edited.
+      PINNED_VITE_CONFIG = File.expand_path("legacy/vite.config.pinned.js", __dir__)
+      PINNED_VITE_CONFIG_IMPORT = "import ruact from '__RUACT_VITE_PLUGIN_PATH__';"
+      PINNED_IMPORT_LINE = %r{^import ruact from '([^'\n]*vite-plugin-ruact/index\.js)';$}
+
+      # Story 19.4 — the vite.config.js the install writes asks Bundler where
+      # the ruact gem is each time Vite starts, so it names no path. An existing
+      # file is replaced only when it is one this generator wrote before 19.4,
+      # never edited (it imported the plugin by the path of the gem installed
+      # then, so after `bundle update ruact` the build kept the old plugin);
+      # any other file is left as it is and the change is printed. `--force`
+      # overwrites, as before.
       def create_vite_config
         vite_config_file = Pathname(destination_root).join("vite.config.js")
+        other = other_vite_config unless vite_config_file.exist? || options[:force]
+        if other
+          # Vite reads vite.config.js first: writing one would set the app's aside.
+          say_status "notice", "#{other} exists — vite.config.js is not written, Vite would read it " \
+                               "instead of yours.", :yellow
+          return show_vite_config_instructions(other)
+        end
+        return template("vite.config.js.tt", "vite.config.js") if !vite_config_file.exist? || options[:force]
 
-        # `--force` must actually regenerate (the message below promises it). The
-        # guard skips the template ONLY when the file exists AND force was not
-        # passed; with --force we fall through to `template`, which overwrites.
-        if vite_config_file.exist? && !options[:force]
-          say_status "notice", "vite.config.js already exists — add the plugin manually:", :yellow
-          say "  1. At the top of vite.config.js, add:"
-          say "       import ruact from '#{Ruact.vite_plugin_path}';"
-          say "  2. In the plugins array, add: ruact()"
-          say "  3. Set build.rollupOptions.input to '#{Ruact.bootstrap_virtual_id}'"
-          say ""
-          say "  Re-run `rails generate ruact:install --force` to overwrite vite.config.js."
+        existing = vite_config_file.binread.force_encoding(Encoding::UTF_8)
+        pinned = pinned_vite_config_path(existing)
+        if pinned
+          say_status "update", "vite.config.js — it imported ruact's Vite plugin from #{pinned}, " \
+                               "the gem installed then; it now asks Bundler", :green
+          template "vite.config.js.tt", "vite.config.js", force: true, verbose: false
+        elsif existing == rendered_vite_config
+          say_status "identical", "vite.config.js", :blue
         else
-          template "vite.config.js.tt", "vite.config.js"
+          say_status "notice", "vite.config.js already exists and has edits of yours — it is left as it is.", :yellow
+          show_vite_config_instructions
         end
       end
 
@@ -271,7 +293,7 @@ module Ruact
       # plugin) so the `npm install` that Story 14.1 runs has something to
       # resolve and `bin/dev`'s `npm run dev` (Vite) has a `dev` script. The
       # bundled ruact Vite plugin is NOT a package.json dependency — vite.config
-      # imports it by the absolute `Ruact.vite_plugin_path` and it uses only
+      # loads it from the gem Bundler has (`Ruact.vite_plugin_path`) and it uses only
       # `node:` builtins. Guarded like vite.config.js: an existing package.json
       # is left untouched (the app may already have one) unless --force.
       #
@@ -429,12 +451,65 @@ module Ruact
         say "\nThen add <MyComponent /> to any ERB view." if whole_app?
         say layout_summary
         say ""
-        say "Note: re-run this generator after updating the ruact gem to refresh"
-        say "the bundled Vite plugin path in vite.config.js."
-        say ""
       end
 
       private
+
+      # The path a vite.config.js generated before Story 19.4 imports the
+      # plugin from, when the file is otherwise as generated; nil for any
+      # other file. Only whitespace at the end of the file may differ.
+      def pinned_vite_config_path(content)
+        return nil unless content.valid_encoding?
+
+        match = content.match(PINNED_IMPORT_LINE)
+        return nil unless match
+
+        generated = File.read(PINNED_VITE_CONFIG, encoding: Encoding::UTF_8)
+        normalized = content.sub(PINNED_IMPORT_LINE) { PINNED_VITE_CONFIG_IMPORT }
+        normalized.rstrip == generated.rstrip ? match[1] : nil
+      end
+
+      # vite.config.js as this version of the template renders it.
+      def rendered_vite_config
+        source = File.read(File.join(self.class.source_root, "vite.config.js.tt"), encoding: Encoding::UTF_8)
+        ERB.new(source, trim_mode: "-").result(binding)
+      end
+
+      # An existing vite.config.js the install does not touch: how to make it
+      # ask Bundler for the plugin, with the template's own lines.
+      def show_vite_config_instructions(name = "vite.config.js")
+        rendered = rendered_vite_config
+        head = rendered[0...rendered.index("export default")]
+        say "  In #{name}, to load ruact's Vite plugin from the gem Bundler has (so a `bundle update ruact`"
+        say "  needs no edit there):"
+        say "  1. Replace the `import ruact from '…'` line, if there is one, with (beside your other imports):"
+        say ""
+        head.each_line do |line|
+          next if line.match?(/^import (\{ defineConfig \}|react) from /)
+
+          say "       #{line}".rstrip
+        end
+        say "  2. Wrap the config in an async function that imports the plugin first:"
+        say ""
+        say "       export default defineConfig(async () => {"
+        say "         const { default: ruact } = await import(pathToFileURL(ruactPluginPath()).href);"
+        say "         return { /* your config, with ruact() in plugins */ };"
+        say "       });"
+        say ""
+        say "  3. In it: ruact() in plugins, build.rollupOptions.input '#{Ruact.bootstrap_virtual_id}',"
+        say "     and (optional) publicDir: false, so a build does not copy public/ into public/assets/."
+        say ""
+        return unless name == "vite.config.js"
+
+        say "  Re-run `rails generate ruact:install --force` to write vite.config.js instead."
+      end
+
+      # A `vite.config.*` of the app's other than vite.config.js, which Vite
+      # would no longer read once a vite.config.js exists.
+      def other_vite_config
+        (Ruact::BuildSkew::VITE_CONFIGS - ["vite.config.js"])
+          .find { |name| Pathname(destination_root).join(name).exist? }
+      end
 
       # What the post-install message says about the layout — true for the
       # setting actually in effect, not just for a fresh install.
