@@ -1,0 +1,5 @@
+{
+  "refused": [
+    "script-src-elem inline"
+  ]
+}
