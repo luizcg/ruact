@@ -118,7 +118,7 @@ module ControllerRequestSpecSupport
         get "/suspense-demo/show", to: "controller_request_spec_support/suspense_demo#show"
         get "/suspense-live-demo/show", to: "controller_request_spec_support/suspense_live_demo#show"
         # Story 19-1 — `ruact_streaming`.
-        %w[show edit plain raising slow delayed late_write leased quiet after_raises positions capture empty content_for partials].each do |action|
+        (%w[edit] + ControllerRequestSpecSupport::STREAMING_DEMO_PAGES).each do |action|
           get "/streaming-demo/#{action}", to: "controller_request_spec_support/streaming_demo##{action}"
         end
         # An endpoint whose route names no action.
@@ -282,12 +282,16 @@ module ControllerRequestSpecSupport
     nil
   end
 
+  # Story 19-1/19-2 — the pages of StreamingDemoController that stream.
+  STREAMING_DEMO_PAGES = %w[show plain raising slow delayed late_write leased quiet after_raises positions
+                            capture empty content_for partials].freeze
+
   # Story 19-1 — `ruact_streaming`: the declared actions send their page as it
   # renders; `edit` (the same template) does not.
   class StreamingDemoController < ActionController::Base
     include Ruact::Controller
 
-    ruact_streaming only: %i[show plain raising slow delayed late_write leased quiet after_raises positions capture empty content_for partials]
+    ruact_streaming only: STREAMING_DEMO_PAGES
 
     append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
 
