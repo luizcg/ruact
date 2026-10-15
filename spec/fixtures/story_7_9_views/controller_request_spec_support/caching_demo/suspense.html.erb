@@ -1,0 +1,6 @@
+<main>
+  <% cache "caching-demo-suspense" do %>
+    <Suspense fallback="cached"><p>first boundary, <%= params[:visit] %></p></Suspense>
+  <% end %>
+  <Suspense fallback="second"><p>second boundary</p></Suspense>
+</main>

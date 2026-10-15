@@ -35,6 +35,9 @@ module Ruact
       "spellcheck" => "spellCheck"
     }.freeze
 
+    # A client component's marker (`__RUACT_<render>_<n>__`).
+    TOKEN = /\A__RUACT_\w+__\z/
+
     # Tags whose `value` attribute maps to React's `defaultValue` (uncontrolled).
     DEFAULT_VALUE_TAGS = %w[textarea select].freeze
 
@@ -167,7 +170,11 @@ module Ruact
         # Check if this is a Ruact component placeholder
         token = Markers.comment_token(node)
         entry = @registry[token]
-        return nil unless entry
+        unless entry
+          raise Ruact::HtmlConverterError, stale_component_message(token) if token.match?(TOKEN)
+
+          return nil
+        end
 
         Flight::ReactElement.new(
           type: entry[:ref],
@@ -200,7 +207,7 @@ module Ruact
     def convert_component_with_children(node)
       token = Markers.wrapper_token(node)
       entry = @registry[token]
-      raise Ruact::HtmlConverterError, "ruact: no component registered for #{token.inspect}" unless entry
+      raise Ruact::HtmlConverterError, stale_component_message(token) unless entry
 
       props = entry[:props]
       children = convert_children(node)
@@ -208,6 +215,15 @@ module Ruact
         props = props.merge("children" => children.length == 1 ? children.first : children)
       end
       Flight::ReactElement.new(type: entry[:ref], key: nil, props: props)
+    end
+
+    # Story 19-2 — a marker this render did not write: it came out of a
+    # `cache` block, which stores a component's marker and not the component.
+    def stale_component_message(token)
+      "ruact: the page holds the marker of a client component (#{token}) that this render did not " \
+        "register — it came out of a `cache` block, which stores the component's marker but not the " \
+        "component. Move the client component outside the `cache` block (cache the HTML around it, or " \
+        "the data it is given)."
     end
 
     def convert_suspense_element(node)

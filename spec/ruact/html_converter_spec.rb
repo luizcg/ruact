@@ -26,9 +26,9 @@ module Ruact
 
       it "makes a wrapper that carries a block a Suspense whose content is that block (Story 19-1)",
          :aggregate_failures do
-        html = %(<ruact-suspense data-ruact-fallback="loading" data-ruact-block="2"></ruact-suspense>)
+        html = %(<ruact-suspense data-ruact-fallback="loading" data-ruact-block="a1b2c3d4-2"></ruact-suspense>)
         result = convert.call(html)
-        expect(result.children).to be_a(Ruact::Flight::DeferredContent).and have_attributes(index: 2)
+        expect(result.children).to be_a(Ruact::Flight::DeferredContent).and have_attributes(key: "a1b2c3d4-2")
         expect(result.fallback.props).to eq("children" => "loading")
       end
 

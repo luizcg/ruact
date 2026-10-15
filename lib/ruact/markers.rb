@@ -8,14 +8,18 @@ module Ruact
   # Three markers:
   #
   # - a client component: an HTML comment holding the token its
-  #   {RenderContext} entry was registered under — `<!-- __RUACT_0__ -->`;
+  #   {RenderContext} entry was registered under — `<!-- __RUACT_a1b2c3d4_0__ -->`;
   # - a client component with children: an element wrapped around the
-  #   children's HTML — `<ruact-component data-ruact-token="__RUACT_0__">…`;
+  #   children's HTML — `<ruact-component data-ruact-token="__RUACT_a1b2c3d4_0__">…`;
   # - a Suspense boundary: an element wrapped around its content, carrying the
   #   fallback text and the optional delay —
   #   `<ruact-suspense data-ruact-fallback="Loading…">…</ruact-suspense>`. A
-  #   boundary whose content is rendered later is empty and carries the index
-  #   of its block in the {RenderContext} instead (`data-ruact-block="0"`).
+  #   boundary whose content is rendered later is empty and carries the key
+  #   of its block in the {RenderContext} instead (`data-ruact-block="a1b2c3d4-0"`).
+  #
+  # Every token and key carries the id of the render that wrote it, so a
+  # marker a `cache` block stored in another render is never taken for one of
+  # this render's.
   #
   # {ErbPreprocessor} writes the ERB that produces them, the view helpers
   # ({ViewHelper}, and {RenderPipeline} for a plain-ERB render) write the
@@ -49,7 +53,7 @@ module Ruact
     # attribute values as written in the template. Only `"` is escaped: the
     # rest of the text stays as the template wrote it (entities included, which
     # the HTML parser then decodes). The preprocessor refuses ERB in either.
-    # +block+ is the index of the boundary's content in the render context,
+    # +block+ is the key of the boundary's content in the render context,
     # when that content is rendered later.
     def self.suspense_open(fallback, delay, block: nil)
       delay_attr = delay ? %( #{DELAY_ATTR}="#{delay.gsub('"', '&quot;')}") : ""
@@ -72,11 +76,10 @@ module Ruact
       node[FALLBACK_ATTR] || ""
     end
 
-    # The index of the block a Suspense wrapper's content is rendered from
+    # The key of the block a Suspense wrapper's content is rendered from
     # later, or nil when the content is in the wrapper.
     def self.suspense_block(node)
-      value = node[BLOCK_ATTR]
-      value && Integer(value, 10)
+      node[BLOCK_ATTR]
     end
 
     # The delay of a Suspense wrapper, in seconds, or nil when it is absent,

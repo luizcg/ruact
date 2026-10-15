@@ -85,8 +85,11 @@ module Ruact
       # a {DeferredContent} needs {#take_boundary}.
       def next_boundary(streaming:)
         boundary = take_boundary
+        # A block this render cannot run: its marker came out of a `cache`
+        # block a render that streamed wrote.
         if boundary[:element].is_a?(DeferredContent)
-          raise Ruact::Error, "ruact: Renderer#next_boundary cannot render a block; use #take_boundary"
+          return error_rows(boundary[:id],
+                            RowEmitter.error_payload(DeferredContent::STALE, digest: "ruact:suspense-error"))
         end
 
         if streaming && boundary[:delay]&.positive?

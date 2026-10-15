@@ -99,7 +99,9 @@ module Ruact
     def content(element)
       return element unless element.is_a?(Flight::DeferredContent)
 
-      block = @render_context.block(element.index)
+      block = @render_context.block(element.key)
+      raise Ruact::Error, Flight::DeferredContent::STALE if block.nil?
+
       html = @guard ? @guard.call { evaluate(block) } : evaluate(block)
       convert(html)
     end
@@ -201,7 +203,7 @@ module Ruact
       element = boundary[:element]
       return "" unless element.is_a?(Flight::DeferredContent)
 
-      location = @render_context.block(element.index).location
+      location = @render_context.block(element.key)&.location
       location ? " at #{location.path}:#{location.lineno}" : ""
     end
   end

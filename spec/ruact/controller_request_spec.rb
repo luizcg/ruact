@@ -124,6 +124,10 @@ module ControllerRequestSpecSupport
         # An endpoint whose route names no action.
         get "/streaming-direct", to: ControllerRequestSpecSupport::StreamingDemoController.action(:show)
         get "/streaming-direct-edit", to: ControllerRequestSpecSupport::StreamingDemoController.action(:edit)
+        # Story 19-2 — fragment caching.
+        %w[components suspense suspense_in_place].each do |action|
+          get "/caching-demo/#{action}", to: "controller_request_spec_support/caching_demo##{action}"
+        end
       end
       app_class.instance.initialize!
       @booted = true
@@ -306,6 +310,23 @@ module ControllerRequestSpecSupport
       ::ActiveRecord::Base.lease_connection.select_value("SELECT 1")
       ruact_render(template: "controller_request_spec_support/streaming_demo/plain")
     end
+  end
+
+  # Story 19-2 (AC9) — fragment caching around client components and
+  # <Suspense>: the cached HTML holds markers of the render that wrote it.
+  class CachingDemoController < ActionController::Base
+    include Ruact::Controller
+
+    ruact_streaming only: :suspense
+
+    self.perform_caching = true
+    self.cache_store = ActiveSupport::Cache::MemoryStore.new
+
+    append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
+
+    def components = ruact_render
+    def suspense = ruact_render
+    def suspense_in_place = ruact_render(template: "controller_request_spec_support/caching_demo/suspense")
   end
 
   # Story 10.0 — an implicit-`default_render` page controller: an EMPTY GET
@@ -1262,6 +1283,47 @@ module Ruact # rubocop:disable Style/OneClassPerFile
           sleep 0.02 while pool.stat[:busy].positive? && Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
           expect(pool.stat[:busy]).to eq(0)
         end
+      end
+    end
+
+    # Story 19-2 (AC9) — a `cache` block stores HTML with the markers of the
+    # render that wrote it. Read back in another render, a marker used to pass
+    # for one of that render's: another component, another boundary's block.
+    describe "fragment caching (Story 19-2, AC9)" do
+      before { ControllerRequestSpecSupport::CachingDemoController.cache_store.clear }
+
+      def flight_body(path)
+        read_streamed(path, "HTTP_ACCEPT" => "text/x-component").body
+      end
+
+      it "fails loudly on a client component read from the cache, naming the cache" do
+        get "/caching-demo/components", {}, { "HTTP_ACCEPT" => "text/x-component" }
+        expect { get "/caching-demo/components", {}, { "HTTP_ACCEPT" => "text/x-component" } }
+          .to raise_error(Ruact::HtmlConverterError, /came out of a `cache` block/)
+      end
+
+      it "gives a <Suspense> read from the cache an error row, never another boundary's content",
+         :aggregate_failures do
+        flight_body("/caching-demo/suspense?visit=1")
+        body = flight_body("/caching-demo/suspense?visit=2")
+        expect(body).to match(/^\h+:E\{"digest":"ruact:suspense-error"/)
+        expect(body).to include("inside `cache`")
+        expect(body.scan("second boundary").length).to eq(1)
+      end
+
+      it "gives an error row too when a page that does not stream reads what one that streams cached",
+         :aggregate_failures do
+        flight_body("/caching-demo/suspense?visit=1")
+        get "/caching-demo/suspense_in_place", {}, { "HTTP_ACCEPT" => "text/x-component" }
+        expect(last_response.status).to eq(200)
+        expect(last_response.body).to include("inside `cache`")
+        expect(last_response.body.scan("second boundary").length).to eq(1)
+      end
+
+      it "shows the cached content when a page that streams reads what one that does not cached" do
+        get "/caching-demo/suspense_in_place?visit=1", {}, { "HTTP_ACCEPT" => "text/x-component" }
+        body = flight_body("/caching-demo/suspense?visit=2")
+        expect(body).to include("first boundary, 1")
       end
     end
 
