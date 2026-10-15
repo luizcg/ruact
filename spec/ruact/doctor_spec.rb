@@ -93,7 +93,8 @@ RSpec.describe Ruact::Doctor do
         File.write(tmpdir.join("vite.config.js"),
                    "import ruact from '/gems/ruact-0.0.6/vendor/javascript/vite-plugin-ruact/index.js';\n")
         _, _, remediation = doctor.send(:check_manifest)
-        expect(remediation).to include("vite.config.js imports ruact's Vite plugin from /gems/ruact-0.0.6/")
+        expect(remediation).to include("vite.config.js imports ruact's Vite plugin from /gems/ruact-0.0.6/",
+                                       "run `rails generate ruact:install`")
       end
 
       it "fails on a manifest that is not JSON" do

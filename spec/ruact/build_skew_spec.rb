@@ -43,8 +43,10 @@ RSpec.describe Ruact::BuildSkew, :story_19_3 do
         config("import react from '@vitejs/plugin-react';\nimport ruact from '#{old}';\n")
         text = described_class.message("0.0.6", root: root)
         expect(text).to include("vite.config.js imports ruact's Vite plugin from #{old}")
-        expect(text).to include("import it from '#{Ruact.vite_plugin_path}'")
-        expect(text.index("import it from")).to be < text.index("Rebuild the JavaScript")
+        expect(text).to include("run `rails generate ruact:install`, which replaces a vite.config.js it generated " \
+                                "with one that asks Bundler for the plugin")
+        expect(text).not_to include(Ruact.vite_plugin_path)
+        expect(text.index("rails generate ruact:install")).to be < text.index("Rebuild the JavaScript")
       end
 
       it "says nothing of the import when it is this gem's plugin, absolute or relative" do
@@ -78,7 +80,14 @@ RSpec.describe Ruact::BuildSkew, :story_19_3 do
         config("import ruact from '/Users/José/gems/ruact-0.0.6/vendor/javascript/vite-plugin-ruact/index.js';\n")
         text = described_class.message(nil, root: root)
         expect(text.encoding).to eq(Encoding::UTF_8)
-        expect(text).to include("from /Users/José/gems/ruact-0.0.6/", "import it from '/Users/José/gems/ruact/")
+        expect(text).to include("from /Users/José/gems/ruact-0.0.6/")
+      end
+
+      it "says nothing of the import in the vite.config ruact:install writes (it asks Bundler)" do
+        require "generators/ruact/install/install_generator"
+        Ruact::Generators::InstallGenerator.new([], {}, destination_root: root).send(:rendered_vite_config)
+                                           .then { |generated| config(generated) }
+        expect(described_class.message(nil, root: root)).not_to include("imports ruact's Vite plugin")
       end
 
       it "says nothing of the import when it cannot read one (fail open)" do

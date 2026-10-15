@@ -62,8 +62,10 @@ module Ruact
     end
 
     # Returns the absolute path to the Vite plugin bundled inside this gem.
-    # Use this in vite.config.js: import ruact from '<%= Ruact.vite_plugin_path %>'
-    # Re-run `rails generate ruact:install` after gem upgrades to refresh the path.
+    # The vite.config.js `rails generate ruact:install` writes asks for it
+    # through Bundler each time Vite starts (Story 19.4) —
+    # `bundle exec ruby -e "require 'ruact'; print Ruact.vite_plugin_path"` —
+    # so after `bundle update ruact` the next build uses the new gem's plugin.
     #
     # @return [String] absolute path to vendor/javascript/vite-plugin-ruact/index.js
     def vite_plugin_path

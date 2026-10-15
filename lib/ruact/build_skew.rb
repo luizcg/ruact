@@ -17,10 +17,11 @@ module Ruact
   # `rails ruact:doctor`'s manifest check ({Doctor}) — all with {.message}.
   #
   # The usual cause after `bundle update ruact` is not a forgotten build: the
-  # `vite.config.js` that `ruact:install` writes imports the plugin by the
-  # absolute path of the gem installed then, so the build and the dev server
-  # keep using the old plugin while that version stays installed. {.message}
-  # names it when it reads such an import.
+  # `vite.config.js` that `ruact:install` wrote up to 0.0.21 imports the plugin
+  # by the absolute path of the gem installed then, so the build and the dev
+  # server keep using the old plugin while that version stays installed.
+  # {.message} names it when it reads such an import, and the fix: the install
+  # replaces that file with one that asks Bundler for the plugin (Story 19.4).
   module BuildSkew
     # The `vite.config` files Vite looks for, in its order.
     VITE_CONFIGS = %w[vite.config.js vite.config.mjs vite.config.ts vite.config.cjs vite.config.mts
@@ -64,8 +65,8 @@ module Ruact
       return rebuild unless imported
 
       "#{imported[:config]} imports ruact's Vite plugin from #{imported[:path]}, another installation of ruact: " \
-        "import it from '#{Ruact.vite_plugin_path}' (what `rails generate ruact:install` writes), then: " \
-        "#{rebuild}"
+        "run `rails generate ruact:install`, which replaces a vite.config.js it generated with one that asks " \
+        "Bundler for the plugin (for one you edited, it prints the change to make), then: #{rebuild}"
     end
 
     # The message as a banner across the top of the page, in development.
