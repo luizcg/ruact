@@ -7,7 +7,8 @@
 #                         (appends to results/browser.md)
 #   ./run i18n 1.14.7     the middleware-scope scenario with another i18n
 #   ./run rack 2.2.24     the proof and the lifecycle with Rack 2.2
-#   ./run skew            the streamed document read by 0.0.19's bootstrap (production)
+#   ./run skew            the streamed document read by 0.0.19's bootstrap, and the server
+#                         saying so (Story 19-3): production, development, the perturbation
 #   ./run pg              the PostgreSQL scenarios (also part of ./run when initdb is on the PATH)
 #   ./run postgres        what suspense_timeout does to a query running in PostgreSQL
 #                         (writes results/postgres.md; needs initdb and pg_ctl)
@@ -218,25 +219,47 @@ other_rack() {
 
 # Story 19-2 (AC22) — the streamed document read by 0.0.19's bootstrap: the
 # assets built with that release's plugin (from `git archive v0.0.19`), the
-# server this checkout, production. Appends to results/browser.md, then builds
-# the assets back with this checkout's plugin.
+# server this checkout. Appends to results/browser.md, then builds the assets
+# back with this checkout's plugin.
+#
+# Story 19-3 — and the server says so: production with 0.0.19's build, then
+# development with Vite's dev server running 0.0.19's plugin (what a
+# vite.config.js importing an old gem's plugin does). Then the perturbation:
+# with every build taken for this ruact's, the detection must FAIL.
 skew() {
   local old=tmp/plugin-0.0.19
   rm -rf "$old" && mkdir -p "$old"
   git -C ../../.. archive v0.0.19 vendor/javascript/vite-plugin-ruact | tar -x -C "$old"
-  trap 'build >/dev/null' EXIT
-  HARNESS_PLUGIN_DIR="$PWD/$old/vendor/javascript/vite-plugin-ruact" npx vite build >tmp/build-0.0.19.log
+  trap 'unset HARNESS_PLUGIN_DIR; build >/dev/null' EXIT
+  export HARNESS_PLUGIN_DIR="$PWD/$old/vendor/javascript/vite-plugin-ruact"
+  npx vite build >tmp/build-0.0.19.log
   table "0.0.19's bootstrap, this server — e2e/skew.spec.mjs"
-  echo "== skew, production"
-  HARNESS_SKEW=1 RAILS_ENV=production npx playwright test 2>&1 | tee tmp/playwright.log
-  local seen
-  seen=$(node -e '
-    const r = require("./results/skew-production.json");
-    const end = r.when_it_ends;
-    const shown = end.b ? "the content shown" : end.fallback_still_shown ? "the fallback stays, the content never shown" : "nothing shown";
-    console.log(`measured: ${shown}; ${r.errors.length} distinct error(s)${r.errors[0] ? ": " + r.errors[0].slice(0, 90) : ""}`);
-  ')
-  echo "| the streamed document read by 0.0.19's bootstrap | production | $seen |" >>"$BROWSER"
+  local env
+  for env in production development; do
+    echo "== skew, $env"
+    HARNESS_SKEW=1 RAILS_ENV=$env npx playwright test 2>&1 | tee tmp/playwright.log
+    local seen
+    seen=$(RAILS_ENV=$env node -e '
+      const env = process.env.RAILS_ENV;
+      const r = require(`./results/skew-${env}.json`);
+      const d = require(`./results/skew-detected-${env}.json`);
+      const end = r.when_it_ends;
+      const shown = end.b ? "the content shown" : end.fallback_still_shown ? "the fallback stays, the content never shown" : "nothing shown";
+      const said = [`logged ${d.log.length}x`, `doctor ${d.doctor.status}`, d.banner ? "banner on the page" : "no banner"].join(", ");
+      console.log(`measured: ${shown}; ${r.errors.length} distinct error(s)${r.errors[0] ? ": " + r.errors[0].slice(0, 90) : ""}. Detected (19-3): ${said}`);
+    ')
+    echo "| the streamed document read by 0.0.19's bootstrap | $env | $seen |" >>"$BROWSER"
+  done
+
+  echo "== skew without the detection: must FAIL, production"
+  if HARNESS_SKEW=1 HARNESS_NO_SKEW_CHECK=1 RAILS_ENV=production npx playwright test >tmp/no-skew-check.log 2>&1; then
+    echo "the skew run passed with every build taken for this ruact's: it proves nothing" >&2
+    exit 1
+  fi
+  grep -q "1 failed" tmp/no-skew-check.log
+  grep -q "19-3 — the server says" tmp/no-skew-check.log
+  grep -q "toHaveLength" tmp/no-skew-check.log
+  echo "| every build taken for this ruact's: \`skew.spec.mjs\` | production | 1 failed, as it must: at the log of the build's version |" >>"$BROWSER"
 }
 
 case "${1:-all}" in

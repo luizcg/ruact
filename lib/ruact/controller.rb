@@ -106,6 +106,15 @@ module Ruact
       ManifestResolver.resolve
     end
 
+    # Story 19-3 — {BuildSkew.note} for the manifest this render resolved: the
+    # message when its build is another ruact's (logged once per version),
+    # else nil.
+    def __ruact_build_skew(manifest)
+      return unless manifest.respond_to?(:build_version)
+
+      BuildSkew.note(manifest.build_version, logger: logger)
+    end
+
     # Only activate RSC rendering when the matching .html.erb template exists AND
     # the client will accept an HTML response (AC FR26; Story 10.0).
     # `request.format.html?` is false for a `*/*` wildcard (curl/bots/
@@ -177,7 +186,12 @@ module Ruact
       # its headers on the first row.
       self.status = status if status
 
-      pipeline = RenderPipeline.new(ruact_manifest,
+      manifest = ruact_manifest
+      # Story 19-3 — in development, the page says loudly when its JavaScript
+      # was built by another ruact (`ruact_js_assets` reads this). The manifest
+      # this render resolved anyway: no other request to the Vite dev server.
+      @ruact_build_skew = __ruact_build_skew(manifest) if Rails.env.development?
+      pipeline = RenderPipeline.new(manifest,
                                     controller_path: controller_path, logger: logger,
                                     development: Flight::Renderer.development_default)
       # Story 19-1 — in an action that streams, the first load and a

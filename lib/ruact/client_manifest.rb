@@ -37,7 +37,19 @@ module Ruact
   # existing manifest + reader is unaffected). {#contract_for} reads it for the
   # Story 13.5 preprocess-time call-site validator; +nil+ means "no contract →
   # no validation" (fail open).
+  #
+  # Story 19-3 — the Vite plugin also records which ruact built the page's
+  # JavaScript, under a key no component can have (a component's is PascalCase
+  # or +folder/_snake+):
+  #
+  #   "__ruact__": { "version": "0.0.22" }
+  #
+  # {#build_version} reads it; it is not a component, for any lookup. A manifest
+  # written by 0.0.21 or before has no such key.
   class ClientManifest
+    # The manifest key of the build's record (Story 19-3).
+    BUILD_KEY = "__ruact__"
+
     # The +chunks+ of every import row (see {#resolve}). One shared frozen
     # array: a render resolves each component once, and the allocation guard
     # counts every array.
@@ -129,6 +141,13 @@ module Ruact
       entry && entry["contract"]
     end
 
+    # Story 19-3 — the ruact version whose Vite plugin wrote this manifest, or
+    # +nil+ when it records none (a build by 0.0.21 or before, or a plugin that
+    # could not read its gem's version).
+    #
+    # @return [String, nil]
+    attr_reader :build_version
+
     # Load from a file path (JSON).
     # Pre-warms the reference cache and freezes the manifest so it cannot be
     # mutated at runtime (AC#5). Pre-warming is required because Ruby's freeze
@@ -138,7 +157,7 @@ module Ruact
       raw      = File.read(path)
       data     = JSON.parse(raw)
       manifest = from_hash(data)
-      data.each_key { |name| manifest.reference_for(name) }
+      data.each_key { |name| manifest.reference_for(name) unless name == BUILD_KEY }
       manifest.freeze
     end
 
@@ -147,9 +166,16 @@ module Ruact
     # first-lookup path works even when +data+ is empty (otherwise
     # +reference_for+ would raise +FrozenError+ trying to memoize on a
     # frozen instance).
+    #
+    # Story 19-3 — the build's record ({BUILD_KEY}) is taken out of the entries
+    # (without changing the Hash given) and kept as {#build_version}.
     def self.from_hash(data)
       manifest = new
+      recorded = data.is_a?(Hash) && data.key?(BUILD_KEY)
+      build = data[BUILD_KEY] if recorded
+      data = data.except(BUILD_KEY) if recorded
       manifest.instance_variable_set(:@data, data)
+      manifest.instance_variable_set(:@build_version, build.is_a?(Hash) ? build["version"]&.to_s : nil)
       manifest.instance_variable_set(:@reference_cache, {})
       manifest
     end

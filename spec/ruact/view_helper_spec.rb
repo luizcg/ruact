@@ -383,6 +383,60 @@ module Ruact
         end
       end
 
+      # Story 19-3 — the page's JavaScript built by another ruact: the message
+      # the controller kept for this render (`@ruact_build_skew`), on the page.
+      context "when the build is another ruact's", :story_19_3 do
+        let(:skew) { "The page's JavaScript was built by ruact 0.0.19, & this server is ruact 9.9.9." }
+
+        def in_env(name)
+          allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new(name))
+        end
+
+        it "shows the message on the page in dev, with the Vite dev server", :aggregate_failures do
+          in_env("development")
+          allow(asset_helper).to receive(:vite_dev_running?).and_return(true)
+          asset_helper.instance_variable_set(:@ruact_build_skew, skew)
+          html = asset_helper.ruact_js_assets(payload)
+          expect(html).to match(/<div role="alert" data-ruact-build-skew style="position:fixed/)
+          expect(html).to include("built by ruact 0.0.19, &amp; this server")
+          expect(html.index("data-ruact-build-skew")).to be < html.index("<script type=\"module\"")
+        end
+
+        it "shows it in dev without the dev server, when a build serves the page" do
+          in_env("development")
+          allow(asset_helper).to receive_messages(vite_dev_running?: false,
+                                                  vite_manifest_entry: { "file" => "bootstrap-abc.js" })
+          asset_helper.instance_variable_set(:@ruact_build_skew, skew)
+          expect(asset_helper.ruact_js_assets(payload)).to include("data-ruact-build-skew")
+        end
+
+        it "leaves it to the Vite warning when no JavaScript is served at all", :aggregate_failures do
+          in_env("development")
+          allow(Rails).to receive(:logger).and_return(instance_double(Logger, warn: nil))
+          allow(asset_helper).to receive_messages(vite_dev_running?: false, vite_manifest_entry: nil)
+          asset_helper.instance_variable_set(:@ruact_build_skew, skew)
+          html = asset_helper.ruact_js_assets(payload)
+          expect(html).to include("data-ruact-vite-down")
+          expect(html).not_to include("data-ruact-build-skew")
+        end
+
+        it "never shows it in production — not a byte changes" do
+          in_env("production")
+          allow(asset_helper).to receive(:vite_manifest_entry).and_return({ "file" => "bootstrap-abc.js" })
+          before = asset_helper.ruact_js_assets(payload)
+          asset_helper.instance_variable_set(:@ruact_build_skew, skew)
+          expect(asset_helper.ruact_js_assets(payload)).to eq(before)
+        end
+
+        it "shows nothing without the message (this ruact's build, or a page no ruact render made)" do
+          in_env("development")
+          allow(asset_helper).to receive(:vite_dev_running?).and_return(true)
+          expect(asset_helper.ruact_js_assets(payload)).not_to include("data-ruact-build-skew")
+          asset_helper.instance_variable_set(:@ruact_build_skew, nil)
+          expect(asset_helper.ruact_js_assets(payload)).not_to include("data-ruact-build-skew")
+        end
+      end
+
       context "without a Flight payload (entry tags only)" do
         before do
           allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new("production"))

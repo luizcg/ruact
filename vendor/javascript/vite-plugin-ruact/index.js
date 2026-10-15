@@ -69,6 +69,33 @@ const RESOLVED_BOOTSTRAP_ID = "\0" + BOOTSTRAP_VIRTUAL_ID;
 // point at the gem copy, regardless of the app's cwd.
 const RUNTIME_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "runtime");
 
+// Story 19-3 — the build says which ruact built it. The plugin ships inside the
+// gem (`<gem>/vendor/javascript/vite-plugin-ruact/`), so the gem's version is
+// `<gem>/lib/ruact/version.rb`, the one file `bin/release` writes. The manifest
+// carries it under a key no component can have (a component's is PascalCase or
+// `folder/_snake`); the server compares it with its own and says so loudly when
+// the page's JavaScript is another release's.
+export const BUILD_KEY = "__ruact__";
+const GEM_VERSION_FILE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../lib/ruact/version.rb");
+
+// The gem version beside this plugin, or null when the plugin is not inside a
+// gem (a copy elsewhere): the manifest then records none, and the server takes
+// the build for an older release's, which is what it is told to warn about.
+export function readRuactVersion(file = GEM_VERSION_FILE) {
+  try {
+    return fs.readFileSync(file, "utf8").match(/VERSION = "([^"]+)"/)?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// The manifest as written and served: the build's record first, then the
+// components. The in-memory manifest never holds it — the registry and the
+// build's chunk matching iterate the components only.
+export function withBuild(manifest, version) {
+  return version ? { [BUILD_KEY]: { version }, ...manifest } : manifest;
+}
+
 export default function ruact(options = {}) {
   const {
     componentsDir = "app/javascript/components",
@@ -78,6 +105,7 @@ export default function ruact(options = {}) {
   let root;
   let manifest = {};
   let flightClient; // { source: "app" | "vendored", version, mode }
+  let ruactVersion = null;
 
   return installServerFunctionsHooks({
     name: "vite-plugin-ruact",
@@ -94,6 +122,13 @@ export default function ruact(options = {}) {
       flightClient = resolveFlightClient(root, config.isProduction ? "production" : "development");
       // Dev server and build alike, so a build log shows it too.
       config.logger?.info?.(`[ruact] Flight client: ${describeFlightClient(flightClient)}`);
+      ruactVersion = readRuactVersion();
+      if (!ruactVersion) {
+        config.logger?.warn?.(
+          `[ruact] could not read the ruact version from ${GEM_VERSION_FILE}: the manifest will not say which ` +
+            "ruact built it, and the server will warn that this build is another release's.",
+        );
+      }
     },
 
     // Story 10.1b / 14.2 — resolve ruact's virtual module ids.
@@ -121,7 +156,7 @@ export default function ruact(options = {}) {
     // During dev: build the manifest from source files
     buildStart() {
       manifest = buildManifest(path.resolve(root, componentsDir));
-      writeManifest(path.resolve(root, manifestOutput), manifest);
+      writeManifest(path.resolve(root, manifestOutput), withBuild(manifest, ruactVersion));
     },
 
     // During build: update with hashed chunk URLs from the bundle
@@ -180,7 +215,7 @@ export default function ruact(options = {}) {
         delete entry._sourceFile;
       }
 
-      writeManifest(path.resolve(root, manifestOutput), final);
+      writeManifest(path.resolve(root, manifestOutput), withBuild(final, ruactVersion));
     },
 
     // Dev server: watch components dir and rebuild manifest on change. Story
@@ -207,13 +242,13 @@ export default function ruact(options = {}) {
           out[name] = rest;
         }
         res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify(out));
+        res.end(JSON.stringify(withBuild(out, ruactVersion)));
       });
 
       const rebuild = (file) => {
         if (!file.startsWith(dir)) return;
         manifest = buildManifest(dir);
-        writeManifest(path.resolve(root, manifestOutput), manifest);
+        writeManifest(path.resolve(root, manifestOutput), withBuild(manifest, ruactVersion));
         const mod = server.moduleGraph.getModuleById(RESOLVED_REGISTRY_ID);
         if (mod) {
           server.moduleGraph.invalidateModule(mod);

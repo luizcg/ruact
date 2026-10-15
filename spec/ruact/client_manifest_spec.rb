@@ -300,5 +300,59 @@ module Ruact
         expect(co_located_ref.export_name).to eq("default")
       end
     end
+
+    # Story 19-3 — the Vite plugin records which ruact built the JavaScript under
+    # "__ruact__"; it is the build's version, never a component.
+    describe "the build's record (Story 19-3)", :story_19_3 do
+      let(:recorded) { { "__ruact__" => { "version" => "9.9.9" } }.merge(manifest_data) }
+
+      it "reads the version the plugin recorded" do
+        expect(described_class.from_hash(recorded).build_version).to eq("9.9.9")
+      end
+
+      it "is nil for a manifest written by 0.0.21 or before" do
+        expect(described_class.from_hash(manifest_data).build_version).to be_nil
+      end
+
+      it "is nil when the record is not an object with a version" do
+        expect(described_class.from_hash(manifest_data.merge("__ruact__" => nil)).build_version).to be_nil
+        expect(described_class.from_hash(manifest_data.merge("__ruact__" => "9.9.9")).build_version).to be_nil
+        expect(described_class.from_hash(manifest_data.merge("__ruact__" => {})).build_version).to be_nil
+      end
+
+      it "is no component for the preprocessor's lookups" do
+        manifest = described_class.from_hash(recorded)
+        expect(manifest.include?("__ruact__")).to be(false)
+        expect(manifest.component?("__ruact__")).to be(false)
+        expect(manifest.contract_for("__ruact__")).to be_nil
+      end
+
+      it "is no component for the render's lookups" do
+        manifest = described_class.from_hash(recorded)
+        expect { manifest.reference_for("__ruact__") }.to raise_error(Ruact::ManifestError)
+        expect { manifest.resolve(nil, nil) }.to raise_error(/no entry/)
+        expect { manifest.reference_for("__ruact_") }.to raise_error(Ruact::ManifestError) { |e|
+          expect(e.message).not_to include('"__ruact__"')
+        }
+        expect(manifest.reference_for("LikeButton").module_id).to eq("/LikeButton.jsx")
+      end
+
+      it "leaves the Hash it was given as it was" do
+        described_class.from_hash(recorded)
+        expect(recorded).to have_key("__ruact__")
+      end
+
+      it "loads from a file, frozen, with the version and without the record in the entries" do
+        manifest = Tempfile.create(["manifest", ".json"]) do |f|
+          f.write(recorded.to_json)
+          f.flush
+          described_class.load(f.path)
+        end
+        expect(manifest).to be_frozen
+        expect(manifest.build_version).to eq("9.9.9")
+        expect(manifest.include?("__ruact__")).to be(false)
+        expect(manifest.reference_for("LikeButton").module_id).to eq("/LikeButton.jsx")
+      end
+    end
   end
 end

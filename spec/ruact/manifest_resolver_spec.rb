@@ -86,6 +86,27 @@ module Ruact
         )
       end
 
+      it "reads the build's version from the dev server's manifest (Story 19-3)", :story_19_3 do
+        recorded = JSON.generate({ "__ruact__" => { "version" => "9.9.9" } }.merge(manifest_hash))
+        allow(Net::HTTP).to receive(:start).and_return(http_ok(recorded))
+
+        manifest = described_class.resolve
+        expect(manifest.build_version).to eq("9.9.9")
+        expect(manifest.include?("__ruact__")).to be(false)
+      end
+
+      it "reads the build's version from the on-disk file (Story 19-3)", :story_19_3 do
+        allow(Net::HTTP).to receive(:start).and_raise(Errno::ECONNREFUSED)
+
+        Dir.mktmpdir do |dir|
+          path = File.join(dir, "react-client-manifest.json")
+          File.write(path, JSON.generate({ "__ruact__" => { "version" => "9.9.9" } }.merge(manifest_hash)))
+          allow(described_class).to receive(:file_path).and_return(path)
+
+          expect(described_class.resolve.build_version).to eq("9.9.9")
+        end
+      end
+
       it "falls back to the on-disk file when the dev server is unreachable" do
         allow(Net::HTTP).to receive(:start).and_raise(Errno::ECONNREFUSED)
 

@@ -40,10 +40,11 @@ RSpec.describe Ruact::Doctor do
     File.write(dir.join("application.html.erb"), content)
   end
 
-  def make_manifest
+  # Story 19-3 — a manifest the plugin of this ruact wrote records its version.
+  def make_manifest(body = JSON.generate("__ruact__" => { "version" => Ruact::VERSION }))
     dir = tmpdir.join("public")
     FileUtils.mkdir_p(dir)
-    File.write(dir.join("react-client-manifest.json"), "{}")
+    File.write(dir.join("react-client-manifest.json"), body)
   end
 
   # --- check_manifest ---
@@ -62,6 +63,53 @@ RSpec.describe Ruact::Doctor do
       it "message includes 'Manifest found at'" do
         _, msg = doctor.send(:check_manifest)
         expect(msg).to include("Manifest found at")
+      end
+    end
+
+    context "when the JavaScript was built by another ruact (Story 19-3)", :story_19_3 do
+      it "passes and names the version when the build is this ruact's" do
+        make_manifest
+        path = tmpdir.join("public", "react-client-manifest.json")
+        expect(doctor.send(:check_manifest)).to eq([:pass, "Manifest found at #{path} (built by ruact #{Ruact::VERSION})"])
+      end
+
+      it "fails with both versions and the rebuild when the build is another release's", :aggregate_failures do
+        make_manifest(JSON.generate("__ruact__" => { "version" => "0.0.19" }))
+        status, message, remediation = doctor.send(:check_manifest)
+        expect(status).to eq(:fail)
+        expect(message).to include("was built by ruact 0.0.19; this app runs ruact #{Ruact::VERSION}")
+        expect(remediation).to include("Rebuild the JavaScript with this ruact")
+      end
+
+      it "fails when the build records no version (0.0.21 and before)" do
+        make_manifest("{}")
+        status, message = doctor.send(:check_manifest)
+        expect(status).to eq(:fail)
+        expect(message).to include("did not record its version")
+      end
+
+      it "names the vite.config import of another installation's plugin in the fix" do
+        make_manifest("{}")
+        File.write(tmpdir.join("vite.config.js"),
+                   "import ruact from '/gems/ruact-0.0.6/vendor/javascript/vite-plugin-ruact/index.js';\n")
+        _, _, remediation = doctor.send(:check_manifest)
+        expect(remediation).to include("vite.config.js imports ruact's Vite plugin from /gems/ruact-0.0.6/")
+      end
+
+      it "fails on a manifest that is not JSON" do
+        make_manifest("{ not json")
+        status, message = doctor.send(:check_manifest)
+        expect(status).to eq(:fail)
+        expect(message).to include("is not valid JSON")
+      end
+
+      it "fails the --json report, with the fix as the remediation", :aggregate_failures do
+        make_manifest(JSON.generate("__ruact__" => { "version" => "0.0.19" }))
+        report = doctor.as_json
+        check = report["checks"].find { |c| c["name"] == "manifest" }
+        expect(report["status"]).to eq("fail")
+        expect(check["status"]).to eq("fail")
+        expect(check["remediation"]).to include("Rebuild the JavaScript with this ruact")
       end
     end
 

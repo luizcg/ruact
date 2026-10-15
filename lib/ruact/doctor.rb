@@ -145,14 +145,25 @@ module Ruact
 
     private
 
+    # Story 19-3 — the manifest also says which ruact built the JavaScript; a
+    # build by another one (or by one that recorded none, 0.0.21 and before)
+    # fails: the page then runs another release's runtime against this server.
     def check_manifest
       path = manifest_path
-      if Pathname(path).exist?
-        [:pass, "Manifest found at #{path}"]
-      else
-        [:fail, "Manifest not found — run vite build",
-         "Run vite build (or bin/dev) to generate the client manifest."]
+      unless Pathname(path).exist?
+        return [:fail, "Manifest not found — run vite build",
+                "Run vite build (or bin/dev) to generate the client manifest."]
       end
+
+      built = ClientManifest.from_hash(JSON.parse(File.read(path))).build_version
+      return [:pass, "Manifest found at #{path} (built by ruact #{built})"] unless BuildSkew.skewed?(built)
+
+      by = built ? "ruact #{built}" : "a ruact that did not record its version (0.0.21 or before)"
+      [:fail, "Manifest at #{path} was built by #{by}; this app runs ruact #{Ruact::VERSION}",
+       BuildSkew.remedy(Rails.root)]
+    rescue JSON::ParserError => e
+      [:fail, "Manifest at #{path} is not valid JSON (#{e.message.lines.first.strip})",
+       "Rebuild it: run vite build (or bin/dev)."]
     end
 
     def check_vite

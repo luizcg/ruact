@@ -1227,6 +1227,38 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).to be < 1
       end
 
+      # Story 19-3 — the page's JavaScript built by another ruact: in
+      # development the document says so, and the log once.
+      context "when the page's JavaScript was built by another ruact", :story_19_3 do
+        let(:skewed) do
+          entries = JSON.parse(File.read(ControllerRequestSpecSupport.manifest_path))
+          Ruact::ClientManifest.from_hash({ "__ruact__" => { "version" => "0.0.1" } }.merge(entries))
+        end
+
+        before do
+          Ruact::BuildSkew.reset!
+          allow(Ruact::ManifestResolver).to receive(:resolve).and_return(skewed)
+          allow_any_instance_of(Ruact::ViewHelper).to receive(:vite_dev_running?).and_return(true) # rubocop:disable RSpec/AnyInstance
+        end
+
+        after { Ruact::BuildSkew.reset! }
+
+        it "says so on the page in development, and once in the log", :aggregate_failures do
+          allow(Rails.env).to receive(:development?).and_return(true)
+          bodies = []
+          log = with_log { 2.times { bodies << document("/streaming-demo/plain").body } }
+          expect(bodies).to all(include("data-ruact-build-skew")
+            .and(include("built by ruact 0.0.1, and this server is ruact #{Ruact::VERSION}")))
+          expect(log.scan("built by ruact 0.0.1").length).to eq(1)
+          expect(flight("/streaming-demo/plain").body).not_to include("data-ruact-build-skew")
+        end
+
+        it "says nothing on the page in production" do
+          allow(Rails.env).to receive(:development?).and_return(false)
+          expect(document("/streaming-demo/plain").body).not_to include("data-ruact-build-skew")
+        end
+      end
+
       context "when the app runs in development" do
         before { allow(Rails.env).to receive(:development?).and_return(true) }
 

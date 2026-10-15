@@ -728,7 +728,7 @@ What 19-2 changed, for deployment (19-2b):
   only, and the fallback stays with a transport error. 19-0 measured the page
   whole because the prototype's entry was still deferred. A deploy that
   updates the gem without rebuilding the JavaScript breaks the pages that
-  stream; what to do about it is Luiz's to decide (Story 19-2 Resultado).
+  stream. Luiz decided to detect it (7, below); Story 19-3 did.
 
 ## Decided by Luiz
 
@@ -757,3 +757,14 @@ On 2026-10-15 (Story 19-2a):
    loading (an image, a `fetch`, an `import()`) fails.
 6. **The browser job is a required check** for merging into the gem's `main`
    (five green runs in a row, without retry, after the last change of 19-2a).
+
+On 2026-10-15 (Story 19-2b):
+
+7. **JavaScript built by another ruact is detected, not only documented.** The
+   Vite plugin records the gem's version in `react-client-manifest.json`; a
+   build of another version, or of one that recorded none, is said in a banner
+   on the page in development, once in the log at boot, and fails
+   `rails ruact:doctor`. The boot does not fail. Story 19-3; proved by
+   `./run skew`, which also found the usual cause: the `vite.config.js` the
+   install writes imports the plugin from the gem installed then, so a rebuild
+   after `bundle update` can still use the old plugin.

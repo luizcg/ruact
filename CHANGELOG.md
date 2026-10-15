@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The app says when the page's JavaScript was built by another ruact.** A server updated without its JavaScript breaks the pages that stream: 0.0.19's runtime, for one, reads only the shell's rows of a streamed document and its `<Suspense>` fallbacks stay, with "the response ended before the whole page arrived". The Vite plugin now records which ruact built the JavaScript, in `react-client-manifest.json` (`"__ruact__": { "version": … }` — never a component; a server of 0.0.21 or before reads the file as before). When that is not the server's version, or the build records none — every build by 0.0.21 and before: the first build after upgrading to this version is needed for the warning to go —
+  - in development, a banner across the top of the page says so, with what to do, and the log says it once;
+  - at boot, in every environment, the log says it once, as an error (the app still boots);
+  - `rails ruact:doctor` fails its manifest check (and `-- --json` reports it, the fix as the remediation); a manifest that is not valid JSON fails it too.
+
+  **Rebuilding is not always enough.** The `vite.config.js` that `rails generate ruact:install` writes imports the plugin by the absolute path of the gem installed then (`…/gems/ruact-X.Y.Z/vendor/javascript/vite-plugin-ruact/index.js`). After `bundle update ruact`, while the old version stays installed, `npm run build` and `bin/dev` keep using its plugin. When `vite.config.*` imports the plugin from a path that is not this gem's, the message names it and the path to import instead (`Ruact.vite_plugin_path`). The comparison is by version only: two builds of the same version are not told apart.
+
 ## [0.0.21] - 2026-10-15
 
 ### Changed
