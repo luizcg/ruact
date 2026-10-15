@@ -1968,6 +1968,15 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(generated).to include("export default defineConfig(async () =>")
       end
 
+      it "takes RUACT_VITE_PLUGIN_PATH as is when it is set (a build where Bundler cannot run)",
+         :aggregate_failures do
+        run_create_vite_config
+        generated = File.read(config_path)
+        expect(generated).to include("const pinned = process.env.RUACT_VITE_PLUGIN_PATH;")
+        expect(generated).to include("if (pinned) return pinned;")
+        expect(generated.index("if (pinned) return pinned;")).to be < generated.index("execSync(")
+      end
+
       it "keeps Vite's public dir out of the build" do
         run_create_vite_config
         expect(File.read(config_path)).to include("publicDir: false,")
