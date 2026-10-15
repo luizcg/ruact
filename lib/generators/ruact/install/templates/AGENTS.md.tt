@@ -1,8 +1,7 @@
 <!-- ruact:begin -->
 <!-- Managed by `rails generate ruact:install`. Re-run it with --force after a
-     gem upgrade to refresh ONLY this marked section; everything you write
-     outside the markers is preserved. Kept in sync manually with the online
-     copy at https://ruact.dev/llms.txt -->
+     gem upgrade to refresh ONLY this marked section; everything outside the
+     markers is preserved. Kept in sync by hand with https://ruact.dev/llms.txt -->
 
 # ruact — conventions for coding agents
 
@@ -61,10 +60,9 @@ import { categories, useQuery } from "@/.ruact/server-functions";
 const { data, loading, error } = useQuery(categories);
 ```
 
-Query params come from the method's keyword arguments and accept ONLY
-`string | number | boolean | null` (arrays/objects are rejected). Queries run
-the host controller's callback chain (authentication etc.) before the query
-object is instantiated.
+Query params are the method's keyword arguments, ONLY `string | number |
+boolean | null` (arrays/objects are rejected). Queries run the host
+controller's callback chain (authentication etc.) before the query object.
 
 ## Ground truth — read the generated file
 
@@ -79,7 +77,9 @@ READ IT instead of simulating the name generation. Regenerate after routes/queri
 1. **Every component tag closes.** `<Badge label={@x} />` has no children;
    `<Card title={@t}>...</Card>` passes the ERB between its tags to the
    component as `children`. An unclosed or stray tag fails LOUDLY with a
-   `PreprocessorError` naming file:line. `<Suspense fallback="...">` pairs too.
+   `PreprocessorError` naming file:line. `<Suspense fallback="...">` pairs too;
+   under `ruact_streaming` its content runs AFTER the page is sent, so status,
+   redirect, cookies, session and flash belong in the controller, not inside it.
    In a loop of items holding components, give each item a `data-react-key`
    (the record's id): React matches them by position otherwise, silently.
 2. **`{}` props are Ruby, not JavaScript.** `<Badge label={@post.title} />`

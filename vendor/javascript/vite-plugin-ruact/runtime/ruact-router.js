@@ -26,12 +26,16 @@ let _currentAbort   = null;
  * @param {function} opts.onNavigate     - called with the new React element tree
  * @param {function} [opts.onError]      - called with an Error when navigation fails,
  *                                         or when a Suspense child's row is an error
+ * @param {function} [opts.onBoundaryError] - called, too, when a Suspense child's
+ *                                         row is an error (the bootstrap's development
+ *                                         overlay — Story 19-1); not for a navigation
  */
-export function setupRouter({ onNavigate, onError = null }) {
+export function setupRouter({ onNavigate, onError = null, onBoundaryError = null }) {
   _onNavigate     = onNavigate;
   _onError        = onError;
   setBoundaryErrorHandler((error) => {
     console.error(error.message);
+    onBoundaryError?.(error);
     _onError?.(error);
   });
 

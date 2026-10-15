@@ -51,6 +51,42 @@ module Ruact
       end
     end
 
+    describe "#resolve from:" do
+      let(:manifest) do
+        instance_double(Ruact::ClientManifest).tap do |m|
+          allow(m).to receive(:reference_for) { |name, **| "ref:#{name}" }
+        end
+      end
+
+      it "resolves only the components registered after the first +from+ (Story 19-1)" do
+        ctx.register("NavBar", {})
+        ctx.register("Footer", {})
+        expect(ctx.resolve(manifest, from: 1).map { |entry| entry[:name] }).to eq(["Footer"])
+      end
+    end
+
+    describe "deferred blocks (Story 19-1)" do
+      it "does not defer unless the render streams" do
+        expect(ctx.deferring?).to be(false)
+        expect(described_class.new(deferring: true).deferring?).to be(true)
+      end
+
+      it "keeps each block under the index it returns", :aggregate_failures do
+        first = RenderContext::Block.new(:view, -> {}, "posts/show", :template, nil)
+        second = RenderContext::Block.new(:view, -> {}, "posts/_card", :partial, nil)
+        expect(ctx.defer_block(first)).to eq(0)
+        expect(ctx.defer_block(second)).to eq(1)
+        expect(ctx.block(1)).to be(second)
+        expect { ctx.block(2) }.to raise_error(IndexError)
+      end
+
+      it "notes the unstreamed-Suspense message once per render" do
+        expect(ctx.unstreamed_suspense_noted?).to be(false)
+        ctx.note_unstreamed_suspense!
+        expect(ctx.unstreamed_suspense_noted?).to be(true)
+      end
+    end
+
     describe "isolation" do
       it "two contexts are independent" do
         a = described_class.new

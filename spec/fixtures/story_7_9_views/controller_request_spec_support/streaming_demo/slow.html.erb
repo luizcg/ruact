@@ -1,0 +1,4 @@
+<main>
+  <Suspense fallback="slow"><% begin; sleep 3; rescue StandardError; end %><p>never</p></Suspense>
+  <Suspense fallback="second"><p>after the timeout</p></Suspense>
+</main>

@@ -8,7 +8,7 @@ module Ruact
   # Runs a suite of installation health checks and prints ✓/✗ per check.
   # Extracted from the ruact:doctor Rake task for direct testability (FR27).
   class Doctor # rubocop:disable Metrics/ClassLength
-    CHECKS = %i[manifest vite flight_client controller layout head_assets streaming legacy_constant
+    CHECKS = %i[manifest vite flight_client controller layout head_assets streaming load_async legacy_constant
                 serialize_only flight_middleware].freeze
     # Built via Array#join so the gem-CI `name-propagation` guard does not
     # match these literals against itself (Story 5.1 review F4 — the doctor
@@ -485,6 +485,23 @@ module Ruact
       mode  = Ruact.streaming_mode || :buffered
       label = mode == :enabled ? "enabled" : "buffered"
       [:pass, "streaming: #{label} (#{streaming_server_hint})"]
+    end
+
+    # Story 19-1 (ADR D1) — whether `load_async` runs its query in the
+    # background. It is how a page starts its queries early, so they finish
+    # while the shell is sent; without an executor (a new Rails app's default)
+    # it loads where it is called. A warning, not a failure: an app that never
+    # calls `load_async` has nothing to fix.
+    def check_load_async
+      return [:pass, "load_async: Active Record is not loaded"] unless defined?(::ActiveRecord::Base)
+
+      executor = ::ActiveRecord.async_query_executor
+      return [:pass, "load_async: runs in the background (async_query_executor = #{executor.inspect})"] if executor
+
+      [:warn,
+       "load_async: runs its query where it is called — config.active_record.async_query_executor is not " \
+       "set. Set it to :global_thread_pool (config/application.rb) so a page's queries start early and " \
+       "finish while its shell is sent."]
     end
 
     # Detects host-app references to the legacy gem constant or require path

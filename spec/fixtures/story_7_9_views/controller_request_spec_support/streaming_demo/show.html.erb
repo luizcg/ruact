@@ -1,0 +1,17 @@
+<main>
+  <% ControllerRequestSpecSupport.record(:shell, response.committed?) %>
+  <p>shell</p>
+  <Suspense fallback="Loading one">
+    <% ControllerRequestSpecSupport.record(:one, response.committed?) %>
+    <p><%= t(".lazy") %></p>
+    <DemoButton n={1} />
+    <Suspense fallback="Loading inner">
+      <% ControllerRequestSpecSupport.record(:inner, response.committed?) %>
+      <p>inner</p>
+    </Suspense>
+  </Suspense>
+  <Suspense fallback="Loading two">
+    <% ControllerRequestSpecSupport.record(:two, response.committed?) %>
+    <p>two <%= "<b>escaped</b>" %></p>
+  </Suspense>
+</main>

@@ -41,7 +41,10 @@ Ruact.configure do |config|
   # Recommended: true in production to prevent accidental attribute exposure.
   # config.strict_serialization = Rails.env.production?
 
-  # Timeout in seconds for deferred Suspense chunks. Default: 5.0.
+  # How long a <Suspense>'s content may run, in seconds of real time, in an
+  # action declared with `ruact_streaming`; past it, its boundary shows an
+  # error and the next one runs. A backstop: it does not stop a query the
+  # database is running — the database's statement timeout does. Default: 5.0.
   # config.suspense_timeout = 5.0
 
   # Base URL of the Vite dev server. Default: "http://localhost:5173".

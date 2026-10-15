@@ -20,6 +20,18 @@ module Ruact
         Ruact::Flight::SuspenseElement.new(fallback: nil, children: "x").delay
       end
 
+      it "has no default delay: a boundary without one waits nothing (Story 19-1)" do
+        expect(default_delay).to be_nil
+      end
+
+      it "makes a wrapper that carries a block a Suspense whose content is that block (Story 19-1)",
+         :aggregate_failures do
+        html = %(<ruact-suspense data-ruact-fallback="loading" data-ruact-block="2"></ruact-suspense>)
+        result = convert.call(html)
+        expect(result.children).to be_a(Ruact::Flight::DeferredContent).and have_attributes(index: 2)
+        expect(result.fallback.props).to eq("children" => "loading")
+      end
+
       it "parses data-ruact-delay into SuspenseElement#delay as a Float" do
         html = %(<ruact-suspense data-ruact-fallback="loading" data-ruact-delay="2.5"><p>content</p></ruact-suspense>)
         result = convert.call(html)

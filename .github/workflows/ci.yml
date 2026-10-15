@@ -195,6 +195,47 @@ jobs:
       - name: Type-check emitted accessors (Story 13.4 / FR99)
         run: npm run typecheck
 
+  browser:
+    # Story 19-1 (AC1) — the browser proof of deferred <Suspense>, against this
+    # checkout: spec/browser/deferred_suspense, a one-file Rails app on Puma
+    # with the gem by path, in Chromium. Development (Vite dev server) and
+    # production (vite build), then the perturbation that must fail: with every
+    # <Suspense> rendered in place, both scenarios fail at what the browser
+    # shows. Rails' own test support runs ActionController::Live inline, so the
+    # streaming itself is only observable against a server started on its own.
+    # Not a required check for merging (Luiz decides that); the release job
+    # waits on it, as on every other job.
+    name: Browser (deferred Suspense)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: spec/browser/deferred_suspense
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          working-directory: spec/browser/deferred_suspense
+          bundler-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Chromium and the libraries it needs
+        run: npm ci && npx playwright install --with-deps chromium
+      - name: The proof, in development and production, and the perturbation
+        run: ./run
+      - name: What ran
+        if: always()
+        run: cat results/browser.md || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-deferred-suspense
+          path: |
+            spec/browser/deferred_suspense/test-results
+            spec/browser/deferred_suspense/log
+            spec/browser/deferred_suspense/tmp/*.log
+
   benchmark:
     # Required status check — fails if memory allocations exceed 120% of baseline.json.
     name: Memory Benchmark
@@ -277,7 +318,7 @@ jobs:
     #   Halt  :  gh variable set RUACT_RELEASE_HALT -b stop -R luizcg/ruact
     #   Resume:  gh variable delete RUACT_RELEASE_HALT -R luizcg/ruact
     name: Release to RubyGems
-    needs: [name-propagation, rspec, rubocop, yard, js, benchmark, gate]
+    needs: [name-propagation, rspec, rubocop, yard, js, benchmark, gate, browser]
     if: >-
       github.event_name == 'push'
       && github.ref == 'refs/heads/main'

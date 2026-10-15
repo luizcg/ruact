@@ -34,6 +34,14 @@ RSpec.describe Ruact::Markers do
     end
   end
 
+  it "reads back the block a Suspense rendered later carries, and none when its content is in it",
+     :aggregate_failures do
+    later = parse("#{described_class.suspense_open('x', '1', block: 3)}#{described_class::SUSPENSE_CLOSE}")
+    expect(described_class.suspense_block(later)).to eq(3)
+    expect(described_class.suspense_delay(later)).to eq(1.0)
+    expect(described_class.suspense_block(parse(described_class.suspense_open("x", nil)))).to be_nil
+  end
+
   it "has an empty fallback when the wrapper carries none" do
     bare = parse("<#{described_class::SUSPENSE_TAG}>#{described_class::SUSPENSE_CLOSE}")
     expect(described_class.suspense_fallback(bare)).to eq("")

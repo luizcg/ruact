@@ -8,6 +8,7 @@ require_relative "view_helper"
 require_relative "validation_errors_collector"
 require_relative "controller/document_rendering"
 require_relative "controller/delivery"
+require_relative "controller/streaming"
 require_relative "controller/pages"
 require_relative "controller/page_rendering"
 require_relative "controller/format_negotiation"
@@ -41,6 +42,10 @@ module Ruact
     # row, or an HTML document whose `<head>` the app's layout owns. See
     # Ruact::Controller::Delivery and Ruact::Controller::DocumentRendering.
     include Ruact::Controller::Delivery
+    # Which actions send their page as it renders — `ruact_streaming`, or a
+    # controller that includes `ActionController::Live` (Story 19-1). See
+    # Ruact::Controller::Streaming.
+    include Ruact::Controller::Streaming
     # Which actions are ruact pages — the whole controller, or the ones it
     # declares with `ruact_pages` (Story 17.0g). See Ruact::Controller::Pages.
     include Ruact::Controller::Pages
@@ -175,7 +180,13 @@ module Ruact
       pipeline  = RenderPipeline.new(ruact_manifest,
                                      controller_path: controller_path, logger: logger,
                                      development: Flight::Renderer.development_default)
-      streaming = ruact_request? && self.class.ruact_streaming?
+      # Story 19-1 — in an action that streams, the first load and a
+      # navigation alike, each `<Suspense>`'s content renders after the shell
+      # is sent: the view keeps its blocks instead of running them. Only when
+      # the response really is Live's: on HTTP/1.0 (nginx's default to its
+      # upstream) Live gives an ordinary response, which the server sends as
+      # soon as anything is written — the page then renders whole, in place.
+      streaming = self.class.ruact_streaming?(action_name) && response.is_a?(ActionController::Live::Response)
 
       # Allocate a per-render context and expose it to the view via a normal
       # (non-`@_`-prefixed) instance variable on the controller. Rails 8's
@@ -190,7 +201,7 @@ module Ruact
       # controller instance is per-request (Rails allocates a new one per
       # action), so this is per-request safe under multi-threaded servers
       # (NFR8). See Story 7.9 / Bug 7.8-B.
-      with_render_context do |render_context|
+      with_render_context(deferring: streaming) do |render_context|
         opts = template ? { template: template } : { action: action_name }
         html = render_to_string(opts.merge(details).merge(layout: false, locals: locals))
         emit_ruact_response(pipeline, html, render_context, streaming: streaming)
@@ -205,10 +216,10 @@ module Ruact
     # `nil` would leak a phantom assignment into `view_assigns`
     # (`{"ruact_render_context" => nil}`) on any subsequent error/rescue
     # render in the same request.
-    def with_render_context
+    def with_render_context(deferring: false)
       had_previous = instance_variable_defined?(:@ruact_render_context)
       previous     = @ruact_render_context if had_previous
-      render_context = RenderContext.new
+      render_context = RenderContext.new(deferring: deferring)
       @ruact_render_context = render_context
       begin
         yield render_context

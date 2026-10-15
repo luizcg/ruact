@@ -20,13 +20,14 @@ import { createRoot } from 'react-dom/client';
 import { createElement, useState, useEffect } from 'react';
 import { setModuleRegistry } from './flight-modules.js';
 // Registers the boundary the server wraps each Suspense child in.
-import './suspense-boundary.js';
+import { setBoundaryErrorHandler } from './suspense-boundary.js';
 import { RootBoundary, onCaughtError } from './root-boundary.js';
 // The page, opened from its Flight bytes with React's own Flight client (the
 // copy vendored in the gem, or the app's `react-server-dom-webpack` when it
 // declares one: the plugin decides).
-import { inlineRows, openPage } from './page-stream.js';
+import { documentRows, openPage, whenRoot } from './page-stream.js';
 import { setupRouter, teardownRouter } from './ruact-router.js';
+import { showDevOverlay } from './dev-overlay.js';
 
 // MODULE_REGISTRY maps react-client-manifest "id" values to component exports.
 // It is auto-derived by vite-plugin-ruact from the SAME scan that emits
@@ -56,23 +57,35 @@ if (!flightData || flightData.length === 0) {
     root.textContent = '[ruact] No Flight data found — is the Rails server running?';
   }
 } else {
-  // The inline payload, as the stream the client reads. The root is mounted
-  // once the tree resolves, so the first paint is the page, not a fallback.
+  // Story 19-1 — in development a <Suspense> that failed on the server is shown
+  // over the page. The handler is in place before anything renders: a row that
+  // is already an error when the page mounts is caught during that first
+  // commit, before the router's effect would install one.
+  const onBoundaryError = import.meta.env?.DEV ? (error) => showDevOverlay(error) : null;
+  setBoundaryErrorHandler((error) => {
+    console.error(error.message);
+    onBoundaryError?.(error);
+  });
+
+  // The document's rows, as the stream the client reads — open while the
+  // document is: a page that streams pushes each <Suspense>'s rows as they are
+  // ready. The root is mounted once the tree resolves, so the first paint is
+  // the page with its fallbacks.
   let initialTree;
   try {
-    initialTree = openPage(inlineRows(flightData)).root;
+    initialTree = openPage(documentRows(flightData)).root;
   } catch (err) {
     showBootError(err);
     throw err;
   }
 
-  initialTree.then(
-    (tree) => {
+  Promise.all([initialTree, whenRoot()]).then(
+    ([tree, container]) => {
       function App() {
         const [current, setCurrent] = useState(() => tree);
 
         useEffect(() => {
-          setupRouter({ onNavigate: setCurrent });
+          setupRouter({ onNavigate: setCurrent, onBoundaryError });
           return () => teardownRouter();
         }, []);
 
@@ -80,7 +93,7 @@ if (!flightData || flightData.length === 0) {
         return createElement(RootBoundary, { tree: current }, current);
       }
 
-      createRoot(document.getElementById('root'), { onCaughtError }).render(createElement(App));
+      createRoot(container, { onCaughtError }).render(createElement(App));
     },
     (err) => {
       showBootError(err);

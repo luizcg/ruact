@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>deferred Suspense</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <%= csrf_meta_tags %>
+    <%= ruact_head_assets %>
+  </head>
+  <body>
+    <% if params[:assets_first] %>
+      <%= ruact_js_assets %>
+      <div id="root"></div>
+    <% else %>
+      <div id="root"></div>
+      <%= ruact_js_assets %>
+    <% end %>
+  </body>
+</html>

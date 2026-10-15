@@ -118,6 +118,53 @@ module Ruact
           rows += renderer.next_boundary(streaming: false) while renderer.pending?
           expect(rows.join).to eq(described_class.render(tree, manifest_with_button))
         end
+
+        # Story 19-1 — content rendered by the caller: the renderer hands the
+        # boundary out and takes the elements (or the failure) back.
+        describe "a boundary the caller renders" do
+          let(:later) do
+            ReactElement.new(type: "main", props: {
+                               "children" => SuspenseElement.new(fallback: ReactElement.new(type: "span"),
+                                                                 children: DeferredContent.new(4))
+                             })
+          end
+
+          it "hands out the content as it was deferred, and serializes what comes back", :aggregate_failures do
+            renderer = described_class.new(later, manifest_with_button)
+            renderer.shell
+            boundary = renderer.take_boundary
+            expect(boundary[:element]).to be_a(DeferredContent).and have_attributes(index: 4)
+            expect(boundary[:delay]).to be_nil
+
+            rows = renderer.boundary_rows(boundary[:id], [ReactElement.new(type: button), tree])
+            expect(rows.first).to include("Button-abc")
+            expect(rows.last).to start_with("#{boundary[:id].to_s(16)}:")
+            expect(renderer.pending?).to be(true) # the boundary inside `tree`
+            expect(renderer.pending_count).to eq(1)
+          end
+
+          it "writes an error row for a failure, and forgets the boundaries the failed content deferred",
+             :aggregate_failures do
+            renderer = described_class.new(later, manifest_with_button)
+            renderer.shell
+            boundary = renderer.take_boundary
+            unserializable = Class.new { def as_json(*) = raise(ArgumentError, "no") }.new
+            expect { renderer.boundary_rows(boundary[:id], [tree, unserializable]) }
+              .to raise_error(Ruact::SerializationError)
+            expect(renderer.pending?).to be(true)
+
+            error = RowEmitter.error_payload("failed", digest: "ruact:suspense-error")
+            rows = renderer.error_rows(boundary[:id], error, boundary: boundary)
+            expect(rows.last).to start_with("#{boundary[:id].to_s(16)}:E{")
+            expect(renderer.pending?).to be(false)
+          end
+
+          it "refuses content still to be rendered in a render that walks itself" do
+            renderer = described_class.new(later, manifest_with_button)
+            renderer.shell
+            expect { renderer.next_boundary(streaming: false) }.to raise_error(Ruact::Error, /cannot render a block/)
+          end
+        end
       end
 
       describe "suspense timeout (Story 3.5 AC #4)" do

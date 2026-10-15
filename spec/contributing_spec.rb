@@ -86,6 +86,9 @@ RSpec.describe "CONTRIBUTING.md", :story_5_8 do
         npm test
         npm run typecheck
       BASH
+      "browser checks" => <<~BASH,
+        spec/browser/deferred_suspense/run
+      BASH
       "matrix cell" => <<~BASH,
         RAILS_VERSION=7.2 bundle install && bundle exec rspec
       BASH

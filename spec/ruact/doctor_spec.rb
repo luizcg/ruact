@@ -747,6 +747,47 @@ end
     end
   end
 
+  # --- check_load_async (Story 19-1, ADR D1) ---
+
+  describe "#check_load_async", :story_19_1 do
+    subject(:doctor) { described_class.new }
+
+    it "is registered in CHECKS, so a real doctor run (and --json) reaches it" do
+      expect(described_class::CHECKS).to include(:load_async)
+    end
+
+    context "without Active Record" do
+      before { hide_const("ActiveRecord::Base") }
+
+      it "has nothing to check" do
+        expect(doctor.send(:check_load_async)).to eq([:pass, "load_async: Active Record is not loaded"])
+      end
+    end
+
+    context "with Active Record" do
+      around do |example|
+        require "active_record"
+        executor = ActiveRecord.async_query_executor
+        example.run
+      ensure
+        ActiveRecord.async_query_executor = executor
+      end
+
+      it "passes, naming the executor, when load_async runs in the background" do
+        ActiveRecord.async_query_executor = :global_thread_pool
+        expect(doctor.send(:check_load_async))
+          .to eq([:pass, "load_async: runs in the background (async_query_executor = :global_thread_pool)"])
+      end
+
+      it "warns, naming the setting and its value, when it runs where it is called", :aggregate_failures do
+        ActiveRecord.async_query_executor = nil
+        status, message = doctor.send(:check_load_async)
+        expect(status).to eq(:warn)
+        expect(message).to include("config.active_record.async_query_executor").and include(":global_thread_pool")
+      end
+    end
+  end
+
   # --- check_legacy_constant ---
 
   describe "#check_legacy_constant (Story 5.1)" do

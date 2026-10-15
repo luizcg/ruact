@@ -462,6 +462,9 @@ today: `Cache-Control: no-cache` and `X-Accel-Buffering: no`.
 - **Rails before 8.1.** The gem's test matrix runs Rails 7.0 to 8.0, and not
   the 8.1 everything here ran on. Before 7.2 a thread keeps its connection for
   the whole request, so D4's "only while a query runs" does not hold there.
+  *Since 19-1:* the matrix named 7.0 and 7.1 but ran 7.2 in those cells; the
+  supported range is now 7.2 through 8.1 (Luiz, 2026-10-14), each cell checks
+  the Rails it loads, and 8.1 is in it. Before 7.2 is no longer a case.
 - **i18n before 1.15**, which kept the locale in a thread variable: by D3's
   second bullet a Live action would then not see a locale set outside it at
   all.
@@ -475,7 +478,14 @@ today: `Cache-Control: no-cache` and `X-Accel-Buffering: no`.
   plain socket); HTTP/2.
 - **PostgreSQL and MySQL**: whether the timeout interrupts a running query
   there, the connection after it did, and how far `load_async` queries
-  overlap.
+  overlap. *Since 19-1, PostgreSQL (14, pg 1.7):* the timeout returns control
+  at the limit — the block ends, its boundary gets the timeout row — but the
+  query keeps running on the server, and the next query on that connection
+  waits for it (`SELECT pg_sleep(4)` under a 1 s limit: 1.00 s, then 3.03 s
+  for `SELECT 1`). A `statement_timeout` cancels it at the limit
+  (`ActiveRecord::QueryCanceled`, nothing left running).
+  `spec/browser/deferred_suspense/results/postgres.md`, `./run postgres`.
+  MySQL and overlapping `load_async` queries are still not measured.
 - **The writes that race**, on a machine under real load.
 
 ## The wire and the two clients
@@ -591,6 +601,42 @@ changes under D5 are in ruact's bootstrap and entry tag, not in React's client.
 - The development overlay with more than one failure, and its backtrace
   positions (the frames name the right files; line numbers were not checked).
 - A real page in a maintained app, with a real slow query.
+
+## Implementation (19-1)
+
+What the gem does, where it differs from the prototype of 19-0:
+
+- **The seam.** After the 19-0r refactor the prototype's four patches became
+  one change each at its seam: the `<Suspense>` helper keeps its block in the
+  render context when the action streams (`ViewHelper::Suspense`); the
+  converter turns the marker into a Suspense whose child is a reference to the
+  block (`Flight::DeferredContent`); `DeferredRender` evaluates the block when
+  the renderer hands its boundary out (`Renderer#take_boundary`), outside
+  `lib/ruact/flight/`; `Controller::Delivery` writes the shell, asks for the
+  client before each block, and pushes each boundary's rows into the document
+  or the Flight body.
+- **D6 (A)** is `Controller::Streaming`: Live included by `ruact_streaming`,
+  bypassed per action — `make_response!` (the response) and `process` (the
+  thread) both decide by the action's name, which `Controller.action(:name)`
+  passes along in the request. The prototype read the route, which an endpoint
+  built with `.action` does not name.
+- **HTTP/1.0.** Live answers it with an ordinary response, which the server
+  sends whole as soon as anything is written; the gem defers only when the
+  response is Live's, so over HTTP/1.0 (nginx's default to its upstream) the
+  page renders in place, whole. Found in review R3: a deferred render there
+  sent the shell alone.
+- **Order.** A `<Suspense>` inside a block is queued behind the boundaries the
+  page already had (the prototype did the same): blocks run one at a time,
+  each queue in page order.
+- **Writes after the response started** are compared, in development, before
+  and after each block (headers, cookies, session, flash) and become the
+  block's error; after the last block, an `after_action`'s are logged. Rails
+  itself accepts them and drops them.
+- **Connections.** At the end of a streamed action the gem releases what the
+  action's thread leased (`clear_active_connections!(:all)`), when that thread
+  is not the request's.
+- **The proof** is `spec/browser/deferred_suspense/` against the gem, in CI;
+  this ADR's experiment stays the record of 19-0, against `v0.0.19`.
 
 ## Decided by Luiz
 

@@ -1,0 +1,4 @@
+<h1 id="shell">A leased connection</h1>
+<%# `Model.connection` leases a connection to the thread until the request ends, where a query on a model takes one for the query. %>
+<p id="a"><%= Item.connection.select_value("SELECT count(*) FROM items") %></p>
+<% Gate.wait("a") if params[:hold] %>

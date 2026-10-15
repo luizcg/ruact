@@ -27,6 +27,7 @@ export function setBoundaryErrorHandler(handler) {
 // runtime/transport.js labels a response cut short the same way.
 const DIGEST_MESSAGES = {
   "ruact:suspense-timeout": "Suspense timeout exceeded",
+  "ruact:suspense-error": "An error occurred in a <Suspense>",
   "ruact:connection-closed": "the response ended before the whole page arrived",
 };
 
