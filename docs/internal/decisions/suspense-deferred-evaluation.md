@@ -498,9 +498,10 @@ today: `Cache-Control: no-cache` and `X-Accel-Buffering: no`.
   `text/html` and `text/x-component`; `proxy_buffering` left at its default.
   With nginx told to ignore `X-Accel-Buffering` (so `proxy_buffering on`
   applies) and no compression, the shell still came first: nginx 1.24 passed
-  on the chunks it had received. With compression too, measured in
-  `results/nginx-*.json` (gzip writes on a flush or a full buffer). Keep the
-  header: it is what holds where buffering and compression meet.
+  on the chunks it had received. With compression and the header ignored, the
+  page came whole (gzip writes on a flush or a full buffer, and only
+  `X-Accel-Buffering: no` makes nginx flush). Behind nginx: HTTP/1.1 upstream,
+  and the header kept, which ruact sends.
 - **Other servers**; Puma terminating TLS itself (the socket check reads a
   plain socket); HTTP/2.
 - **PostgreSQL and MySQL**: whether the timeout interrupts a running query

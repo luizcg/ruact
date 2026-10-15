@@ -13,5 +13,13 @@
   "proxy_http_version 1.1, gzip on": {
     "first_load_shell_before_the_gate": true,
     "navigation_shell_before_the_gate": true
+  },
+  "proxy_http_version 1.1, X-Accel-Buffering ignored": {
+    "first_load_shell_before_the_gate": true,
+    "navigation_shell_before_the_gate": true
+  },
+  "proxy_http_version 1.1, gzip on, X-Accel-Buffering ignored": {
+    "first_load_shell_before_the_gate": false,
+    "navigation_shell_before_the_gate": false
   }
 }
