@@ -11,7 +11,7 @@
 #                         as in 0.0.19 — the proof must fail at what the browser shows
 #   HARNESS_TIMEOUT=secs  Ruact.config.suspense_timeout (default 30: scenarios hold blocks at gates)
 #   HARNESS_NO_SKEW_CHECK=1  the Story 19-3 perturbation: every build taken for this
-#                         ruact's — `./run skew` must fail at the banner and the doctor
+#                         ruact's — `./run skew` must fail at the log, the doctor and the banner
 
 require "bundler/setup"
 require "rails"
@@ -304,6 +304,15 @@ end
 
 ActiveSupport.on_load(:active_record_sqlite3adapter) { prepend GateFunction }
 
+# Story 19-3 — the perturbation: every build is taken for this ruact's, so
+# nothing is said of one by another. Before `initialize!`: the boot's
+# `to_prepare` reads the manifest.
+if ENV["HARNESS_NO_SKEW_CHECK"] == "1"
+  Ruact::ClientManifest.prepend(Module.new do
+    def build_version = Ruact::VERSION
+  end)
+end
+
 Rails.application.initialize!
 
 Control.start(Integer(ENV["HARNESS_CONTROL_PORT"], 10)) if ENV["HARNESS_CONTROL_PORT"].present?
@@ -351,14 +360,6 @@ end
 if ENV["HARNESS_NO_RACK2_ETAG"] == "1"
   Ruact::Controller::Streaming.singleton_class.prepend(Module.new do
     def keep_unbuffered(_headers) = nil
-  end)
-end
-
-# Story 19-3 — the perturbation: every build is taken for this ruact's, so
-# nothing is said of one by another.
-if ENV["HARNESS_NO_SKEW_CHECK"] == "1"
-  Ruact::ClientManifest.prepend(Module.new do
-    def build_version = Ruact::VERSION
   end)
 end
 

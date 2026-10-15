@@ -61,6 +61,17 @@ RSpec.describe Ruact::BuildSkew, :story_19_3 do
         expect(described_class.message(nil, root: root)).to include("vite.config.ts imports")
       end
 
+      it "says nothing of an import built in JavaScript" do
+        config("import ruact from `${gem}/vendor/javascript/vite-plugin-ruact/index.js`;\n")
+        expect(described_class.message(nil, root: root)).not_to include("imports ruact's Vite plugin")
+      end
+
+      it "reads a vite.config that is not UTF-8 without raising" do
+        File.binwrite(File.join(root, "vite.config.js"),
+                      "// caf\xE9\nimport ruact from '/old/vite-plugin-ruact/index.js';\n".b)
+        expect(described_class.message(nil, root: root)).to include("vite.config.js imports")
+      end
+
       it "says nothing of the import when it cannot read one (fail open)" do
         config("const ruact = (await import(pluginPath)).default;\n")
         expect(described_class.message(nil, root: root)).not_to include("imports ruact's Vite plugin")

@@ -52,7 +52,9 @@ the server says the build is another ruact's (`e2e/skew.spec.mjs`,
 `results/skew-detected-<env>.json`): the log once, the doctor's manifest
 check failing (`GET /__doctor`), and in development — Vite's dev server
 running 0.0.19's plugin — a banner on the page. Then the perturbation
-(`HARNESS_NO_SKEW_CHECK=1`, every build taken for this ruact's) must fail it.
+(`HARNESS_NO_SKEW_CHECK=1`, every build taken for this ruact's) must fail it, in
+both environments, at the log, the doctor and — in development — the banner;
+its results go to `results/skew-*-no-skew-check-<env>.json`.
 Every other run requires the opposite (`e2e/00-warm-up.spec.mjs`): no banner,
 nothing logged, the doctor passing.
 

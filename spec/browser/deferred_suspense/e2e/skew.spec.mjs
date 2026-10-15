@@ -55,13 +55,15 @@ test("19-3 — the server says the page's JavaScript is another ruact's", async 
 
   // Logged once, whatever the number of pages: at boot (every environment)
   // or at the first render (development).
-  expect(log).toHaveLength(1);
-  expect(log[0]).toContain("an older ruact, one that did not record its version");
-  expect(doctor.status).toBe("fail");
-  expect(doctor.message).toContain("did not record its version");
+  // Soft: the perturbation (`./run skew`) must fail at each of them, and the
+  // script checks that every one did.
+  expect.soft(log, "the log of the build's version").toHaveLength(1);
+  expect.soft(log[0] ?? "").toContain("an older ruact, one that did not record its version");
+  expect.soft(doctor.status, "the doctor's manifest check").toBe("fail");
+  expect.soft(doctor.message).toContain("did not record its version");
   if (ENV === "development") {
-    await expect(banner).toBeVisible();
-    await expect(banner).toContainText("did not record its version");
+    await expect.soft(banner, "the banner on the page").toBeVisible();
+    await expect.soft(banner).toContainText("did not record its version");
   } else {
     await expect(banner).toHaveCount(0);
   }

@@ -251,15 +251,24 @@ skew() {
     echo "| the streamed document read by 0.0.19's bootstrap | $env | $seen |" >>"$BROWSER"
   done
 
-  echo "== skew without the detection: must FAIL, production"
-  if HARNESS_SKEW=1 HARNESS_NO_SKEW_CHECK=1 RAILS_ENV=production npx playwright test >tmp/no-skew-check.log 2>&1; then
-    echo "the skew run passed with every build taken for this ruact's: it proves nothing" >&2
-    exit 1
-  fi
-  grep -q "1 failed" tmp/no-skew-check.log
-  grep -q "19-3 — the server says" tmp/no-skew-check.log
-  grep -q "toHaveLength" tmp/no-skew-check.log
-  echo "| every build taken for this ruact's: \`skew.spec.mjs\` | production | 1 failed, as it must: at the log of the build's version |" >>"$BROWSER"
+  # The perturbation writes its results under its own name (HARNESS_VARIANT),
+  # never over the detection's.
+  for env in production development; do
+    echo "== skew without the detection: must FAIL, $env"
+    if HARNESS_SKEW=1 HARNESS_NO_SKEW_CHECK=1 HARNESS_VARIANT=no-skew-check RAILS_ENV=$env npx playwright test >tmp/no-skew-check.log 2>&1; then
+      echo "the skew run passed with every build taken for this ruact's: it proves nothing" >&2
+      exit 1
+    fi
+    local what
+    local -a musts=("1 failed" "Error: the log of the build's version" "Error: the doctor's manifest check")
+    [ "$env" = development ] && musts+=("Error: the banner on the page")
+    for what in "${musts[@]}"; do
+      grep -qF "$what" tmp/no-skew-check.log || { echo "the perturbation did not fail at: $what (tmp/no-skew-check.log)" >&2; exit 1; }
+    done
+    local at="the log and the doctor"
+    [ "$env" = development ] && at="the log, the doctor and the banner"
+    echo "| every build taken for this ruact's: \`skew.spec.mjs\` | $env | 1 failed, as it must: at $at |" >>"$BROWSER"
+  done
 }
 
 case "${1:-all}" in

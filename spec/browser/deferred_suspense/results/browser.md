@@ -57,4 +57,5 @@ Written by `./run`: one row per Playwright run, Chromium, one worker, against th
 | --- | --- | --- |
 | the streamed document read by 0.0.19's bootstrap | production | measured: the fallback stays, the content never shown; 1 distinct error(s): Error: [ruact] Server error: the response ended before the whole page arrived. Detected (19-3): logged 1x, doctor fail, no banner |
 | the streamed document read by 0.0.19's bootstrap | development | measured: the fallback stays, the content never shown; 1 distinct error(s): Error: [ruact] Server error: the response ended before the whole page arrived. Detected (19-3): logged 1x, doctor fail, banner on the page |
-| every build taken for this ruact's: `skew.spec.mjs` | production | 1 failed, as it must: at the log of the build's version |
+| every build taken for this ruact's: `skew.spec.mjs` | production | 1 failed, as it must: at the log and the doctor |
+| every build taken for this ruact's: `skew.spec.mjs` | development | 1 failed, as it must: at the log, the doctor and the banner |

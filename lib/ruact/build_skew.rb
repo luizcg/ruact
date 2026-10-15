@@ -25,8 +25,9 @@ module Ruact
     # The `vite.config` files Vite looks for, in its order.
     VITE_CONFIGS = %w[vite.config.js vite.config.mjs vite.config.ts vite.config.cjs vite.config.mts
                       vite.config.cts].freeze
-    # A string literal naming ruact's plugin entry, as `ruact:install` writes it.
-    PLUGIN_IMPORT = %r{(["'`])([^"'`\n]*vite-plugin-ruact/index\.js)\1}
+    # A string literal naming ruact's plugin entry, as `ruact:install` writes it
+    # (no `${…}` interpolation: a path built in JavaScript is not read).
+    PLUGIN_IMPORT = %r{(["'`])([^"'`$\n]*vite-plugin-ruact/index\.js)\1}
     LOCK = Mutex.new
     private_constant :LOCK
 
@@ -121,7 +122,7 @@ module Ruact
         config = File.join(root.to_s, name)
         next unless File.file?(config)
 
-        match = File.read(config).match(PLUGIN_IMPORT)
+        match = File.binread(config).scrub.match(PLUGIN_IMPORT)
         return nil unless match
 
         imported = match[2]
@@ -131,7 +132,9 @@ module Ruact
         return { config: name, path: imported }
       end
       nil
-    rescue SystemCallError
+    rescue StandardError
+      # Read only for the message: whatever goes wrong, the message goes
+      # without the sentence.
       nil
     end
 
