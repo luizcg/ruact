@@ -162,7 +162,16 @@ class ThreadMarker
     env["harness.thread"] = Thread.current.object_id
     Thread.current[:harness_fiber_local] = "set"
     Thread.current.thread_variable_set(:harness_thread_variable, "set")
-    @app.call(env)
+    return @app.call(env) unless env["PATH_INFO"] == "/context_mw"
+
+    # Story 19-2 (AC17) — what a middleware scopes around the app: a locale
+    # (rack-contrib's Rack::Locale and others), a tenant, a database role
+    # (what Rails' DatabaseSelector does with connected_to).
+    I18n.with_locale(:pt) do
+      Tenant.with("from a middleware") do
+        ActiveRecord::Base.connected_to(role: :writing, prevent_writes: true) { @app.call(env) }
+      end
+    end
   end
 end
 
@@ -326,6 +335,10 @@ class PagesController < ApplicationController
   def pg_statement; end
   def pg_transaction; end
   def tx_around; end
+
+  # Story 19-2 (AC17) — the context page, scoped by a middleware and not by
+  # the controller.
+  def context_mw; end
   def tx_block; end
 
   # Story 19-2 (AC16.3) — a transaction begun on the connection and never
@@ -398,6 +411,7 @@ class ProbeController < ActionController::API
       waiting: Gate.waiting,
       events: Harness::Events.all,
       pool: ActiveRecord::Base.connection_pool.stat,
+      i18n: I18n::VERSION,
       pg: Harness::PgGate.activity
     }
   end
@@ -452,7 +466,7 @@ end
 Rails.application.routes.draw do
   root "pages#home"
   %w[plain slow two nested error context db late_cookie leased flaky errors after_write inside mixed pg_slow pg_statement pg_transaction
-     pg_async tx_around tx_block tx_left_open tx_left_open_plain leased_block].each do |page|
+     pg_async tx_around tx_block tx_left_open tx_left_open_plain leased_block context_mw].each do |page|
     get page, to: "pages##{page}"
   end
   post "__gate/reset", to: "probe#reset"

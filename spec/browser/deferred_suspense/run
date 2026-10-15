@@ -5,6 +5,7 @@
 #                         and the perturbation that must fail (writes results/browser.md)
 #   ./run react 19.2.8    the same scenarios with the app's own react-server-dom-webpack
 #                         (appends to results/browser.md)
+#   ./run i18n 1.14.7     the middleware-scope scenario with another i18n
 #   ./run pg              the PostgreSQL scenarios (also part of ./run when initdb is on the PATH)
 #   ./run postgres        what suspense_timeout does to a query running in PostgreSQL
 #                         (writes results/postgres.md; needs initdb and pg_ctl)
@@ -132,10 +133,34 @@ pg() {
   done
 }
 
+# Story 19-2 (AC17) — the middleware scenario with another i18n (the ADR's
+# "i18n before 1.15"): ./run i18n 1.14.7. Appends to results/browser.md.
+other_i18n() {
+  local version=$1
+  cp Gemfile tmp/Gemfile.keep
+  cp Gemfile.lock tmp/Gemfile.lock.keep
+  restore_gems() {
+    cp tmp/Gemfile.keep Gemfile
+    cp tmp/Gemfile.lock.keep Gemfile.lock
+    bundle install --quiet
+  }
+  trap restore_gems EXIT
+  echo "gem \"i18n\", \"$version\"" >>Gemfile
+  bundle install --quiet
+  table "i18n $version — e2e/middleware.spec.mjs"
+  for env in development production; do
+    echo "== i18n $version, $env"
+    RAILS_ENV=$env npx playwright test middleware.spec.mjs 2>&1 | tee tmp/playwright.log
+    row "middleware scopes" "$env" tmp/playwright.log
+    cp "results/middleware-$env.json" "results/middleware-i18n-$version-$env.json"
+  done
+}
+
 case "${1:-all}" in
   all)      setup; browser; if command -v initdb >/dev/null; then pg; else echo "| PostgreSQL | — | not run: no initdb on the PATH |" >>"$BROWSER"; fi ;;
   pg)       setup; pg ;;
+  i18n)     setup; build >/dev/null; other_i18n "${2:?version}" ;;
   react)    setup; other_react "${2:?version}" ;;
   postgres) postgres ;;
-  *)        echo "usage: ./run [react VERSION | pg | postgres]" >&2; exit 1 ;;
+  *)        echo "usage: ./run [react VERSION | i18n VERSION | pg | postgres]" >&2; exit 1 ;;
 esac
