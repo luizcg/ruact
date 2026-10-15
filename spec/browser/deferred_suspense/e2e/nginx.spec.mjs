@@ -20,15 +20,16 @@ const VARIANTS = {
   defaults: "",
   "proxy_http_version 1.1": "proxy_http_version 1.1;",
   "proxy_http_version 1.1, gzip on": "proxy_http_version 1.1;\n      gzip on;\n      gzip_types text/html text/x-component;",
-  // What `X-Accel-Buffering: no` (sent by ruact) is worth: told to ignore it,
-  // nginx buffers the response as its defaults say.
+  // What `X-Accel-Buffering: no` (sent by ruact) is worth: nginx told to
+  // ignore it, so `proxy_buffering on` (its default) applies. Measured on
+  // nginx 1.24.0: the shell still came first — with buffering on, nginx passes
+  // on what it has received; HTTP/1.1 upstream is what streaming needs.
   "proxy_http_version 1.1, X-Accel-Buffering ignored": "proxy_http_version 1.1;\n      proxy_ignore_headers X-Accel-Buffering;",
 };
-// What each variant must show (the gzip one is measured only).
+// What each variant must show (the others are measured only).
 const EXPECTED = {
   defaults: false,
   "proxy_http_version 1.1": true,
-  "proxy_http_version 1.1, X-Accel-Buffering ignored": false,
 };
 
 function startNginx(name, directives) {

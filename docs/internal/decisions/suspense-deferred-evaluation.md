@@ -496,6 +496,11 @@ today: `Cache-Control: no-cache` and `X-Accel-Buffering: no`.
   navigation (the app now logs it once). With `proxy_http_version 1.1;` the
   shell comes before the content, and still does with `gzip on` for
   `text/html` and `text/x-component`; `proxy_buffering` left at its default.
+  And still does with nginx told to ignore `X-Accel-Buffering` (so
+  `proxy_buffering on` applies): with buffering on, nginx 1.24 passed on what
+  it had received. The header is not what makes it stream there; HTTP/1.1
+  upstream is. "nginx buffers a proxied response by default", above, was
+  wrong in the way that matters here.
 - **Other servers**; Puma terminating TLS itself (the socket check reads a
   plain socket); HTTP/2.
 - **PostgreSQL and MySQL**: whether the timeout interrupts a running query
