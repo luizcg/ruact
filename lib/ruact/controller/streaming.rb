@@ -117,10 +117,10 @@ module Ruact
       # Live gave it an ordinary response and the page was sent whole. nginx
       # talks HTTP/1.0 to its upstream unless told otherwise, so in production
       # this is a proxy's configuration, found here or not at all.
-      UNSTREAMED = "%<action>s streams (ruact_streaming or ActionController::Live), but the request came " \
-                   "over HTTP/1.0, so the page was sent whole, not streamed. Behind nginx, set " \
-                   "`proxy_http_version 1.1;` where it proxies to the app. (Rack::Test, in request " \
-                   "specs, speaks HTTP/1.0 too.) (Said once.)"
+      UNSTREAMED = "%<action>s streams (ruact_streaming or ActionController::Live), but Live gave it an " \
+                   "ordinary response — a request over HTTP/1.0 — so the page was sent whole, not " \
+                   "streamed. Behind nginx, set `proxy_http_version 1.1;` where it proxies to the app. " \
+                   "(Rack::Test and controller tests get an ordinary response too.) (Said once.)"
 
       # Logs {UNSTREAMED} the first time an action that streams could not.
       #

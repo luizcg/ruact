@@ -1153,8 +1153,8 @@ module Ruact # rubocop:disable Style/OneClassPerFile
 
         # Over HTTP/1.1 it streams; an action not declared is not concerned.
         Ruact::Controller::Streaming.reset_unstreamed_note!
-        expect(with_log { read_streamed("/streaming-demo/show") }).not_to include("came over HTTP/1.0")
-        expect(with_log { get "/streaming-demo/edit" }).not_to include("came over HTTP/1.0")
+        expect(with_log { read_streamed("/streaming-demo/show") }).not_to include("an ordinary response")
+        expect(with_log { get "/streaming-demo/edit" }).not_to include("an ordinary response")
       end
 
       # Review R3 — HTTP/1.0 (nginx's default to its upstream, Rack::Test): Live

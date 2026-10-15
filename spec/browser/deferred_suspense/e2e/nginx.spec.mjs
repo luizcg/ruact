@@ -21,10 +21,11 @@ const VARIANTS = {
   "proxy_http_version 1.1": "proxy_http_version 1.1;",
   "proxy_http_version 1.1, gzip on": "proxy_http_version 1.1;\n      gzip on;\n      gzip_types text/html text/x-component;",
   // What `X-Accel-Buffering: no` (sent by ruact) is worth: nginx told to
-  // ignore it, so `proxy_buffering on` (its default) applies. Measured on
-  // nginx 1.24.0: the shell still came first — with buffering on, nginx passes
-  // on what it has received; HTTP/1.1 upstream is what streaming needs.
+  // ignore it, so `proxy_buffering on` (its default) applies. Measured only.
   "proxy_http_version 1.1, X-Accel-Buffering ignored": "proxy_http_version 1.1;\n      proxy_ignore_headers X-Accel-Buffering;",
+  // The same with compression: gzip writes on a flush or a full buffer.
+  "proxy_http_version 1.1, gzip on, X-Accel-Buffering ignored":
+    "proxy_http_version 1.1;\n      gzip on;\n      gzip_types text/html text/x-component;\n      proxy_ignore_headers X-Accel-Buffering;",
 };
 // What each variant must show (the others are measured only).
 const EXPECTED = {
@@ -96,7 +97,7 @@ for (const [name, directives] of Object.entries(VARIANTS)) {
       await proxyUp(request);
       const document = await shellFirst(page, request, "first load");
       // AC20 — said once per process: the defaults run first, after the warm-up.
-      const warned = (await events(request)).some((event) => event.includes("came over HTTP/1.0"));
+      const warned = (await events(request)).some((event) => event.includes("gave it an ordinary response"));
       const navigation = await shellFirst(page, request, "navigation");
       measured[name] = { first_load_shell_before_the_gate: document, navigation_shell_before_the_gate: navigation };
       if (name === "defaults") {

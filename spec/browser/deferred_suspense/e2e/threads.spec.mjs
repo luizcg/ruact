@@ -38,6 +38,8 @@ test("AC18.1 — three pages at a gate hold the three threads; a fourth request 
   pages.forEach((page) => page.goto("/two", { waitUntil: "commit" }).catch(() => {}));
   await waitingAt(request, { a: 3 });
   await expect.poll(async () => (await puma(request)).busy).toBe(3);
+  // Each page has parsed its entry script, so it has asked for it.
+  for (const page of pages) await page.waitForFunction(() => document.querySelector("script[type=module]"));
   await expect.poll(async () => (await puma(request)).backlog === unanswered.size, { timeout: 10_000 }).toBe(true);
   const queued = unanswered.size;
 
