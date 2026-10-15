@@ -1,0 +1,10 @@
+{
+  "selector": {
+    "shell": "reading",
+    "block": "writing"
+  },
+  "controller": {
+    "shell": "reading",
+    "block": "reading"
+  }
+}

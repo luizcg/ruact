@@ -11,7 +11,7 @@
 // deferred block sees".
 import fs from "node:fs";
 import { test, expect } from "@playwright/test";
-import { ENV, waitingAt, open, reset } from "./support.mjs";
+import { waitingAt, open, reset, resultFile } from "./support.mjs";
 
 test.beforeEach(async ({ request }) => reset(request));
 
@@ -26,7 +26,7 @@ test("AC17 — a middleware's scope holds for the shell and is gone for a block 
   const shell = await read(page, "in-shell");
   const block = await read(page, "in-block");
   const i18n = (await (await request.get("/__state")).json()).i18n ?? null;
-  fs.writeFileSync(`results/middleware-${ENV}.json`, JSON.stringify({ i18n, shell, block }, null, 2) + "\n");
+  fs.writeFileSync(resultFile("middleware"), JSON.stringify({ i18n, shell, block }, null, 2) + "\n");
 
   expect(shell).toMatchObject({ tenant: "from a middleware", role: "writing", prevent_writes: "true" });
   // The database role the middleware set ended with its block.
@@ -34,3 +34,25 @@ test("AC17 — a middleware's scope holds for the shell and is gone for a block 
   // The tenant is copied to the action's thread when it started.
   expect(block).toMatchObject({ tenant: "from a middleware", thread: "other thread" });
 });
+
+// Story 19-2 (AC17.1) — Rails' DatabaseSelector (primary + replica): the role
+// a GET reads from, in the shell and in a block that runs later; then with the
+// role set in the controller, the fix the guide gives.
+const roles = {};
+test.afterAll(() => fs.writeFileSync(resultFile("database-selector"), JSON.stringify(roles, null, 2) + "\n"));
+
+// The selector's connected_to ends with the middleware's block, when the
+// response starts: the block runs as a writer. Set in the controller, the role
+// holds for the block too.
+const expected = { selector: { shell: "reading", block: "writing" }, controller: { shell: "reading", block: "reading" } };
+
+for (const [path, name] of [["/role", "selector"], ["/role_fixed", "controller"]]) {
+  test(`AC17.1 — the database role, chosen by the ${name}`, async ({ page, request }) => {
+    page.goto(path, { waitUntil: "commit" });
+    await waitingAt(request, { a: 1 });
+    await open(request, "a");
+    await expect(page.locator("#block-role")).toBeVisible();
+    roles[name] = { shell: await page.locator("#shell-role").textContent(), block: await page.locator("#block-role").textContent() };
+    expect(roles[name]).toEqual(expected[name]);
+  });
+}

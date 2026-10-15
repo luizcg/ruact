@@ -1,0 +1,6 @@
+<h1 id="shell">Role</h1>
+<p id="shell-role"><%= ActiveRecord::Base.current_role %></p>
+<Suspense fallback="Loading A…">
+  <% Gate.wait("a") %>
+  <p id="block-role"><%= ActiveRecord::Base.current_role %></p>
+</Suspense>

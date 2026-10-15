@@ -29,6 +29,27 @@ ENV["DATABASE_URL"] ||= "sqlite3:#{File.join(__dir__, 'tmp', "harness-#{ENV.fetc
 POSTGRES = ENV["DATABASE_URL"].start_with?("postgres")
 require "pg" if POSTGRES
 
+# Story 19-2 (AC17.1) — a primary and a replica, as `rails g
+# active_record:multi_db` sets them up; the replica is the same database.
+DATABASE_YML = File.join(__dir__, "tmp", "database.yml")
+File.write(DATABASE_YML, <<~YAML)
+  #{ENV.fetch('RAILS_ENV', 'development')}:
+    primary:
+      url: <%= ENV["DATABASE_URL"] %>
+    primary_replica:
+      url: <%= ENV["DATABASE_URL"] %>
+      replica: true
+YAML
+require "active_record/middleware/database_selector"
+
+# Rails' DatabaseSelector (`config.active_record.database_selector`), for the
+# role pages only: everywhere else a GET that writes would be refused.
+class RoleSelector < ActiveRecord::Middleware::DatabaseSelector
+  def call(env)
+    env["PATH_INFO"].start_with?("/role") ? super : @app.call(env)
+  end
+end
+
 module Harness
   # What happened on the server, in order, for the tests to read: what the
   # views record, what ruact logs, what Rails.error is told.
@@ -104,13 +125,16 @@ module Harness
       @mutex.synchronize { connection.exec("SELECT pg_advisory_unlock_all()") } if POSTGRES
     end
 
-    # Queries of the app's, waiting at a gate or running.
+    # Queries of the app's, waiting at a gate or running; and waiting at gate
+    # 1 and at gate 2.
     def self.activity
       return {} unless POSTGRES
 
       @mutex.synchronize do
         rows = connection.exec(<<~SQL).to_a
           SELECT count(*) FILTER (WHERE wait_event = 'advisory') AS waiting,
+                 count(*) FILTER (WHERE wait_event = 'advisory' AND query LIKE '%harness_gate(1)%') AS waiting_1,
+                 count(*) FILTER (WHERE wait_event = 'advisory' AND query LIKE '%harness_gate(2)%') AS waiting_2,
                  count(*) FILTER (WHERE state = 'active') AS active
           FROM pg_stat_activity
           WHERE pid <> pg_backend_pid() AND datname = current_database() AND query LIKE '%harness_gate%'
@@ -208,6 +232,9 @@ class HarnessApp < Rails::Application
   config.i18n.available_locales = %i[en pt]
   config.i18n.default_locale = :en
   config.middleware.use ThreadMarker
+  config.paths.add "config/database", with: DATABASE_YML
+  config.middleware.use RoleSelector, ActiveRecord::Middleware::DatabaseSelector::Resolver,
+                        ActiveRecord::Middleware::DatabaseSelector::Resolver::Session, { delay: 2.seconds }
   config.active_record.async_query_executor = :global_thread_pool if ENV["HARNESS_ASYNC"] == "1"
 end
 
@@ -292,6 +319,8 @@ module Tenant
   end
 end
 
+ActiveRecord::Base.connects_to database: { writing: :primary, reading: :primary_replica }
+
 class Item < ActiveRecord::Base
   validates :name, length: { minimum: 3 }
 end
@@ -312,6 +341,10 @@ class PagesController < ApplicationController
       action.call
       Harness::Events.add("transaction about to commit")
     end
+  end
+  # Story 19-2 (AC17.1) — the fix for a role a middleware chose: set it in the controller.
+  around_action(only: :role_fixed) do |_controller, action|
+    ActiveRecord::Base.connected_to(role: :reading) { action.call }
   end
   # Story 19-2 (AC6) — an after_action that writes once the page was sent.
   after_action(only: :after_write) do
@@ -370,15 +403,21 @@ class PagesController < ApplicationController
 
   def after_write; end
 
+  # Story 19-2 (AC17.1) — the role DatabaseSelector chose, read in the shell
+  # and in a block; then with the role set in the controller.
+  def role; end
+  def role_fixed; end
+
   # Story 19-2 (AC12) — who, where and when come from the request, so two at
   # once can differ.
   def context
     Current.user = params[:user] || "ada"
   end
 
-  # A slow query inside the block: a lazy relation, loaded where the view walks it.
+  # A slow query inside the block: a lazy relation, loaded where the view walks
+  # it. Held at gate `a`, or at PostgreSQL's gate 1.
   def db
-    @items = Item.where("gate_wait('a') = 1")
+    @items = Item.where(POSTGRES ? "harness_gate(1)" : "gate_wait('a') = 1")
   end
 
   private
@@ -401,6 +440,9 @@ class ProbeController < ActionController::API
 
   def reset
     Gate.reset
+    # A request the reset woke records its end: before the next scenario starts.
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 2
+    sleep 0.01 until Gate.waiting.empty? || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
     Harness::Events.clear
     Harness::Once.clear
     Harness::FailStream.clear
@@ -465,12 +507,27 @@ class ProbeController < ActionController::API
   def pg_quick
     render json: { count: Item.count }
   end
+
+  # Story 19-2 (AC3.3) — something the document is still loading when the
+  # router leaves it: an image, a fetch, a module, each held at its own gate.
+  PIXEL = ["89504e470d0a1a0a0000000d4948445200000001000000010806000000" \
+           "1f15c4890000000d49444154789c63606060f80f00010401005fe5c34b0000000049454e44ae426082"].pack("H*")
+  HELD = { "png" => "image/png", "js" => "text/javascript" }.freeze
+
+  def held
+    Gate.wait(params[:name])
+    case params[:format]
+    when "png" then send_data PIXEL, type: HELD["png"], disposition: "inline"
+    when "js" then render plain: %(export const value = "#{params[:name]}";\n), content_type: HELD["js"]
+    else render plain: "held:#{params[:name]}"
+    end
+  end
 end
 
 Rails.application.routes.draw do
   root "pages#home"
   %w[plain slow two nested error context db late_cookie leased flaky errors after_write inside mixed pg_slow pg_statement pg_transaction
-     pg_async tx_around tx_block tx_left_open tx_left_open_plain leased_block context_mw cached].each do |page|
+     pg_async tx_around tx_block tx_left_open tx_left_open_plain leased_block context_mw cached role role_fixed].each do |page|
     get page, to: "pages##{page}"
   end
   post "__gate/reset", to: "probe#reset"
@@ -484,6 +541,7 @@ Rails.application.routes.draw do
   get "__pg/quick", to: "probe#pg_quick"
   get "__db", to: "probe#db_state"
   post "__db/rollback", to: "probe#db_rollback"
+  get "__held/:name", to: "probe#held"
   get "items/new", to: "items#new"
   post "items", to: "items#create"
   post "items/in_place", to: "items#create_in_place"

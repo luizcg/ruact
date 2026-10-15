@@ -100,6 +100,11 @@ test("AC7 — several failures in one overlay, with the template's file and line
     await open(request, "b");
     await open(request, "c");
     await expect.poll(() => errors.filter((text) => text.includes("[ruact] Server error")).length).toBe(3);
+    // Once the document has ended and React has rendered what it brought:
+    // still three, no failure reported twice.
+    await page.waitForFunction(() => document.readyState === "complete");
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0))));
+    expect(errors.filter((text) => text.includes("[ruact] Server error"))).toHaveLength(3);
     await expect(page.locator("#ruact-dev-overlay")).toHaveCount(0);
     expect(errors.join("\n")).not.toContain("the first failure");
   }

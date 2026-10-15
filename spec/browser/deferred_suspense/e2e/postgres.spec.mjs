@@ -1,6 +1,6 @@
 // Story 19-2 (AC13–AC15) — PostgreSQL (`./run pg`): a query held at an
 // advisory lock the test holds (`harness_gate(n)`), read in pg_stat_activity.
-// Run with HARNESS_TIMEOUT=3; the load_async case runs again with HARNESS_ASYNC=1.
+// Run with HARNESS_TIMEOUT=5; the load_async case runs again with HARNESS_ASYNC=1.
 import net from "node:net";
 import { test, expect } from "@playwright/test";
 import { state, events, reset } from "./support.mjs";
@@ -14,6 +14,11 @@ const release = (request, gate) => request.post(`/__pg/${gate}/release`);
 const pg = async (request) => (await state(request)).pg;
 const atGate = (request, count) =>
   expect.poll(async () => (await pg(request)).waiting, { timeout: 10_000, intervals: [50, 100, 200] }).toBe(count);
+// Who waits at gate 1 and at gate 2.
+const atGates = (request, first, second) =>
+  expect
+    .poll(async () => { const now = await pg(request); return [now.waiting_1, now.waiting_2]; }, { timeout: 10_000, intervals: [50, 100, 200] })
+    .toEqual([first, second]);
 
 async function timed(request, path) {
   const started = Date.now();
@@ -44,7 +49,7 @@ test("AC14.1 — past suspense_timeout, a query still running does not hold the 
   await hold(request, 1);
   page.goto("/pg_slow", { waitUntil: "commit" });
   await atGate(request, 1);
-  // The block runs past the 3 s limit while its query waits at the gate.
+  // The block runs past the 5 s limit while its query waits at the gate.
   await expect
     .poll(async () => (await events(request)).some((event) => event.includes("ran past suspense_timeout")), { timeout: 10_000 })
     .toBe(true);
@@ -95,7 +100,9 @@ test("AC15.1/15.2 — two load_async queries run at once while the shell is on s
   await atGate(request, 2);
   await expect(page.locator("#shell")).toHaveText("Two queries at once");
 
+  // The second query has ended; its boundary still waits for the first (D2).
   await release(request, 2);
+  await atGates(request, 1, 0);
   await expect(page.locator("#second")).toHaveCount(0);
   await release(request, 1);
   await expect(page.locator("#first")).toHaveText("2 first");
@@ -118,10 +125,30 @@ test("AC15.3 — without an executor, load_async runs in the controller: no shel
       .poll(async () => (await events(request)).filter((event) => event.includes("load_async ran its query")).length)
       .toBe(1);
   }
+  // The first query ran; the controller is in the second one now.
   await release(request, 1);
-  await atGate(request, 1);
+  await atGates(request, 0, 1);
   expect(answered).toBe(false);
   await release(request, 2);
   await expect(page.locator("#first")).toHaveText("2 first");
   await expect(page.locator("#second")).toHaveText("2 second");
+});
+
+// Story 19-2 (AC13.3) — the database scenarios of 19-1, on PostgreSQL.
+test("AC13.3 — a slow query inside a block holds one connection while it runs, and gives it back", async ({ page, request }) => {
+  test.skip(ASYNC, "runs without the async executor");
+  await hold(request, 1);
+  page.goto("/db", { waitUntil: "commit" });
+  await atGate(request, 1);
+  await expect(page.getByText("Loading A…", { exact: true })).toBeVisible();
+  expect((await state(request)).pool.busy).toBe(1);
+  await release(request, 1);
+  await expect(page.locator("#a li")).toHaveText(["one", "two"]);
+  await expect.poll(async () => (await state(request)).pool.busy).toBe(0);
+});
+
+test("AC13.3 — a connection the action leased is back in the pool when it ends", async ({ request }) => {
+  test.skip(ASYNC, "runs without the async executor");
+  for (let i = 0; i < 4; i++) expect((await request.get("/leased")).status()).toBe(200);
+  await expect.poll(async () => (await state(request)).pool.busy).toBe(0);
 });

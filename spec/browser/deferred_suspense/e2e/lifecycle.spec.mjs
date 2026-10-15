@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import net from "node:net";
 import { test, expect } from "@playwright/test";
-import { ENV, state, events, waitingAt, open, reset, fallback, clicker } from "./support.mjs";
+import { ENV, state, events, waitingAt, open, reset, fallback, clicker, resultFile } from "./support.mjs";
 
 test.beforeEach(async ({ request }) => reset(request));
 
@@ -128,7 +128,7 @@ test("what a deferred block sees of the request", async ({ page, request }) => {
   const block = await read("in-block");
   const lazy = { shell: await page.locator("#shell-lazy").textContent(), block: await page.locator("#block-lazy").textContent() };
   const order = await events(request);
-  fs.writeFileSync(`results/context-${ENV}.json`, JSON.stringify({ shell, block, lazy, events: order }, null, 2) + "\n");
+  fs.writeFileSync(resultFile("context"), JSON.stringify({ shell, block, lazy, events: order }, null, 2) + "\n");
 
   expect(shell).toMatchObject({ locale: "pt", t: "olá", zone: "Tokyo", tenant: "acme", current: '"ada"' });
   expect(lazy).toEqual({ shell: "lazy lookup (pt)", block: "lazy lookup (pt)" });

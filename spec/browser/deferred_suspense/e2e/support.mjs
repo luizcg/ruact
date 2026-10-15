@@ -2,6 +2,17 @@ import { expect } from "@playwright/test";
 
 export const ENV = process.env.RAILS_ENV ?? "development";
 
+/**
+ * Where a scenario writes what it measured: `results/<name>-<env>.json`, or,
+ * in a run with another React or i18n (`./run react`, `./run i18n`),
+ * `results/<name>-<variant>-<env>.json` — a variant never overwrites the
+ * baseline.
+ */
+export function resultFile(name) {
+  const variant = process.env.HARNESS_VARIANT;
+  return `results/${name}${variant ? `-${variant}` : ""}-${ENV}.json`;
+}
+
 export async function state(request) {
   return (await request.get("/__state")).json();
 }

@@ -100,7 +100,7 @@ other_react() {
   npm install --silent "react@$version" "react-dom@$version" "react-server-dom-webpack@$version"
   table "React $(node -p "require('react/package.json').version") — $(build)"
   for env in development production; do
-    scenarios "the scenarios" "$env"
+    scenarios "the scenarios" "$env" HARNESS_VARIANT="react-$version"
   done
 }
 
@@ -126,10 +126,10 @@ pg() {
   pg_ctl -D "$PG_DIR/data" -o "-p 5498 -k $PG_DIR -c listen_addresses=''" -l "$PG_DIR/log" -w start >/dev/null
   trap 'pg_ctl -D "$PG_DIR/data" -m immediate stop >/dev/null; rm -rf "$PG_DIR"' EXIT
   export DATABASE_URL="postgres:///postgres?host=$PG_DIR&port=5498&pool=10"
-  table "PostgreSQL $(pg_ctl --version | awk '{print $NF}') — e2e/postgres.spec.mjs, suspense_timeout 3 s"
+  table "PostgreSQL $(pg_ctl --version | awk '{print $3}') — e2e/postgres.spec.mjs, suspense_timeout 5 s"
   for env in development production; do
-    scenarios "PostgreSQL" "$env" HARNESS_DB=postgres HARNESS_TIMEOUT=3
-    scenarios "PostgreSQL, async query executor" "$env" HARNESS_DB=postgres HARNESS_TIMEOUT=3 HARNESS_ASYNC=1
+    scenarios "PostgreSQL" "$env" HARNESS_DB=postgres HARNESS_TIMEOUT=5
+    scenarios "PostgreSQL, async query executor" "$env" HARNESS_DB=postgres HARNESS_TIMEOUT=5 HARNESS_ASYNC=1
   done
 }
 
@@ -150,14 +150,17 @@ other_i18n() {
   table "i18n $version — e2e/middleware.spec.mjs"
   for env in development production; do
     echo "== i18n $version, $env"
-    RAILS_ENV=$env npx playwright test middleware.spec.mjs 2>&1 | tee tmp/playwright.log
+    HARNESS_VARIANT="i18n-$version" RAILS_ENV=$env npx playwright test middleware.spec.mjs 2>&1 | tee tmp/playwright.log
     row "middleware scopes" "$env" tmp/playwright.log
-    cp "results/middleware-$env.json" "results/middleware-i18n-$version-$env.json"
   done
 }
 
 case "${1:-all}" in
-  all)      setup; browser; if command -v initdb >/dev/null; then pg; else echo "| PostgreSQL | — | not run: no initdb on the PATH |" >>"$BROWSER"; fi ;;
+  # On CI PostgreSQL is required (AC24.1): a runner without it fails the run.
+  all)      setup; browser
+            if command -v initdb >/dev/null; then pg
+            elif [ -n "${CI:-}" ]; then echo "PostgreSQL is required on CI: no initdb on the PATH" >&2; exit 1
+            else echo "| PostgreSQL | — | not run: no initdb on the PATH |" >>"$BROWSER"; fi ;;
   pg)       setup; pg ;;
   i18n)     setup; build >/dev/null; other_i18n "${2:?version}" ;;
   react)    setup; other_react "${2:?version}" ;;

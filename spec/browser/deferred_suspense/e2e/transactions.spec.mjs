@@ -1,14 +1,14 @@
 // Story 19-2 (AC16) — transactions and connections the action takes.
 import fs from "node:fs";
 import { test, expect } from "@playwright/test";
-import { ENV, state, events, waitingAt, open, reset } from "./support.mjs";
+import { state, events, waitingAt, open, reset, resultFile } from "./support.mjs";
 
 test.beforeEach(async ({ request }) => reset(request));
 test.afterEach(async ({ request }) => request.post("/__db/rollback"));
 
 const db = async (request) => (await request.get("/__db")).json();
 const outcomes = {};
-test.afterAll(() => fs.writeFileSync(`results/transactions-${ENV}.json`, JSON.stringify(outcomes, null, 2) + "\n"));
+test.afterAll(() => fs.writeFileSync(resultFile("transactions"), JSON.stringify(outcomes, null, 2) + "\n"));
 
 test("AC16.1 — the action in a transaction: the blocks run in it, and it commits after the last", async ({ page, request }) => {
   page.goto("/tx_around", { waitUntil: "commit" });
@@ -43,6 +43,10 @@ test("AC16.3 — a transaction left open at the end of the action: as Rails does
   expect((await request.get("/tx_left_open_plain")).status()).toBe(200);
   const plain = (await db(request)).open_transaction_on_checkout;
   outcomes["AC16.3"] = { streamed, without_streaming: plain };
+  // Rails hands the next checkout the transaction left open (measured): the
+  // probe does reach that connection, so the comparison below is not two
+  // misses. Whether ruact should roll it back is Story 19-2's open decision.
+  expect(plain).toBe(true);
   expect(streamed).toBe(plain);
 });
 

@@ -7,6 +7,8 @@
     <%= ruact_head_assets %>
   </head>
   <body>
+    <%# Story 19-2 (AC3.3) — an image of the layout, outside #root, still loading. %>
+    <% if params[:img] %><img id="logo" src="/__held/img.png" alt="logo"><% end %>
     <%# Story 19-2 (AC5.1) — a layout that raises: before any byte is sent. %>
     <% raise "the layout raised" if params[:layout_raises] %>
     <% if params[:assets_first] %>

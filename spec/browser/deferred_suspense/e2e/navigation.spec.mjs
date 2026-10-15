@@ -8,21 +8,25 @@
 // MEASURED, not required: Chrome sometimes keeps reading an aborted response
 // to reuse its connection, and the server, which only sees a closed
 // connection, then renders the next block. Which one happened is written to
-// results/navigation-<env>.json. A document the router leaves is stopped, and
+// results/navigation-<env>.json, and added to
+// results/navigation-<env>.history.jsonl. A document the router leaves is stopped, and
 // that one is required (AC3).
 import fs from "node:fs";
 import { test, expect } from "@playwright/test";
-import { state, events, waitingAt, open, reset, fallback, clicker } from "./support.mjs";
+import { state, events, waitingAt, open, reset, fallback, clicker, resultFile } from "./support.mjs";
 
 test.beforeEach(async ({ request }) => reset(request));
 
 const clientLeft = async (request) => (await events(request)).filter((event) => event.includes("the client left"));
 const count = (list, item) => list.filter((event) => event === item).length;
 
+// The last run's outcomes, and every run's, one line each: an outcome seen
+// once stays on record when the next run does not see it.
 const outcomes = {};
 test.afterAll(() => {
-  const file = `results/navigation-${process.env.RAILS_ENV ?? "development"}.json`;
+  const file = resultFile("navigation");
   fs.writeFileSync(file, JSON.stringify(outcomes, null, 2) + "\n");
+  fs.appendFileSync(file.replace(/\.json$/, ".history.jsonl"), JSON.stringify({ at: new Date().toISOString(), ...outcomes }) + "\n");
 });
 
 // What the server did with the request the router aborted, once its first
@@ -68,6 +72,9 @@ test("AC1 — a navigation that replaces one still pending: the new page, and th
   await expect(page.locator("#shell")).toHaveText("Plain");
   await expect(page.locator("#ruact-dev-overlay")).toHaveCount(0);
   expect(errors.join("\n")).not.toContain("[ruact] Server error");
+  // Whichever way the server went, nothing is left holding a connection.
+  await open(request, "b");
+  await expect.poll(async () => (await state(request)).pool.busy).toBe(0);
 });
 
 test("AC2 — the same page twice: the first request is cut, the second renders once", async ({ page, request }) => {
@@ -87,6 +94,9 @@ test("AC2 — the same page twice: the first request is cut, the second renders 
   await expect(page.locator("#b")).toHaveText("open:b");
   await expect(page.locator("#b")).toHaveCount(1);
   await expect.poll(async () => (await state(request)).pool.busy).toBe(0);
+  // When the server saw the first request's client leave, only the second
+  // rendered its next block.
+  if (outcomes.AC2.startsWith("stopped")) expect(count(await events(request), "block_start:b")).toBe(1);
 });
 
 test("AC2.3 — the same page again from the first load, while its document is open", async ({ page, request }) => {
