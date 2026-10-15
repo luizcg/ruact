@@ -2048,6 +2048,7 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(File).not_to exist(config_path)
         expect(output).to include("vite.config.ts")
         expect(output).to include("function ruactPluginPath()")
+        expect(output).not_to include("--force")
       end
 
       it "overwrites an edited one under --force, as before" do

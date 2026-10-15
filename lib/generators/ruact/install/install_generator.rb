@@ -499,6 +499,8 @@ module Ruact
         say "  3. In it: ruact() in plugins, build.rollupOptions.input '#{Ruact.bootstrap_virtual_id}',"
         say "     and (optional) publicDir: false, so a build does not copy public/ into public/assets/."
         say ""
+        return unless name == "vite.config.js"
+
         say "  Re-run `rails generate ruact:install --force` to write vite.config.js instead."
       end
 
