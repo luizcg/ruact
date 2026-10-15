@@ -1091,6 +1091,21 @@ module Ruact # rubocop:disable Style/OneClassPerFile
         expect(events).to eq([[:shell, false], [:one, true], [:two, true], [:inner, true]])
       end
 
+      # Story 19-2 (AC19.3) — on Rack 2, Rack::ETag reads a 200 body whole to
+      # digest it unless the response has an ETag: a streamed one gets its own,
+      # new each time, so no If-None-Match matches it. Not on Rack 3.
+      it "gives a streamed response an ETag of its own on Rack 2, and none on Rack 3", :aggregate_failures do
+        stub_const("Ruact::Controller::Streaming::RACK_ETAG_BUFFERS", true)
+        first = flight("/streaming-demo/show").headers["ETag"]
+        second = document("/streaming-demo/show").headers["ETag"]
+        expect(first).to match(%r{\AW/"ruact-stream-\h{16}"\z})
+        expect(second).to match(%r{\AW/"ruact-stream-\h{16}"\z})
+        expect(first).not_to eq(second)
+
+        stub_const("Ruact::Controller::Streaming::RACK_ETAG_BUFFERS", false)
+        expect(flight("/streaming-demo/show").headers["ETag"]).to be_nil
+      end
+
       # Story 19-2 (AC21) — an app whose CSP allows scripts by nonce: every
       # script ruact writes carries the request's nonce, the rows of each
       # boundary included; without a generator, not a byte changes.

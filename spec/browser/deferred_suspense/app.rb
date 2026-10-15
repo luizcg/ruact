@@ -21,6 +21,7 @@ require "web-console" if ENV.fetch("RAILS_ENV", "development") == "development"
 require "ruact"
 
 require_relative "gate"
+require_relative "control"
 
 %w[tmp log results].each { |dir| FileUtils.mkdir_p(File.join(__dir__, dir)) }
 
@@ -285,6 +286,8 @@ end
 ActiveSupport.on_load(:active_record_sqlite3adapter) { prepend GateFunction }
 
 Rails.application.initialize!
+
+Control.start(Integer(ENV["HARNESS_CONTROL_PORT"], 10)) if ENV["HARNESS_CONTROL_PORT"].present?
 
 # What the app's error reporting (Sentry and the like) would be told.
 Rails.error.subscribe(Class.new do

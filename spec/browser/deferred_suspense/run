@@ -6,11 +6,13 @@
 #   ./run react 19.2.8    the same scenarios with the app's own react-server-dom-webpack
 #                         (appends to results/browser.md)
 #   ./run i18n 1.14.7     the middleware-scope scenario with another i18n
+#   ./run rack 2.2.24     the proof and the lifecycle with Rack 2.2
 #   ./run pg              the PostgreSQL scenarios (also part of ./run when initdb is on the PATH)
 #   ./run postgres        what suspense_timeout does to a query running in PostgreSQL
 #                         (writes results/postgres.md; needs initdb and pg_ctl)
 #
-# Needs Ruby (bundler) and Node. Uses ports 4190 and 5199. Runs from a
+# Needs Ruby (bundler) and Node. Uses ports 4190, 4191 (the threads scenario's
+# control listener), 4192 (nginx, when it is on the PATH) and 5199. Runs from a
 # `git archive` of the repository in an empty directory, too.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -18,7 +20,7 @@ cd "$(dirname "$0")"
 BROWSER=results/browser.md
 
 setup() {
-  for port in 4190 5199; do
+  for port in 4190 4191 4192 5199; do
     if lsof -ti "tcp:$port" >/dev/null 2>&1; then echo "port $port is in use" >&2; exit 1; fi
   done
   mkdir -p tmp log results
@@ -99,6 +101,12 @@ browser() {
     perturbation "$env"
     scenarios "a CSP by nonce, without 'unsafe-inline'" "$env" HARNESS_CSP=1
     csp_perturbation "$env"
+    scenarios "Puma with 3 threads (\`e2e/threads.spec.mjs\`)" "$env" HARNESS_THREADS=3
+    if command -v nginx >/dev/null; then
+      scenarios "nginx in front of Puma (\`e2e/nginx.spec.mjs\`)" "$env" HARNESS_NGINX=1
+    else
+      echo "| nginx in front of Puma | $env | not run: no nginx on the PATH |" >>"$BROWSER"
+    fi
   done
 }
 
@@ -174,6 +182,28 @@ other_i18n() {
 # What this run wrote is newer than this stamp (CI prints only that).
 mkdir -p tmp && touch tmp/run-started
 
+# Story 19-2 (AC19.3) — the proof with Rack 2.2, whose ETag middleware
+# buffers a body it digests: ./run rack 2.2.24. Appends to results/browser.md.
+other_rack() {
+  local version=$1
+  cp Gemfile tmp/Gemfile.keep
+  cp Gemfile.lock tmp/Gemfile.lock.keep
+  restore_gems() {
+    cp tmp/Gemfile.keep Gemfile
+    cp tmp/Gemfile.lock.keep Gemfile.lock
+    bundle install --quiet
+  }
+  trap restore_gems EXIT
+  echo "gem \"rack\", \"$version\"" >>Gemfile
+  bundle install --quiet
+  table "Rack $(bundle exec ruby -e 'require "rack"; print Rack.release') — e2e/deferred.spec.mjs, e2e/lifecycle.spec.mjs"
+  for env in development production; do
+    echo "== Rack $version, $env"
+    HARNESS_VARIANT="rack-$version" RAILS_ENV=$env npx playwright test deferred.spec.mjs lifecycle.spec.mjs 2>&1 | tee tmp/playwright.log
+    row "the proof and the lifecycle" "$env" tmp/playwright.log
+  done
+}
+
 case "${1:-all}" in
   # On CI PostgreSQL is required (AC24.1): a runner without it fails the run.
   all)      setup; browser
@@ -182,7 +212,8 @@ case "${1:-all}" in
             else echo "| PostgreSQL | — | not run: no initdb on the PATH |" >>"$BROWSER"; fi ;;
   pg)       setup; pg ;;
   i18n)     setup; build >/dev/null; other_i18n "${2:?version}" ;;
+  rack)     setup; build >/dev/null; other_rack "${2:?version}" ;;
   react)    setup; other_react "${2:?version}" ;;
   postgres) postgres ;;
-  *)        echo "usage: ./run [react VERSION | i18n VERSION | pg | postgres]" >&2; exit 1 ;;
+  *)        echo "usage: ./run [react VERSION | i18n VERSION | rack VERSION | pg | postgres]" >&2; exit 1 ;;
 esac

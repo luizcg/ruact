@@ -481,7 +481,11 @@ today: `Cache-Control: no-cache` and `X-Accel-Buffering: no`.
   kept in Rails' execution state is copied to the action's thread. Scopes
   belong in the controller.
 - **Rack 2.2**, whose `ETag` buffers any body unless it sees
-  `Cache-Control: no-cache` or `Last-Modified`.
+  `Cache-Control: no-cache` or `Last-Modified`. *Since 19-2 (`./run rack
+  2.2.24`):* wrong on the first count — 2.2.24 skips only a response with an
+  `ETag` or a `Last-Modified`, so every streamed page was held whole. The gem
+  now gives a streamed response a weak `ETag` of its own on Rack 2; the proof
+  and the lifecycle pass with 2.2.24, and fail without that.
 - **A reverse proxy.** By its documentation nginx buffers a proxied response by
   default (`proxy_buffering on`) and honours `X-Accel-Buffering: no`, which the
   gem sends; a proxy that compresses, or that ignores that header, has to be

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "securerandom"
+
 module Ruact
   module Controller
     # Story 19-1 (ADR D6, option A) — which actions send their page as it
@@ -138,6 +140,24 @@ module Ruact
       # @api private
       def self.reset_unstreamed_note!
         @unstreamed_noted = false
+      end
+
+      # Story 19-2 (AC19.3) — Rack 2's `Rack::ETag` digests a 200 body unless
+      # the response has an `ETag` or a `Last-Modified`, reading it whole first
+      # (`Cache-Control: no-cache` does not stop it): a page that streams was
+      # held until its last `<Suspense>`. Measured with Rack 2.2.24. A weak ETag
+      # of its own, new for every response, so that no `If-None-Match` ever
+      # matches it. Rack 3 leaves a body it cannot hold in memory alone.
+      RACK_ETAG_BUFFERS = Gem::Version.new(::Rack.release) < Gem::Version.new("3")
+
+      # Sets that ETag on +headers+ when the app runs on Rack 2.
+      #
+      # @api private
+      # @param headers [Hash, ActionDispatch::Response::Headers]
+      # @return [void]
+      def self.keep_unbuffered(headers)
+        headers["ETag"] = %(W/"ruact-stream-#{SecureRandom.hex(8)}") if RACK_ETAG_BUFFERS
+        nil
       end
 
       # Includes `ActionController::Live` in +controller+ for `ruact_streaming`,
