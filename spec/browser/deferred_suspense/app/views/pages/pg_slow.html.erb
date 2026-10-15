@@ -1,0 +1,9 @@
+<h1 id="shell">PostgreSQL</h1>
+<Suspense fallback="Loading A…">
+  <% Harness::Events.add("block_start:a") %>
+  <p id="a"><%= Item.where("harness_gate(1)").count %> items</p>
+</Suspense>
+<Suspense fallback="Loading B…">
+  <% Harness::Events.add("block_start:b") %>
+  <p id="b">b</p>
+</Suspense>

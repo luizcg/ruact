@@ -16,6 +16,9 @@ const rails = {
     PORT: String(port),
     VITE_PORT: String(vitePort),
     HARNESS_IN_PLACE: process.env.HARNESS_IN_PLACE ?? "",
+    HARNESS_TIMEOUT: process.env.HARNESS_TIMEOUT ?? "",
+    HARNESS_ASYNC: process.env.HARNESS_ASYNC ?? "",
+    ...(process.env.DATABASE_URL ? { DATABASE_URL: process.env.DATABASE_URL } : {}),
   },
   reuseExistingServer: false,
   timeout: 120_000,
@@ -30,7 +33,7 @@ const vite = {
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: process.env.HARNESS_IN_PLACE ? ["deferred.spec.mjs"] : ["deferred.spec.mjs", "lifecycle.spec.mjs", "navigation.spec.mjs", "failures.spec.mjs", "placement.spec.mjs", "forms.spec.mjs", "isolation.spec.mjs"],
+  testMatch: process.env.HARNESS_IN_PLACE ? ["deferred.spec.mjs"] : process.env.HARNESS_DB === "postgres" ? ["postgres.spec.mjs"] : ["deferred.spec.mjs", "lifecycle.spec.mjs", "navigation.spec.mjs", "failures.spec.mjs", "placement.spec.mjs", "forms.spec.mjs", "isolation.spec.mjs"],
   workers: 1,
   fullyParallel: false,
   retries: 0,

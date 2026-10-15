@@ -5,6 +5,7 @@
 #                         and the perturbation that must fail (writes results/browser.md)
 #   ./run react 19.2.8    the same scenarios with the app's own react-server-dom-webpack
 #                         (appends to results/browser.md)
+#   ./run pg              the PostgreSQL scenarios (also part of ./run when initdb is on the PATH)
 #   ./run postgres        what suspense_timeout does to a query running in PostgreSQL
 #                         (writes results/postgres.md; needs initdb and pg_ctl)
 #
@@ -114,9 +115,27 @@ postgres() {
   bundle exec ruby measure/postgres.rb "$PG_DIR" 5498
 }
 
+# Story 19-2 (AC13) — the same app on a throwaway PostgreSQL: the scenarios of
+# e2e/postgres.spec.mjs, without and with the async query executor. Needs
+# initdb and pg_ctl on the PATH.
+pg() {
+  build >/dev/null
+  PG_DIR=$(mktemp -d)
+  initdb -D "$PG_DIR/data" --auth=trust >/dev/null
+  pg_ctl -D "$PG_DIR/data" -o "-p 5498 -k $PG_DIR -c listen_addresses=''" -l "$PG_DIR/log" -w start >/dev/null
+  trap 'pg_ctl -D "$PG_DIR/data" -m immediate stop >/dev/null; rm -rf "$PG_DIR"' EXIT
+  export DATABASE_URL="postgres:///postgres?host=$PG_DIR&port=5498&pool=10"
+  table "PostgreSQL $(postgres --version | awk '{print $3}') — e2e/postgres.spec.mjs, suspense_timeout 3 s"
+  for env in development production; do
+    scenarios "PostgreSQL" "$env" HARNESS_DB=postgres HARNESS_TIMEOUT=3
+    scenarios "PostgreSQL, async query executor" "$env" HARNESS_DB=postgres HARNESS_TIMEOUT=3 HARNESS_ASYNC=1
+  done
+}
+
 case "${1:-all}" in
-  all)      setup; browser ;;
+  all)      setup; browser; if command -v initdb >/dev/null; then pg; else echo "| PostgreSQL | — | not run: no initdb on the PATH |" >>"$BROWSER"; fi ;;
+  pg)       setup; pg ;;
   react)    setup; other_react "${2:?version}" ;;
   postgres) postgres ;;
-  *)        echo "usage: ./run [react VERSION | postgres]" >&2; exit 1 ;;
+  *)        echo "usage: ./run [react VERSION | pg | postgres]" >&2; exit 1 ;;
 esac

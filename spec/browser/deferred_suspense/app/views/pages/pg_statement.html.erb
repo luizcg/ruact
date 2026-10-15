@@ -1,0 +1,8 @@
+<h1 id="shell">Statement timeout</h1>
+<Suspense fallback="Loading A…">
+  <% Item.transaction do %>
+    <% Item.connection.execute("SET LOCAL statement_timeout = '300ms'") %>
+    <p id="a"><%= Item.where("harness_gate(1)").count %> items</p>
+  <% end %>
+</Suspense>
+<Suspense fallback="Loading B…"><p id="b">b</p></Suspense>

@@ -110,29 +110,10 @@ module Ruact
     # variables as they were when the tag was met, and returns what it wrote.
     # Only what it writes: a value it ends on is not content.
     def evaluate(pending)
-      flow = declared_content(pending.view)
+      declared = DeclaredContent.take(pending.view) if @development
       html = with_locals(pending.block, pending.locals) { run_in_view(pending) }
-      check_declared_content!(pending.view, flow) if flow
+      DeclaredContent.check!(pending.view, declared) if declared
       html
-    end
-
-    # Story 19-2 (AC10) — in development, what the view declared with
-    # `content_for`/`provide`, to see whether a block declares more. The layout
-    # was sent before the block ran: nothing it declares shows.
-    def declared_content(view)
-      return nil unless @development && view.respond_to?(:view_flow) && view.view_flow.respond_to?(:content)
-
-      view.view_flow.content.transform_values(&:to_s)
-    end
-
-    def check_declared_content!(view, before)
-      after = view.view_flow.content
-      changed = after.keys.reject { |name| name == :layout || after[name].to_s == before[name] }
-      return if changed.empty?
-
-      raise Ruact::Error,
-            "#{changed.map { |name| "content_for :#{name}" }.join(', ')} inside a <Suspense> runs after the " \
-            "layout was sent, so the layout never shows it. Move it outside the <Suspense>."
     end
 
     def run_in_view(pending)
@@ -198,13 +179,19 @@ module Ruact
       raise Expired, "the delay (#{delay}s) is longer than suspense_timeout" if delay && delay > limit
 
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      # A query still running at the limit is cancelled on the server, so its
+      # connection is free again (Story 19-2, QueryWatch).
+      watch = QueryWatch.start(Thread.current, limit)
       begin
         Timeout.timeout(limit) { wait_then(delay, &) }
       rescue Timeout::Error => e
         # Ours only when the limit has passed; earlier, it is the content's.
         raise if Process.clock_gettime(Process::CLOCK_MONOTONIC) - started < limit
 
+        watch&.cancel_now(Thread.current)
         raise Expired, "ran past suspense_timeout (#{limit}s)", cause: e
+      ensure
+        watch&.stop
       end
     end
 

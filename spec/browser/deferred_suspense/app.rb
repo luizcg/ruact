@@ -25,6 +25,9 @@ require_relative "gate"
 %w[tmp log results].each { |dir| FileUtils.mkdir_p(File.join(__dir__, dir)) }
 
 ENV["DATABASE_URL"] ||= "sqlite3:#{File.join(__dir__, 'tmp', "harness-#{ENV.fetch('PORT', '0')}.sqlite3")}?pool=10"
+# Story 19-2 (AC13) — `./run pg` points DATABASE_URL at a throwaway PostgreSQL.
+POSTGRES = ENV["DATABASE_URL"].start_with?("postgres")
+require "pg" if POSTGRES
 
 module Harness
   # What happened on the server, in order, for the tests to read: what the
@@ -74,6 +77,45 @@ module Harness
 
         @calls += 1
         @calls == 2
+      end
+    end
+  end
+
+  # Story 19-2 (AC13) — PostgreSQL's gate: a query waits in `harness_gate(n)`
+  # for an advisory lock the test holds on a connection of its own, outside the
+  # app's pool; who is waiting is read from pg_stat_activity.
+  module PgGate
+    @mutex = Mutex.new
+
+    def self.connection
+      # `pool` is Active Record's, not libpq's.
+      @connection ||= PG.connect(ENV.fetch("DATABASE_URL").sub(/[&?]pool=\d+/, ""))
+    end
+
+    def self.hold(number)
+      @mutex.synchronize { connection.exec_params("SELECT pg_advisory_lock($1)", [number]) }
+    end
+
+    def self.release(number)
+      @mutex.synchronize { connection.exec_params("SELECT pg_advisory_unlock($1)", [number]) }
+    end
+
+    def self.reset
+      @mutex.synchronize { connection.exec("SELECT pg_advisory_unlock_all()") } if POSTGRES
+    end
+
+    # Queries of the app's, waiting at a gate or running.
+    def self.activity
+      return {} unless POSTGRES
+
+      @mutex.synchronize do
+        rows = connection.exec(<<~SQL).to_a
+          SELECT count(*) FILTER (WHERE wait_event = 'advisory') AS waiting,
+                 count(*) FILTER (WHERE state = 'active') AS active
+          FROM pg_stat_activity
+          WHERE pid <> pg_backend_pid() AND datname = current_database() AND query LIKE '%harness_gate%'
+        SQL
+        rows.first.transform_values(&:to_i)
       end
     end
   end
@@ -155,6 +197,7 @@ class HarnessApp < Rails::Application
   config.i18n.available_locales = %i[en pt]
   config.i18n.default_locale = :en
   config.middleware.use ThreadMarker
+  config.active_record.async_query_executor = :global_thread_pool if ENV["HARNESS_ASYNC"] == "1"
 end
 
 Ruact.configure do |config|
@@ -163,7 +206,7 @@ Ruact.configure do |config|
   # Scenarios synchronise on gates, not time: the timeout must not end a block
   # a scenario is still holding at a gate. HARNESS_TIMEOUT sets it for the ones
   # that measure it.
-  config.suspense_timeout = Float(ENV.fetch("HARNESS_TIMEOUT", "30"))
+  config.suspense_timeout = Float(ENV["HARNESS_TIMEOUT"].presence || "30")
 end
 
 # A query that waits at a gate: `SELECT … WHERE gate_wait('a') = 1` holds its
@@ -193,6 +236,12 @@ end.new)
 ActiveRecord::Schema.verbose = false
 ActiveRecord::Schema.define do
   create_table(:items, force: true) { |t| t.string :name }
+end
+if POSTGRES
+  ActiveRecord::Base.connection.execute(<<~SQL)
+    CREATE OR REPLACE FUNCTION harness_gate(gate bigint) RETURNS boolean LANGUAGE plpgsql AS $$
+    BEGIN PERFORM pg_advisory_xact_lock_shared(gate); RETURN true; END $$
+  SQL
 end
 
 # Story 19-2 (AC5): the failure the test arms, at the second boundary — after
@@ -266,6 +315,16 @@ class PagesController < ApplicationController
   def errors; end
   def inside; end
   def mixed; end
+  def pg_slow; end
+  def pg_statement; end
+  def pg_transaction; end
+
+  # Story 19-2 (AC15) — two queries started early, each held at its own gate.
+  def pg_async
+    @first = Item.where("harness_gate(1)").load_async
+    @second = Item.where("harness_gate(2)").load_async
+  end
+
   def after_write; end
 
   # Story 19-2 (AC12) — who, where and when come from the request, so two at
@@ -302,6 +361,7 @@ class ProbeController < ActionController::API
     Harness::Events.clear
     Harness::Once.clear
     Harness::FailStream.clear
+    Harness::PgGate.reset
     head :no_content
   end
 
@@ -310,7 +370,8 @@ class ProbeController < ActionController::API
       env: Rails.env,
       waiting: Gate.waiting,
       events: Harness::Events.all,
-      pool: ActiveRecord::Base.connection_pool.stat
+      pool: ActiveRecord::Base.connection_pool.stat,
+      pg: Harness::PgGate.activity
     }
   end
 
@@ -326,11 +387,27 @@ class ProbeController < ActionController::API
     Harness::FailStream.arm
     head :no_content
   end
+
+  def pg_hold
+    Harness::PgGate.hold(Integer(params[:gate], 10))
+    head :no_content
+  end
+
+  def pg_release
+    Harness::PgGate.release(Integer(params[:gate], 10))
+    head :no_content
+  end
+
+  # A quick query, timed by the test: does it wait for one left running?
+  def pg_quick
+    render json: { count: Item.count }
+  end
 end
 
 Rails.application.routes.draw do
   root "pages#home"
-  %w[plain slow two nested error context db late_cookie leased flaky errors after_write inside mixed].each do |page|
+  %w[plain slow two nested error context db late_cookie leased flaky errors after_write inside mixed pg_slow pg_statement pg_transaction
+     pg_async].each do |page|
     get page, to: "pages##{page}"
   end
   post "__gate/reset", to: "probe#reset"
@@ -339,6 +416,9 @@ Rails.application.routes.draw do
   get "__session", to: "probe#session_probe"
   get "up", to: "probe#up"
   post "__fail_stream", to: "probe#fail_stream"
+  post "__pg/:gate/hold", to: "probe#pg_hold"
+  post "__pg/:gate/release", to: "probe#pg_release"
+  get "__pg/quick", to: "probe#pg_quick"
   get "items/new", to: "items#new"
   post "items", to: "items#create"
   post "items/in_place", to: "items#create_in_place"
