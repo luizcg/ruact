@@ -47,6 +47,31 @@ module Harness
     end
   end
 
+  # Story 19-2 (AC5) — a failure once the response has started, outside any
+  # block: armed by the test, it makes the second boundary's write raise.
+  module FailStream
+    @mutex = Mutex.new
+    @armed = false
+    @calls = 0
+
+    def self.arm
+      @mutex.synchronize { @armed = true; @calls = 0 }
+    end
+
+    def self.clear
+      @mutex.synchronize { @armed = false; @calls = 0 }
+    end
+
+    def self.now?
+      @mutex.synchronize do
+        next false unless @armed
+
+        @calls += 1
+        @calls == 2
+      end
+    end
+  end
+
   # Something that happens the first time only, until the next reset.
   module Once
     @mutex = Mutex.new
@@ -161,6 +186,16 @@ ActiveRecord::Schema.define do
   create_table(:items, force: true) { |t| t.string :name }
 end
 
+# Story 19-2 (AC5): the failure the test arms, at the second boundary — after
+# the shell was written, outside any block.
+Ruact::DeferredRender.prepend(Module.new do
+  def next_rows
+    raise "the stream failed after the first write" if Harness::FailStream.now?
+
+    super
+  end
+end)
+
 # The perturbation: the helper renders every <Suspense> in place, as 0.0.19
 # did, though the action still streams.
 if ENV["HARNESS_IN_PLACE"] == "1"
@@ -205,6 +240,12 @@ class PagesController < ApplicationController
   ruact_streaming except: :plain
 
   around_action :scoped, only: :context
+  # Story 19-2 (AC6) — an after_action that writes once the page was sent.
+  after_action(only: :after_write) do
+    cookies[:after] = "1"
+    response.headers["X-After"] = "1"
+    Harness::Events.add("after_write ran")
+  end
   after_action(only: :context) { Harness::Events.add("after_action") }
 
   def home; end
@@ -216,6 +257,8 @@ class PagesController < ApplicationController
   def late_cookie; end
   def leased; end
   def flaky; end
+  def errors; end
+  def after_write; end
 
   def context
     Current.user = "ada"
@@ -248,6 +291,7 @@ class ProbeController < ActionController::API
     Gate.reset
     Harness::Events.clear
     Harness::Once.clear
+    Harness::FailStream.clear
     head :no_content
   end
 
@@ -267,11 +311,16 @@ class ProbeController < ActionController::API
   def up
     head :ok
   end
+
+  def fail_stream
+    Harness::FailStream.arm
+    head :no_content
+  end
 end
 
 Rails.application.routes.draw do
   root "pages#home"
-  %w[plain slow two nested error context db late_cookie leased flaky].each do |page|
+  %w[plain slow two nested error context db late_cookie leased flaky errors after_write].each do |page|
     get page, to: "pages##{page}"
   end
   post "__gate/reset", to: "probe#reset"
@@ -279,4 +328,5 @@ Rails.application.routes.draw do
   get "__state", to: "probe#state"
   get "__session", to: "probe#session_probe"
   get "up", to: "probe#up"
+  post "__fail_stream", to: "probe#fail_stream"
 end

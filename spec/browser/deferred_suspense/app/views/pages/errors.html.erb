@@ -1,0 +1,4 @@
+<h1 id="shell">Errors</h1>
+<Suspense fallback="Loading A…"><% raise ArgumentError, "the first failure" %></Suspense>
+<Suspense fallback="Loading B…"><% Gate.wait("b") %><% raise KeyError, "the second failure" %></Suspense>
+<Suspense fallback="Loading C…"><% Gate.wait("c") %><% raise IndexError, "the third failure" %></Suspense>

@@ -80,6 +80,35 @@ module Ruact
       end
     end
 
+    # Story 19-2 (AC7.2) — a tag over several lines kept to one shifted every
+    # line below it in an error and a backtrace.
+    describe "a tag written over several lines" do
+      def lines_kept(source)
+        out = described_class.transform(source, registry: nil)
+        [out.lines.count, out.index("@below") && out[0...out.index("@below")].count("\n")]
+      end
+
+      it "keeps its lines, so what follows is on its own line", :aggregate_failures do
+        source = %(<Card\n  title={"multi"}\n/>\n<%= @below %>\n)
+        expect(lines_kept(source)).to eq([source.lines.count, 3])
+      end
+
+      it "does not count twice the line breaks its props' code carries" do
+        source = %(<Card\n  title={[\n    1\n  ]}\n/>\n<%= @below %>\n)
+        expect(lines_kept(source)).to eq([source.lines.count, 5])
+      end
+
+      it "keeps them for a tag with children too" do
+        source = %(<Card\n  title={"multi"}>\n  <p>x</p>\n</Card>\n<%= @below %>\n)
+        expect(lines_kept(source)).to eq([source.lines.count, 4])
+      end
+
+      it "writes nothing more for a tag on one line" do
+        expect(described_class.transform(%(<Card title={"one"} />), registry: nil))
+          .to eq(%(<%= __ruact_component__("Card", { "title" => "one" }) %>))
+      end
+    end
+
     describe "passthrough (no transformation)" do
       it "does not touch lowercase HTML tags" do
         source = '<div class="foo"><span>hello</span></div>'

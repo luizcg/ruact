@@ -118,7 +118,7 @@ module ControllerRequestSpecSupport
         get "/suspense-demo/show", to: "controller_request_spec_support/suspense_demo#show"
         get "/suspense-live-demo/show", to: "controller_request_spec_support/suspense_live_demo#show"
         # Story 19-1 — `ruact_streaming`.
-        %w[show edit plain raising slow delayed late_write leased quiet after_raises].each do |action|
+        %w[show edit plain raising slow delayed late_write leased quiet after_raises positions].each do |action|
           get "/streaming-demo/#{action}", to: "controller_request_spec_support/streaming_demo##{action}"
         end
         # An endpoint whose route names no action.
@@ -287,7 +287,7 @@ module ControllerRequestSpecSupport
   class StreamingDemoController < ActionController::Base
     include Ruact::Controller
 
-    ruact_streaming only: %i[show plain raising slow delayed late_write leased quiet after_raises]
+    ruact_streaming only: %i[show plain raising slow delayed late_write leased quiet after_raises positions]
 
     append_view_path File.expand_path("../fixtures/story_7_9_views", __dir__)
 
@@ -304,6 +304,7 @@ module ControllerRequestSpecSupport
     def delayed = ruact_render
     def late_write = ruact_render
     def quiet = ruact_render
+    def positions = ruact_render
 
     # Story 19-2 (AC6) — an after_action that raises once the page was sent.
     after_action(only: :after_raises) { raise ArgumentError, "after the page" }
@@ -1167,6 +1168,17 @@ module Ruact # rubocop:disable Style/OneClassPerFile
             body = document("/streaming-demo/quiet").body
             expect(body).not_to include("ruact:suspense-error"), body
           end
+        end
+
+        # Story 19-2 (AC7.2) — React's development client rebuilds the server's
+        # stack from six-element frames; four left every frame at line 2.
+        it "gives the error row frames React reads, with the template's file and line", :aggregate_failures do
+          body = flight("/streaming-demo/positions").body
+          row = body.lines.find { |line| line.include?("on line 8") }
+          frames = JSON.parse(row.sub(/\A\h+:E/, ""))["stack"]
+          expect(frames).to all(have_attributes(length: 6))
+          template = frames.find { |frame| frame[1].end_with?("streaming_demo/positions.html.erb") }
+          expect(template[2..]).to eq([8, 1, 0, 0])
         end
 
         it "names the line to add when an action that does not stream renders a <Suspense>, once",

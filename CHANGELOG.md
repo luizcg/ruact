@@ -10,11 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Leaving a page whose document is still arriving stops loading it.** A page that streams keeps its document open until its last `<Suspense>`; when the router navigates away (a link, a form, `revalidate()`) before that, it now calls `window.stop()` first, so the connection closes and the server, which asks before each block, starts no further block for a page nobody will see. Only while the document itself is loading — a page that has finished is not touched.
+- **The development overlay shows every `<Suspense>` that failed**, one under the other, instead of only the last; a click closes it, and the next failure opens it again.
 - **A streamed Flight response is `Cache-Control: no-store`** (it was `no-cache`). A response the browser may store holds its cache entry while it streams, and Chrome then held a second request for the same URL — `revalidate()` on a page still streaming, the same link clicked again — until the first one ended. The streamed document keeps `no-cache`, so the page can still enter the back/forward cache.
 
 ### Fixed
 
 - **A client component or a `<Suspense>` inside a `cache` block no longer comes back as another one.** A fragment cache stores the HTML a render produced, with the markers that render gave its components and blocks; read back in another render, a marker could name one of *that* render's components (the page showed the wrong component, with its props) or another boundary's block (a `<Suspense>` showed another one's content). Every marker now carries the id of the render that wrote it. A client component read from the cache raises `Ruact::HtmlConverterError`, naming the `cache` and what to do (keep the component outside it); a `<Suspense>` read from the cache gets an error row for that boundary only, saying the same, and the rest of the page renders.
+- **Error lines below a component tag written over several lines are right.** The preprocessor put a multi-line tag on one line, so Rails named a line too early for any error below it (an error page, a backtrace) — since component tags existed. The tag's line breaks are kept.
+- **The development overlay's backtrace names the right template lines.** React's development client reads each server frame as six fields; ruact sent four, and every frame came out at line 2.
 - **An exception raised after a streamed page was sent (an `after_action`) reaches `Rails.error`.** `ActionController::Live` only logs what is raised once the response has started, so an app's error reporting never heard of it; ruact reports it (`source: "ruact.stream"`). The page in the browser is unchanged.
 
 ## [0.0.20] - 2026-10-14

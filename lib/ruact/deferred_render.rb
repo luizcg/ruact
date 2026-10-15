@@ -183,11 +183,16 @@ module Ruact
       payload
     end
 
-    # React's development client reads `stack` as `[function, file, line, column]`.
+    # React's development client reads each frame of `stack` as
+    # `[function, file, line, column, enclosing line, enclosing column]` and
+    # rebuilds the server's call stack from it. A four-element frame (what this
+    # sent before Story 19-2) left the last two undefined, and every frame came
+    # out at line 2. Ruby has no column and no enclosing function: column 1,
+    # enclosing 0 (none).
     def development_stack(error)
       Array(error.backtrace).first(STACK_FRAMES).filter_map do |frame|
         match = frame.match(/\A(.+?):(\d+)(?::in [`'](.+)')?\z/)
-        match && [match[3] || "(ruby)", match[1], Integer(match[2], 10), 0]
+        match && [match[3] || "(ruby)", match[1], Integer(match[2], 10), 1, 0, 0]
       end
     end
 
