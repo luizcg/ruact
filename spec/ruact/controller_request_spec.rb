@@ -15,6 +15,12 @@ require "action_controller/railtie"
 require "action_view/railtie"
 
 require "spec_helper"
+# `lib/ruact.rb` loads the Railtie only when Rails is defined. When another
+# spec file loaded `spec_helper` (and with it ruact) first, Rails was not, and
+# the Railtie — which installs the ERB preprocessor hook this app needs — was
+# never loaded: 61 failures run after `markers_spec.rb`. In an app, Rails is
+# always loaded before the gem (`config/application.rb`).
+require "ruact/railtie"
 
 require "rack/test"
 require "stringio"
@@ -792,9 +798,10 @@ module Ruact # rubocop:disable Style/OneClassPerFile
       end
 
       # Story 17.0b — `"ruact"` names the layout the GEM ships; its view path is
-      # appended by the Railtie. This app boots WITHOUT the Railtie (the concern
-      # is required by hand at the top of this file), so here the path never
-      # arrives — the one way "ruact's own layout is missing" happens. It has to
+      # appended by the Railtie. This app's controller never gets that view path
+      # (the concern is required by hand at the top of this file, and the
+      # controller is not the one the Railtie's initializer reaches), so here the
+      # path never arrives — the one way "ruact's own layout is missing" happens. It has to
       # degrade and say so in terms of the Railtie, not tell the developer to
       # edit a layout they never wrote. The resolving path is proven by
       # spec/ruact/gem_layout_boot_spec.rb, which boots through the Railtie.
