@@ -2060,6 +2060,50 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
         expect(output).not_to include("--force")
       end
 
+      it "says, under --force, that the vite.config.js it writes sets the app's other one aside",
+         :aggregate_failures do
+        File.write(File.join(app_root, "vite.config.ts"), "// the app's\n")
+
+        output = run_create_vite_config(force: true)
+
+        expect(File.read(config_path)).to eq(fresh_config)
+        expect(output).to include("Vite reads it first: vite.config.ts is no longer used")
+      end
+
+      it "leaves a generated one as it is under --skip" do
+        FileUtils.cp(File.join(fixtures, "generated-0.0.6.js"), config_path)
+        before = File.binread(config_path)
+        output = run_create_vite_config(skip: true)
+        expect(File.binread(config_path)).to eq(before)
+        expect(output).to match(/skip\s+vite\.config\.js/)
+      end
+
+      describe "rails destroy ruact:install" do
+        def destroy_vite_config
+          original = $stdout
+          $stdout = StringIO.new
+          Ruact::Generators::InstallGenerator.new([], {}, destination_root: app_root, behavior: :revoke)
+                                             .create_vite_config
+          $stdout.string
+        ensure
+          $stdout = original
+        end
+
+        it "removes the vite.config.js the install writes" do
+          File.write(config_path, fresh_config)
+          destroy_vite_config
+          expect(File).not_to exist(config_path)
+        end
+
+        it "leaves any other vite.config.js, and says nothing of an update", :aggregate_failures do
+          FileUtils.cp(File.join(fixtures, "generated-0.0.6.js"), config_path)
+          before = File.binread(config_path)
+          output = destroy_vite_config
+          expect(File.binread(config_path)).to eq(before)
+          expect(output).not_to include("update")
+        end
+      end
+
       it "overwrites an edited one under --force, as before" do
         FileUtils.cp(File.join(fixtures, "edited-0.0.16.js"), config_path)
         run_create_vite_config(force: true)

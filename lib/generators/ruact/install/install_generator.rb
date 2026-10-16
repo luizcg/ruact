@@ -264,28 +264,20 @@ module Ruact
       # any other file is left as it is and the change is printed. `--force`
       # overwrites, as before.
       def create_vite_config
+        return revoke_vite_config if behavior == :revoke
+
         vite_config_file = Pathname(destination_root).join("vite.config.js")
-        other = other_vite_config unless vite_config_file.exist? || options[:force]
-        if other
+        other = other_vite_config unless vite_config_file.exist?
+        if other && !options[:force]
           # Vite reads vite.config.js first: writing one would set the app's aside.
           say_status "notice", "#{other} exists — vite.config.js is not written, Vite would read it " \
                                "instead of yours.", :yellow
           return show_vite_config_instructions(other)
         end
-        return template("vite.config.js.tt", "vite.config.js") if !vite_config_file.exist? || options[:force]
+        return refresh_vite_config(vite_config_file) if vite_config_file.exist? && !options[:force]
 
-        existing = vite_config_file.binread.force_encoding(Encoding::UTF_8)
-        pinned = pinned_vite_config_path(existing)
-        if pinned
-          say_status "update", "vite.config.js — it imported ruact's Vite plugin from #{pinned}, " \
-                               "the gem installed then; it now asks Bundler", :green
-          template "vite.config.js.tt", "vite.config.js", force: true, verbose: false
-        elsif existing == rendered_vite_config
-          say_status "identical", "vite.config.js", :blue
-        else
-          say_status "notice", "vite.config.js already exists and has edits of yours — it is left as it is.", :yellow
-          show_vite_config_instructions
-        end
+        template "vite.config.js.tt", "vite.config.js"
+        say_status "warn", "vite.config.js — Vite reads it first: #{other} is no longer used", :yellow if other
       end
 
       # Story 14.6 (FR101, Epic 14 DoD) — a fresh ruact app needs a package.json
@@ -509,6 +501,37 @@ module Ruact
       def other_vite_config
         (Ruact::BuildSkew::VITE_CONFIGS - ["vite.config.js"])
           .find { |name| Pathname(destination_root).join(name).exist? }
+      end
+
+      # An existing vite.config.js: replaced when the install generated it
+      # before Story 19.4 and the app never edited it (not under --skip),
+      # left as it is otherwise.
+      def refresh_vite_config(vite_config_file)
+        existing = vite_config_file.binread.force_encoding(Encoding::UTF_8)
+        pinned = pinned_vite_config_path(existing)
+        if pinned && options[:skip]
+          say_status "skip", "vite.config.js — it imports ruact's Vite plugin from #{pinned}, the gem " \
+                             "installed then (--skip leaves it)", :yellow
+        elsif pinned
+          say_status "update", "vite.config.js — it imported ruact's Vite plugin from #{pinned}, " \
+                               "the gem installed then; it now asks Bundler", :green
+          template "vite.config.js.tt", "vite.config.js", force: true, verbose: false
+        elsif existing == rendered_vite_config
+          say_status "identical", "vite.config.js", :blue
+        else
+          say_status "notice", "vite.config.js already exists and has edits of yours — it is left as it is.", :yellow
+          show_vite_config_instructions
+        end
+      end
+
+      # `rails destroy ruact:install`: removes vite.config.js only when it is
+      # exactly what the install writes; any other one is the app's.
+      def revoke_vite_config
+        vite_config_file = Pathname(destination_root).join("vite.config.js")
+        return unless vite_config_file.exist?
+        return unless vite_config_file.binread.force_encoding(Encoding::UTF_8) == rendered_vite_config
+
+        template "vite.config.js.tt", "vite.config.js"
       end
 
       # What the post-install message says about the layout — true for the

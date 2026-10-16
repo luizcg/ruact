@@ -15,6 +15,12 @@ require "action_controller/railtie"
 require "action_view/railtie"
 
 require "spec_helper"
+# `lib/ruact.rb` loads the Railtie only when Rails is defined. When another
+# spec file loaded `spec_helper` (and with it ruact) first, Rails was not, and
+# the Railtie — which installs the ERB preprocessor hook this app needs — was
+# never loaded: 61 failures run after `markers_spec.rb`. In an app, Rails is
+# always loaded before the gem (`config/application.rb`).
+require "ruact/railtie"
 
 require "rack/test"
 require "stringio"

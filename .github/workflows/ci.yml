@@ -203,8 +203,8 @@ jobs:
     # <Suspense> rendered in place, both scenarios fail at what the browser
     # shows. Rails' own test support runs ActionController::Live inline, so the
     # streaming itself is only observable against a server started on its own.
-    # Not a required check for merging (Luiz decides that); the release job
-    # waits on it, as on every other job.
+    # A required check for merging into main (since 2026-10-15, branch
+    # protection); the release job waits on it, as on every other job.
     name: Browser (deferred Suspense)
     runs-on: ubuntu-latest
     defaults:
