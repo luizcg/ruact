@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.22] - 2026-10-15
+
 ### Added
 
 - **The app says when the page's JavaScript was built by another ruact.** A server updated without its JavaScript breaks the pages that stream: 0.0.19's runtime, for one, reads only the shell's rows of a streamed document and its `<Suspense>` fallbacks stay, with "the response ended before the whole page arrived". The Vite plugin now records which ruact built the JavaScript, in `react-client-manifest.json` (`"__ruact__": { "version": … }` — never a component; a server of 0.0.21 or before reads the file as before). When that is not the server's version, or the build records none — every build by 0.0.21 and before: the first build after upgrading to this version is needed for the warning to go —
@@ -559,7 +561,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **E2E test app** — `e2e/` Rails app (no DB, in-memory Post model) with full CRUD system tests validating the complete request cycle.
 
-[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.21...HEAD
+[Unreleased]: https://github.com/luizcg/ruact/compare/v0.0.22...HEAD
+[0.0.22]: https://github.com/luizcg/ruact/releases/tag/v0.0.22
 [0.0.21]: https://github.com/luizcg/ruact/releases/tag/v0.0.21
 [0.0.20]: https://github.com/luizcg/ruact/releases/tag/v0.0.20
 [0.0.19]: https://github.com/luizcg/ruact/releases/tag/v0.0.19
