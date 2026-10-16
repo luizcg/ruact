@@ -2101,6 +2101,7 @@ RSpec.describe Ruact do # rubocop:disable RSpec/SpecFilePathFormat
           output = destroy_vite_config
           expect(File.binread(config_path)).to eq(before)
           expect(output).not_to include("update")
+          expect(output).to include("not the one the install writes, left as it is")
         end
       end
 

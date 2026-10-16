@@ -262,7 +262,9 @@ module Ruact
       # never edited (it imported the plugin by the path of the gem installed
       # then, so after `bundle update ruact` the build kept the old plugin);
       # any other file is left as it is and the change is printed. `--force`
-      # overwrites, as before.
+      # overwrites, as before (and says so when it sets another `vite.config.*`
+      # of the app's aside); `--skip` leaves a generated one; `rails destroy`
+      # removes only the file exactly as the install writes it.
       def create_vite_config
         return revoke_vite_config if behavior == :revoke
 
@@ -529,7 +531,9 @@ module Ruact
       def revoke_vite_config
         vite_config_file = Pathname(destination_root).join("vite.config.js")
         return unless vite_config_file.exist?
-        return unless vite_config_file.binread.force_encoding(Encoding::UTF_8) == rendered_vite_config
+        unless vite_config_file.binread.force_encoding(Encoding::UTF_8) == rendered_vite_config
+          return say_status("skip", "vite.config.js — not the one the install writes, left as it is", :yellow)
+        end
 
         template "vite.config.js.tt", "vite.config.js"
       end
